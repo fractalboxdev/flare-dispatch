@@ -32,7 +32,19 @@ const buffered = (): Bucket => ({
     bucket.put(k, v instanceof ReadableStream ? await new Response(v).arrayBuffer() : (v as string), o)) as Bucket["put"],
 });
 
-const setup = async (opts: { read?: string[]; write?: string | null; down?: boolean } = {}) => {
+/** A `200` whose body fails after the headers arrive, as on a connection reset mid-transfer. */
+const brokenBody = () =>
+  new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("partial"));
+        controller.error(new Error("connection reset"));
+      },
+    }),
+    { status: 200 },
+  );
+
+const setup = async (opts: { read?: string[]; write?: string | null; down?: boolean; brokenBody?: boolean } = {}) => {
   const read = opts.read ?? [PR, BASE];
   const write = opts.write === undefined ? PR : opts.write;
   const token = await signCompileCacheToken(SECRET, { repo: REPO, executionId: "e-dev", epoch: 1, read, write, expiresAt: Date.now() + 60_000 });
@@ -48,6 +60,7 @@ const setup = async (opts: { read?: string[]; write?: string | null; down?: bool
     fetch: (async (url: string, init: RequestInit) => {
       calls.push(`${init.method} ${new URL(url).pathname}`);
       if (opts.down === true) throw new TypeError("network down");
+      if (opts.brokenBody === true) return brokenBody();
       return (await handleCompileCache(new Request(url, init), { bucket: buffered(), ledgers: memoryLedgers(), secret: SECRET, now: Date.now }))!;
     }) as typeof fetch,
   });
@@ -57,7 +70,7 @@ const setup = async (opts: { read?: string[]; write?: string | null; down?: bool
 };
 
 describe("device compile-cache proxy", () => {
-  it("FD-CACHE-060 serves a hit from L1 and forwards a miss to the route under the execution's token", async () => {
+  it("[FD-CACHE-060] serves a hit from L1 and forwards a miss to the route under the execution's token", async () => {
     await bucket.put(compileObjectKey(BASE, "k1"), "from-base");
     const { req, calls } = await setup();
     expect(await (await req("k1", "GET")).text()).toBe("from-base");
@@ -66,7 +79,7 @@ describe("device compile-cache proxy", () => {
     expect((await req("absent", "GET")).status).toBe(404);
   });
 
-  it("FD-CACHE-060 a write goes to the route's writable namespace and then to L1; MKCOL and PROPFIND Depth 0 answer locally for collections", async () => {
+  it("[FD-CACHE-060] a write goes to the route's writable namespace and then to L1; MKCOL and PROPFIND Depth 0 answer locally for collections", async () => {
     const { req, calls } = await setup();
     expect((await req("a/", "MKCOL")).status).toBe(201);
     expect((await req("a/", "PROPFIND")).status).toBe(207);
@@ -76,7 +89,7 @@ describe("device compile-cache proxy", () => {
     expect(calls).toEqual(["PUT /v1/compile-cache/acme/widgets/a/obj"]);
   });
 
-  it("FD-CACHE-060 an L1 copy is filed only under the namespace that answered, so a pull request's object never answers a protected reader", async () => {
+  it("[FD-CACHE-060] an L1 copy is filed only under the namespace that answered, so a pull request's object never answers a protected reader", async () => {
     await bucket.put(compileObjectKey(PR, "k"), "pr-object");
     const pr = await setup();
     expect(await (await pr.req("k", "GET")).text()).toBe("pr-object");
@@ -85,7 +98,7 @@ describe("device compile-cache proxy", () => {
     expect((await base.req("k", "GET")).status).toBe(404);
   });
 
-  it("FD-CACHE-060 FD-CACHE-011 an unreachable route is a miss, a write without a writable namespace is refused, and an object over 100 MiB is 413", async () => {
+  it("[FD-CACHE-060] [FD-CACHE-011] an unreachable route is a miss, a write without a writable namespace is refused, and an object over 100 MiB is 413", async () => {
     const down = await setup({ down: true });
     expect((await down.req("k", "GET")).status).toBe(404);
     const readOnly = await setup({ write: null });
@@ -98,5 +111,11 @@ describe("device compile-cache proxy", () => {
     expect(huge.status).toBe(413);
     expect(calls).toEqual([]);
     expect((await req("../etc/passwd", "GET")).status).toBe(404);
+  });
+
+  it("[FD-CACHE-011] a GET whose body fails after the route answered 200 is a miss, and L1 keeps nothing", async () => {
+    const { req, disk } = await setup({ brokenBody: true });
+    expect((await req("k", "GET")).status).toBe(404);
+    expect(disk.files.size).toBe(0);
   });
 });

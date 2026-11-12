@@ -15,41 +15,86 @@ import {
 } from "@fractalboxdev/flare-dispatch-profile";
 import { resolveRequestClass } from "@fractalboxdev/mameko-coordinator";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { InstallationDirectory, installationOf } from "@fractalboxdev/flare-dispatch-github";
 import { AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import {
   ClassResolver,
   d1Admission,
+  type AdmissionPorts,
   IntakeConfig,
   type ClassRequest,
   type IntakeSettings,
 } from "./config.ts";
 import { manifestSourceLayer } from "./manifest.ts";
-import { oidcVerifierLayer } from "./oidc.ts";
-import { installationEvictionLayer, manifestReporterLayer } from "./ports.ts";
+import {
+  heldCheckReporterLayer,
+  installationEvictionLayer,
+  manifestReporterLayer,
+} from "./ports.ts";
 import { isUnavailable, ProtectionSnapshots, protectionSnapshotsLayer } from "./protection.ts";
 import { d1IntakeStore, d1ShedRecorder } from "./store.ts";
 
 export interface IntakeLayerOptions {
   readonly db: D1Like;
   readonly settings: IntakeSettings;
-  /** The `fetch` the OIDC verifier reads the issuer's keys with. */
-  readonly fetch: typeof globalThis.fetch;
   /** Runs after each queued admission, for the Worker to wake standing claims. */
   readonly queued?: (className: string) => Effect.Effect<void>;
+  /** Starts an admitted execution's `Execution` workflow (MAMEKO-ADM-029). */
+  readonly startExecution?: AdmissionPorts["startExecution"];
+  /** Cancels a superseded or group-cancelled member's workflow and lease (MAMEKO-ADM-062, MAMEKO-ADM-066). */
+  readonly cancelExecution?: AdmissionPorts["cancelExecution"];
+  readonly alarms?: AdmissionPorts["alarms"];
 }
 
-/** Every intake service except `ClassResolver`, `AccessIdentity` and `ExecutionCanceller`; needs the GitHub services. */
+/**
+ * The profile's `delivery.limit_key` binding over the deployment's installation directory: the id of the installation
+ * that serves the repository (FD-GH-056). A repository no installation serves, or one the directory cannot read, keeps
+ * its scope as the key; the actuator rate limit resolves that key to the same installation's quota when it is due.
+ */
+export const installationLimitKey = Effect.gen(function* () {
+  const directory = yield* InstallationDirectory;
+  return (scopeId: string) =>
+    installationOf(scopeId).pipe(
+      Effect.provideService(InstallationDirectory, directory),
+      Effect.catchTag("NoInstallation", () => Effect.succeed(scopeId)),
+      Effect.catch((e) =>
+        Effect.as(
+          Effect.logWarning("installation read failed; limit key left at the repository", {
+            scopeId,
+            reason: e.message,
+          }),
+          scopeId,
+        ),
+      ),
+    );
+});
+
+/** Every intake service except `ClassResolver` and `AccessIdentity`; needs the GitHub services. */
 export const intakeLayer = (options: IntakeLayerOptions) =>
   Layer.mergeAll(
     Layer.succeed(IntakeConfig, options.settings),
-    d1Admission(options.db, options.queued),
+    Layer.unwrap(
+      Effect.map(installationLimitKey, (limitKey) =>
+        d1Admission(options.db, options.settings.profile, {
+          ...(options.queued === undefined ? {} : { queued: options.queued }),
+          ...(options.startExecution === undefined
+            ? {}
+            : { startExecution: options.startExecution }),
+          ...(options.cancelExecution === undefined
+            ? {}
+            : { cancelExecution: options.cancelExecution }),
+          ...(options.alarms === undefined ? {} : { alarms: options.alarms }),
+          ...(options.settings.profile.delivery.limit_key === "installationOf" ? { limitKey } : {}),
+        }),
+      ),
+    ),
     d1IntakeStore(options.db),
     d1ShedRecorder(options.db),
     manifestSourceLayer,
     manifestReporterLayer,
+    heldCheckReporterLayer(options.db, options.settings.profile),
     installationEvictionLayer,
-    oidcVerifierLayer(options.fetch),
     protectionSnapshotsLayer,
   );
 
@@ -150,7 +195,7 @@ export const profileRequestOf = (r: ClassRequest, callerProtected: boolean): Pro
  * `resolveRequestClass` (MAMEKO-ADM-005). A gating run on a pull-request trigger reads its target branch's required
  * set, the `protection-snapshot` input, through the 10 min cache; an unreadable set arrives as `Unavailable` with the
  * reason FD-PROF-015 and FD-PROF-016 act on. The alarm the binding returns is raised with the run and repository
- * (MAMEKO-ADM-088), and a clamped class input is logged (FD-PROF-020).
+ * (MAMEKO-ADM-093), and a clamped class input is logged (FD-PROF-020).
  */
 export const profileClassResolver = Layer.effect(
   ClassResolver,

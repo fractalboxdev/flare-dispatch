@@ -2,13 +2,14 @@
 // record and, for a refusal before admission, a shed row; every `executions`,
 // dedup-key and `placements` row is admission's.
 import {
-  eligibleKinds,
-  isolationOf,
-  type EligibleSet,
+  placementInputs,
+  supersessionKey,
+  type ClassName,
+  type ConfidentialityMode,
+  type PlacementRequest,
   type Profile,
 } from "@fractalboxdev/flare-dispatch-profile";
-import { executionId as newExecutionId } from "@fractalboxdev/mameko-coordinator";
-import type { D1AdmitInput, D1AdmitResult } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { executionId as newExecutionId, type AdmitAnswer } from "@fractalboxdev/mameko-coordinator";
 import { Clock, Effect, Match } from "effect";
 import {
   Admission,
@@ -16,6 +17,9 @@ import {
   ClassResolver,
   IntakeConfig,
   intakeError,
+  type ClassRequest,
+  type ExecutionStartFailed,
+  type IntakeAdmitInput,
   type IntakeError,
 } from "./config.ts";
 import { requestKey, type KeyedRequest } from "./dedup.ts";
@@ -25,8 +29,16 @@ import {
   type Caller,
   type RecordedTrigger,
 } from "./event.ts";
+import { profileRequestOf } from "./layer.ts";
+import { heldCheckOf, HeldCheckReporter } from "./ports.ts";
 import { checkName, type IntakeRun } from "./runs.ts";
-import { IntakeStore, ShedRecorder, type IntakeRecord, type StoreUnavailable } from "./store.ts";
+import {
+  HELD_STATUS,
+  IntakeStore,
+  ShedRecorder,
+  type IntakeRecord,
+  type StoreUnavailable,
+} from "./store.ts";
 
 export const COOLDOWN_MIN_SEC = 60;
 export const COOLDOWN_MAX_SEC = 86_400;
@@ -96,23 +108,45 @@ export interface Admitted {
   readonly className: string;
   readonly duplicate: boolean;
   /**
-   * Admission concluded the execution at once: its reason, or `expired` for a class whose terminal outcome is `expired`,
-   * which concludes with no reason (MAMEKO-ADM-041). Null when admission did not conclude it.
+   * Admission concluded the execution at once: its reason (`capacity: queue full`, MAMEKO-ADM-040), `expired` or
+   * `deferred` for a class whose terminal outcome is that and which concludes with no reason (MAMEKO-ADM-040,
+   * MAMEKO-ADM-042), or the reason of a `cancelled` conclusion (MAMEKO-ADM-063). Null when admission did not conclude it.
    */
   readonly concluded: string | null;
   readonly notBefore: number | null;
 }
 
-type Concluded = Extract<D1AdmitResult, { readonly _tag: "Concluded" }>;
+type Concluded = Extract<AdmitAnswer, { readonly _tag: "Concluded" }>;
+
+/** Admission's answer, where a failed workflow start after the commit still leaves the execution queued. */
+type Answer = AdmitAnswer | { readonly _tag: "Queued"; readonly executionId: string };
+
+/**
+ * The execution committed queued and its workflow start failed; the admission sweep starts it (MAMEKO-ADM-030), so
+ * intake answers it as queued.
+ */
+const queuedUnstarted = (e: ExecutionStartFailed) =>
+  Effect.as(
+    Effect.logWarning(
+      "execution workflow start failed after admission; the admission sweep starts it",
+      {
+        executionId: e.executionId,
+        cause: e.cause,
+      },
+    ),
+    { _tag: "Queued", executionId: e.executionId } as const,
+  );
 
 const concludedReason = (c: Concluded): string =>
   Match.value(c.outcome).pipe(
     Match.when("failure", () => c.reason ?? "failure"),
     Match.when("expired", () => "expired"),
+    Match.when("deferred", () => "deferred"),
+    Match.when("cancelled", () => c.reason ?? "cancelled"),
     Match.exhaustive,
   );
 
-/** Records a request rejected before admission (MAMEKO-ADM-086). */
+/** Records a request rejected before admission (MAMEKO-ADM-091). */
 export const shed = (repo: string, run: string | null, reason: string) =>
   ShedRecorder.use((s) => s.record({ scopeId: repo, run, reason, estimatedCost: null }));
 
@@ -137,15 +171,15 @@ const cooldownWait = (s: Submission, now: number) =>
  * constraints the run declares for these inputs, so a `cloud-pinned` run never reaches a device (FD-GATE-061,
  * FD-GATE-080).
  */
-export const placementOf = (
-  profile: Profile,
+const placementRequest = (
   s: Submission,
   className: string,
   labels: readonly string[],
-): EligibleSet => {
+  confidentiality?: ConfidentialityMode,
+): PlacementRequest => {
   const declared = s.run.placement?.(s.inputs) ?? { constraints: [], labels: [] };
   const tagPush = s.cacheTrigger._tag === "Push" && s.cacheTrigger.ref.startsWith("refs/tags/");
-  return eligibleKinds(profile, {
+  return {
     class: className,
     labels: [
       ...new Set([
@@ -156,15 +190,61 @@ export const placementOf = (
     ],
     constraints: declared.constraints,
     ...(tagPush ? { trigger: "tag-push" } : {}),
-  });
+    ...(confidentiality === undefined ? {} : { confidentiality }),
+  };
 };
+
+/** The facts and constraint parameters admission's placement binding answers for the request (MAMEKO-ADM-089). */
+const admissionPlacement = (
+  profile: Profile,
+  s: Submission,
+  className: string,
+  labels: readonly string[],
+  confidentiality: ConfidentialityMode,
+): IntakeAdmitInput["placement"] => {
+  const { facts, params } = placementInputs(
+    profile,
+    placementRequest(s, className, labels, confidentiality),
+  );
+  return {
+    facts: {
+      runLabels: facts.runLabels,
+      confidentiality: facts.confidentiality,
+      cloudPinned: facts.cloudPinned,
+      cloudOnly: facts.cloudOnly,
+      localOnly: facts.localOnly,
+      needsLocalModel: facts.needsLocalModel,
+    },
+    params,
+  };
+};
+
+/**
+ * The supersession group a request joins, through the profile's `supersessionKey` binding: a pull-request request of a
+ * run that declares `supersede` joins `<owner>/<repo>:<pull request number>:<run>[:<label>]`, and every other request,
+ * a check re-run included, joins none (FD-PROF-027, FD-PROF-029).
+ */
+const supersessionKeyOf = (
+  s: Submission,
+  request: ClassRequest,
+  className: string,
+): string | null =>
+  supersessionKey({
+    ...profileRequestOf(request, false),
+    ...Match.value(s.cacheTrigger).pipe(
+      Match.tag("PullRequest", (t) => ({ pullRequest: t.number })),
+      Match.orElse(() => ({})),
+    ),
+    ...(s.label === null ? {} : { label: s.label }),
+    ...(s.familyRoot === null ? {} : { rerun: { firstAttemptClass: className as ClassName } }),
+  });
 
 export const submit = (
   s: Submission,
 ): Effect.Effect<
   Admitted,
   IntakeError | StoreUnavailable,
-  IntakeConfig | Admission | ClassResolver | IntakeStore | ShedRecorder
+  IntakeConfig | Admission | ClassResolver | IntakeStore | ShedRecorder | HeldCheckReporter
 > =>
   Effect.gen(function* () {
     const config = yield* IntakeConfig;
@@ -173,22 +253,41 @@ export const submit = (
     const now = yield* Clock.currentTimeMillis;
     const name = checkName(s.run.name, s.label);
 
+    // The lease carries the recorded inputs to an executor, so inputs holding a write credential are refused here,
+    // before any record, execution or placement row exists (FD-AGT-008).
+    const credentialField = config.writeCredentialIn(s.inputs);
+    if (credentialField !== null) {
+      const field =
+        credentialField === "" || credentialField.startsWith("[")
+          ? `inputs${credentialField}`
+          : `inputs.${credentialField}`;
+      yield* shed(s.repo, s.run.name, `credential in payload: ${field}`);
+      return yield* Effect.fail(
+        intakeError(
+          400,
+          "invalid_inputs",
+          `CredentialInPayload: ${field} holds a write credential`,
+        ),
+      );
+    }
+
+    const classRequest: ClassRequest = {
+      run: s.run,
+      trigger: s.trigger,
+      event: s.event,
+      repo: s.repo,
+      ref: s.ref,
+      sha: s.sha,
+      defaultBranch: s.defaultBranch,
+      targetBranch: s.targetBranch,
+      refProtection: s.refProtection,
+      checkName: name,
+      classInput: s.classInput,
+      caller: s.caller,
+    };
     const resolution =
       s.forcedClass === null
-        ? yield* (yield* ClassResolver).resolve({
-            run: s.run,
-            trigger: s.trigger,
-            event: s.event,
-            repo: s.repo,
-            ref: s.ref,
-            sha: s.sha,
-            defaultBranch: s.defaultBranch,
-            targetBranch: s.targetBranch,
-            refProtection: s.refProtection,
-            checkName: name,
-            classInput: s.classInput,
-            caller: s.caller,
-          })
+        ? yield* (yield* ClassResolver).resolve(classRequest)
         : ({ _tag: "Class", class: s.forcedClass, labels: [], alarm: null } as const);
     const resolved = yield* Match.value(resolution).pipe(
       Match.tag("Class", (r) => Effect.succeed(r)),
@@ -201,14 +300,16 @@ export const submit = (
       Match.exhaustive,
     );
     const className = resolved.class;
-    const bounds = yield* boundsOf(config.profile, className);
+    yield* boundsOf(config.profile, className);
     const key = yield* requestKey({ ...s, run: s.run.name });
     const cooldown = yield* cooldownWait(s, now);
     const id = newExecutionId(now, Math.random);
 
-    const labels = [...new Set([...resolved.labels, ...s.extraLabels])];
+    // A fork pull request's input stays untrusted on every attempt, re-runs included (FD-PROF-018).
+    const untrusted = s.trigger === "fork-pr" ? ["untrusted-input"] : [];
+    const labels = [...new Set([...resolved.labels, ...s.extraLabels, ...untrusted])];
     const notBefore = cooldown?.notBefore ?? null;
-    const placement = placementOf(config.profile, s, className, labels);
+    const confidentiality = config.confidentiality(s.repo);
     const record: IntakeRecord = {
       executionId: id,
       trigger: s.trigger,
@@ -218,8 +319,6 @@ export const submit = (
       sha: s.sha,
       ref: s.ref,
       inputs: s.inputs,
-      // A held request's duration counts from the end of its window.
-      deadlineAtMs: (notBefore ?? now) + s.run.maxDurationSec * 1000,
       className,
       labels,
       attempt: s.attempt,
@@ -230,47 +329,52 @@ export const submit = (
       spendLine: s.spendLine,
       placementConstraint: s.placementConstraint,
       cacheTrigger: s.cacheTrigger,
-      eligibleKinds: placement.kinds,
+      // Admission decides the kinds; `placed` copies them from its placement row once it answers.
+      eligibleKinds: null,
       createdAt: now,
     };
-    // Admission writes the eligible kinds, the constraints that held and the deadline on the execution and placement
-    // rows in its own transaction, before any executor can claim the placement (MAMEKO-LEASE-014, MAMEKO-ADM-082).
-    const admitInput: D1AdmitInput = {
+    // mameko's `admit` writes the execution, dedup key and placement rows under this id in one transaction, with the
+    // eligible kinds, the constraints, the isolation and the deadline it derives from the class and these facts
+    // (MAMEKO-ADM-023, MAMEKO-ADM-105, MAMEKO-LEASE-084).
+    const admitInput: IntakeAdmitInput = {
       executionId: id,
       scopeId: s.repo,
       run: s.run.name,
       className,
+      labels,
       enqueuedAtMs: now,
       dedup: {
         sha256: key.sha256,
         canonical: key.canonical,
         requestDigest: key.requestDigest,
+        digestBody: key.requestDigest === null ? null : (s.idempotency?.body ?? null),
         onMismatch: key.onMismatch,
       },
-      bounds,
-      eligibleKinds: placement.kinds,
-      constraints: placement.constraints,
-      deadlineAt: record.deadlineAtMs,
-      // A class with isolation none reaches a host-process device only for trusted input from a non-confidential
-      // repository and a run with no grant (MAMEKO-LEASE-083, FD-PROF-065).
-      isolation: isolationOf(config.profile, {
-        class: className,
-        untrustedInput: s.trigger === "fork-pr" || labels.includes("untrusted-input"),
-        confidentiality: config.confidentiality(s.repo),
-        declaresGrant: s.run.declaresGrant === true,
-      }),
+      placement: admissionPlacement(config.profile, s, className, labels, confidentiality),
+      maxDurationSec: s.run.maxDurationSec,
+      grants: s.run.grants ?? { setup: [], agent: [] },
+      supersessionKey: supersessionKeyOf(s, classRequest, className),
+      // A run that declares `serialize` names its serial group from its inputs, e.g. one `worker-deploy` target
+      // (FD-GATE-063).
+      serialKey: s.run.serialKey?.(s.inputs) ?? null,
+      // A merge group's runs report on the group's head, which is the request's commit (FD-GH-075).
+      check: s.run.ownsCheck ? { name, headSha: s.sha } : null,
     };
 
     // Inside the run's cooldown window the request is held before admission, and the minute tick admits it once the
-    // window ends (FD-INT-057). A request whose dedup key already names an execution, held or admitted, answers it.
+    // window ends (FD-INT-057). Its check run shows `queued` for the window, under the id the execution is admitted
+    // with. A request whose dedup key already names an execution, held or admitted, answers it and posts nothing.
     if (cooldown !== null && notBefore !== null) {
       const held = yield* store.hold(record, {
         admit: admitInput,
         cooldownBucket: cooldown.bucket,
         notBefore,
       });
-      if (held._tag === "Held")
+      if (held._tag === "Held") {
+        const check = heldCheckOf(admitInput);
+        if (check !== null) yield* (yield* HeldCheckReporter).queued(check);
         return { executionId: id, className, duplicate: false, concluded: null, notBefore };
+      }
       if (key.onMismatch === "conflict" && held.requestDigest !== key.requestDigest)
         return yield* Effect.fail(
           intakeError(
@@ -280,6 +384,12 @@ export const submit = (
             held.executionId,
           ),
         );
+      // A prior delivery may have committed the hold before its outbox insert failed. Rebuild the same cp key from
+      // the authoritative held record, so redelivery repairs reporting without creating or admitting another request.
+      const known = yield* store.get(held.executionId);
+      const check = heldCheckOf(admitInput);
+      if (known?.status === HELD_STATUS && check !== null)
+        yield* (yield* HeldCheckReporter).queued({ ...check, executionId: held.executionId });
       return {
         executionId: held.executionId,
         className,
@@ -291,34 +401,35 @@ export const submit = (
 
     // The record goes in first, so a device that claims the moment admission commits finds the inputs.
     yield* store.put(record);
-    const admitted = yield* admission
-      .admit(admitInput)
-      .pipe(
-        Effect.catchTag("IntakeUnavailable", () =>
+    const admitted: Answer = yield* admission.admit(admitInput).pipe(
+      Effect.catchTags({
+        IntakeUnavailable: () =>
           Effect.andThen(
             store.drop(id),
             Effect.fail(
               intakeError(503, "intake_unavailable", "admission failed; nothing was written"),
             ),
           ),
-        ),
-      );
+        ExecutionStartFailed: queuedUnstarted,
+      }),
+    );
     return yield* Match.value(admitted).pipe(
       Match.tag("Queued", ({ executionId }) =>
         Effect.gen(function* () {
+          yield* store.placed(executionId);
           if (cooldown !== null) yield* store.armCooldown(cooldown.bucket, executionId, now);
           yield* admission.queued(className);
           return { executionId, className, duplicate: false, concluded: null, notBefore: null };
         }),
       ),
       Match.tag("Concluded", (c) =>
-        Effect.succeed<Admitted>({
+        Effect.as(store.placed(c.executionId), {
           executionId: c.executionId,
           className,
           duplicate: false,
           concluded: concludedReason(c),
           notBefore: null,
-        }),
+        } satisfies Admitted),
       ),
       Match.tag("Duplicate", ({ executionId }) =>
         Effect.as(store.drop(id), {
@@ -361,14 +472,18 @@ export interface ReleaseReport {
 
 /**
  * Admits every held request whose cooldown window has ended (FD-INT-057). An admitted request arms its bucket's window
- * from now; a request admission answers as a duplicate or a conflict loses its record, as at submit.
+ * from now, and admission's `check.open` adopts the queued check run the hold posted; a request admission answers as a
+ * duplicate of another execution, or as a conflict, loses its record, as at submit, and its queued check run concludes
+ * `cancelled`. A duplicate of the request's own id is a release whose admission committed before an earlier pass ended:
+ * it is admitted when that admission wrote a placement row, and concluded, arming no window, when it did not.
  */
 export const releaseHeld = (
   limit: number = RELEASE_PER_PASS,
-): Effect.Effect<ReleaseReport, StoreUnavailable, Admission | IntakeStore> =>
+): Effect.Effect<ReleaseReport, StoreUnavailable, Admission | IntakeStore | HeldCheckReporter> =>
   Effect.gen(function* () {
     const store = yield* IntakeStore;
     const admission = yield* Admission;
+    const checks = yield* HeldCheckReporter;
     const now = yield* Clock.currentTimeMillis;
     const due = yield* store.due(now, limit);
     let admitted = 0;
@@ -377,35 +492,44 @@ export const releaseHeld = (
     let unavailable = 0;
     for (const held of due) {
       const id = held.admit.executionId;
-      const result = yield* admission
+      const result: Answer | null = yield* admission
         .admit({ ...held.admit, enqueuedAtMs: now })
-        .pipe(Effect.catchTag("IntakeUnavailable", () => Effect.succeed(null)));
+        .pipe(
+          Effect.catchTags({
+            IntakeUnavailable: () => Effect.succeed(null),
+            ExecutionStartFailed: queuedUnstarted,
+          }),
+        );
       if (result === null) {
         unavailable++;
         continue;
       }
+      const dropped = (answeredBy: string) =>
+        Effect.gen(function* () {
+          const check = heldCheckOf(held.admit);
+          if (check !== null) yield* checks.dropped(check, answeredBy);
+          yield* store.release(id);
+          yield* store.drop(id);
+          duplicate++;
+        });
+      // The placement row tells a queued execution from one admission concluded, whichever pass admitted it.
+      const answered = Effect.gen(function* () {
+        yield* store.release(id);
+        if (!(yield* store.placed(id))) {
+          concluded++;
+          return;
+        }
+        yield* store.armCooldown(held.cooldownBucket, id, now);
+        yield* admission.queued(held.admit.className);
+        admitted++;
+      });
       yield* Match.value(result).pipe(
-        Match.tag("Queued", () =>
-          Effect.gen(function* () {
-            yield* store.release(id);
-            yield* store.armCooldown(held.cooldownBucket, id, now);
-            yield* admission.queued(held.admit.className);
-            admitted++;
-          }),
+        Match.tag("Queued", () => answered),
+        Match.tag("Concluded", () => answered),
+        Match.tag("Duplicate", ({ executionId }) =>
+          executionId === id ? answered : dropped(executionId),
         ),
-        Match.tag("Concluded", () =>
-          Effect.andThen(
-            store.release(id),
-            Effect.sync(() => void concluded++),
-          ),
-        ),
-        Match.tag("Duplicate", "Conflict", () =>
-          Effect.gen(function* () {
-            yield* store.release(id);
-            yield* store.drop(id);
-            duplicate++;
-          }),
-        ),
+        Match.tag("Conflict", ({ executionId }) => dropped(executionId)),
         Match.exhaustive,
       );
     }

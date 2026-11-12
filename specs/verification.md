@@ -6,7 +6,7 @@ This file specifies how FlareDispatch proves that each of its requirements holds
 
 This file covers the ten verification tags of [README.md](README.md), the CI jobs that run them, the merge gate, the phase gates, the `spec-tags` check, FlareDispatch's formal gate (Lean 4 for the staged-write gate and the cache namespaces, Tamarin for provenance, differential testing of `stagedWriteGate`) and the coverage counts. Tags are inline on each requirement, so this file holds no row per requirement: a requirement's tags name its harnesses, and its phase names the gate that requires those harnesses to pass.
 
-mameko's [verification.md](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/verification.md) specifies the harnesses for mameko's own requirements: the coordinator conformance suite, the verified kernels written once in Rust and proved through their Lean translation with differential testing against its oracle ([mameko ADR-0016](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/adr/0016-formal-models.md)), the fleet simulation and the replay check. FlareDispatch runs mameko's conformance suite against its own composed control plane (FD-VER-032) and cites mameko's theorems for the properties of the mechanism it inherits; it does not re-prove them.
+mameko's [verification.md](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/verification.md) specifies the harnesses for mameko's own requirements: the coordinator conformance suite, the verified kernels written once in Rust and proved through their Lean translation with differential testing against its oracle ([mameko ADR-0016](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/adr/0016-formal-models.md)), the fleet simulation and the replay check. FlareDispatch runs mameko's conformance suite against its own composed control plane (FD-VER-032) and cites mameko's theorems for the properties of the mechanism it inherits; it does not re-prove them.
 
 It depends on [README.md](README.md) for the requirement format, the area table, the tag table and the moved-ID table; on [roadmap.md](roadmap.md) for the phases, the `V-MEASURE` thresholds and the kill lines; on [operability.md](operability.md) for the deploy workflow, the drift check, the canary and the alarms; on [profile.md](profile.md) for the profile the reference diff reads; on [provenance.md](provenance.md) for the Tamarin gate (FD-PROV-072, FD-PROV-073); and on [adr/0018-formal-models.md](adr/0018-formal-models.md) for the Tamarin model.
 
@@ -64,10 +64,10 @@ The current phase is the single digit in `.github/phase`. A pull request that ch
 
 #### `V-DEPLOY`
 
-- **Runs:** `wrangler deploy --dry-run` for every Worker, mameko's profile validator and configuration validation over the committed profile and configuration, the reference-profile diff (FD-VER-033), and the overlay drift check of [operability.md](operability.md).
-- **Lives:** the `deploy-dry-run` and `profile-reference` jobs and the deploy workflow in `.github/workflows/`; the drift check is `fd doctor`.
+- **Runs:** `wrangler deploy --dry-run` for every Worker, mameko's profile validator and configuration validation over the committed profile and configuration, the reference-profile diff (FD-VER-033), the overlay drift check of [operability.md](operability.md), and the deploy suites: `fd deploy` and `fd doctor` over the committed Worker templates and the placeholder overlay, with fakes of the Cloudflare API, the GitHub API and `wrangler` that keep the deployed state between runs.
+- **Lives:** the `deploy-dry-run` and `profile-reference` jobs and the deploy workflow in `.github/workflows/`; the deploy suites in `test/deploy/` of a workspace package; the drift check is `fd doctor`.
 - **Runs when:** every pull request, against the committed placeholders; every deploy, against the operator overlay; every 24 h, as `fd doctor` (FD-OPS-025).
-- **Failure blocks:** the merge (dry run, validators and reference diff); the deploy (drift check).
+- **Failure blocks:** the merge (dry run, validators, deploy suites and reference diff); the deploy (drift check).
 
 #### `V-LIVE`
 
@@ -92,7 +92,7 @@ The current phase is the single digit in `.github/phase`. A pull request that ch
 
 #### `V-DIFF`
 
-- **Runs:** `fast-check` traces through `stagedWriteGate` and through the native oracle compiled from its Lean model, comparing outputs after every event. mameko's kernels are differentially tested in mameko ([mameko verification.md § Differential testing](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/verification.md#differential-testing)).
+- **Runs:** `fast-check` traces through each kernel with a Lean model and through the native oracle compiled from that model, comparing outputs after every event: `stagedWriteGate` against `formal/FdFormal/StagedWrite.lean`, and the placement of a `worker-deploy` or `sandbox-image` request (the profile's `resolveClass`, the catalogue's `requestPlacement`, the profile's `eligibleKinds` at the resolved class and mameko's `unplaceable`) against `formal/FdFormal/Placement.lean`, which `oracle placement` answers, and the drift check's profile step (`driftCheckFindings` over the answer of mameko's profile loader, with `failed`) against `formal/FdFormal/Drift.lean`, which `oracle drift` answers. The `diff` job fails when any of the three subjects is missing. mameko's kernels are differentially tested in mameko ([mameko verification.md § Differential testing](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/verification.md#differential-testing)).
 - **Lives:** `test/diff/` for the generators and the comparison, the `oracle` executable built by `lake build oracle` in `formal/`, and `formal/regressions.jsonl` for every trace that ever differed.
 - **Runs when:** every pull request with 10,000 traces, in the `diff` job; nightly with 1,000,000 traces. Every run first replays every line of `formal/regressions.jsonl`.
 - **Failure blocks:** the merge (per pull request); the phase gate (nightly).
@@ -111,10 +111,10 @@ The default branch's ruleset requires these checks on every pull request. A pull
 | `sim` | 100 seeds per scenario plus every kept seed | `V-SIM` |
 | `replay` | Double run over cached journals | `V-REPLAY` |
 | `e2e-local` | The cloud path of the end-to-end stack | `V-E2E-LOCAL` |
-| `deploy-dry-run` | `wrangler deploy --dry-run` and the validators | `V-DEPLOY` |
+| `deploy-dry-run` | `wrangler deploy --dry-run`, the validators and the deploy suites | `V-DEPLOY` |
 | `profile-reference` | The comparison of FlareDispatch's profile with mameko's reference CI profile at the pinned commit, outside the listed differences (FD-VER-033, FD-PROF-002) | `V-DEPLOY` |
 | `formal` | `lake build`, the forbidden-term scan, `#print axioms`, `tamarin-prover --prove` | `V-PROOF` |
-| `diff` | The regressions file, then 10,000 traces of `stagedWriteGate` | `V-DIFF` |
+| `diff` | The regressions file, then 10,000 traces of `stagedWriteGate`, of placement and of the drift check's profile step | `V-DIFF` |
 
 `V-LIVE` and `V-MEASURE` run against a deployed control plane and are not merge checks.
 
@@ -127,6 +127,8 @@ A phase-gate pull request moves `.github/phase` from n to n + 1. Its `phase-gate
 3. Every `V-PROOF` requirement of phase n or lower names a theorem or lemma that the formal gate proves, and every assumption test of its row passes.
 4. No `V-LIVE` page alarm of a phase n or lower requirement stayed unresolved for more than 24 h in the gate window.
 5. Every `V-MEASURE` threshold of gate n in [roadmap.md](roadmap.md) holds over its window.
+
+The gate window is the 14 days before the job reads its records. The job reads conditions 4 and 5, and the unresolved `kill-line` notifications, from `GET /v1/ops/phase-gate?gate=<n>` on the control plane that the deploy workflow targets, as an operator through an Access service token. That route computes each threshold from the executions table and its siblings, and answers every raise-to-resolve span of a page alarm in the window. The job counts a span only when a `V-LIVE` requirement names its alarm, at that requirement's phase.
 
 ```mermaid
 flowchart LR
@@ -216,7 +218,7 @@ The `formal` job fails on any of these:
 - `#print axioms` for a theorem in `formal/` lists an axiom other than `propext`, `Classical.choice` and `Quot.sound`.
 - `tamarin-prover --prove formal/provenance.spthy`, at the pinned prover version, reports a lemma other than `verified`. An expected attack is stated as an `exists-trace` lemma, so the attack trace that lemma finds is a pass (FD-PROV-073).
 
-The `diff` job runs every line of `formal/regressions.jsonl`, then 10,000 generated traces per pull request or 1,000,000 nightly, through `stagedWriteGate` and the oracle built from the same commit. The first trace whose outputs differ fails the job; the harness shrinks it and writes it as one `regressions.jsonl` line.
+The `diff` job runs every line of `formal/regressions.jsonl`, then 10,000 generated traces per pull request or 1,000,000 nightly, through `stagedWriteGate`, through placement, through the drift check's profile step and through the oracle built from the same commit. The first trace whose outputs differ fails the job; the harness shrinks it and writes it as one `regressions.jsonl` line.
 
 ```mermaid
 flowchart TB
@@ -267,13 +269,13 @@ flowchart TB
 
 ### Formal properties
 
-Each row maps one property to the FlareDispatch requirements it covers, the theorem or lemma that proves it and the `V-CONF` or `V-SIM` requirements that test the assumptions the proof uses. A name marked *proved* checks under the formal gate; a name marked *planned* is the theorem the requirement's `V-PROOF` tag names before it exists. Lean theorems live in `formal/FdFormal/` and Tamarin lemmas in `formal/provenance.spthy`. The properties of mameko's mechanism (the spend bound, the lines, fencing, the outbox, placement, credentials and egress) are mameko's rows in [mameko verification.md § Formal properties](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/verification.md#formal-properties).
+Each row maps one property to the FlareDispatch requirements it covers, the theorem or lemma that proves it and the `V-CONF` or `V-SIM` requirements that test the assumptions the proof uses. A name marked *proved* checks under the formal gate; a name marked *planned* is the theorem the requirement's `V-PROOF` tag names before it exists. Lean theorems live in `formal/FdFormal/` and Tamarin lemmas in `formal/provenance.spthy`. The properties of mameko's mechanism (the spend bound, the lines, fencing, the outbox, placement, credentials and egress) are mameko's rows in [mameko verification.md § Formal properties](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/verification.md#formal-properties).
 
 | Property | Statement | Requirements | Theorem or lemma | Assumption tests |
 | --- | --- | --- | --- | --- |
 | S3 · profile | FlareDispatch's profile keeps `untrusted-input`, `cloud-pinned` and `cloud-only` work off devices and `local-only` work off the cloud, and the profile validator rejects a profile that leaves a `required` request unplaceable | FD-INT-030, FD-INT-061, FD-OPS-021, FD-GATE-061, FD-GATE-080 | mameko's `Placement` theorems over the profile, row S3 · executors of mameko's table | mameko's assumption tests of that row |
 | S5 · trifecta | No run declaration combines private data, untrusted input and outbound access | FD-AGT-004 | `Egress.no_trifecta_declaration` *planned* | FD-AGT-005 (runtime trifecta refusal) |
-| S6 | A pull-request-namespace writer cannot change what a protected-trigger reader restores | FD-CACHE-015, FD-CACHE-017, FD-CACHE-018, FD-CACHE-019, FD-CACHE-022, FD-CACHE-023, FD-CACHE-027, FD-CACHE-029, FD-CACHE-058 | `Cache.pr_writer_noninterference` *planned* | FD-CACHE-016, FD-CACHE-041 (namespaces from the lease, create-only manifests), with read-only cache directories under [MAMEKO-ISO-004](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/isolation-egress.md) |
+| S6 | A pull-request-namespace writer cannot change what a protected-trigger reader restores | FD-CACHE-015, FD-CACHE-017, FD-CACHE-018, FD-CACHE-019, FD-CACHE-022, FD-CACHE-023, FD-CACHE-027, FD-CACHE-029, FD-CACHE-058 | `Cache.pr_writer_noninterference` *planned* | FD-CACHE-016, FD-CACHE-041 (namespaces from the lease, create-only manifests), with read-only cache directories under [MAMEKO-ISO-004](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/isolation-egress.md) |
 | S7a | Injective agreement: an accepted statement was signed by the device its lease was issued to, and no other accepted statement carries its nonce, unless that device key was revealed before it signed | FD-PROV-010, FD-PROV-013, FD-PROV-014, FD-PROV-017, FD-PROV-018, FD-PROV-020, FD-PROV-021, FD-PROV-032 | `injective_agreement` *planned* | FD-PROV-013, FD-PROV-014, FD-PROV-017, FD-PROV-018, FD-PROV-020, FD-PROV-021 |
 | S7b | Freshness: no statement for epoch k is accepted after a reclaim to k + 1, and no statement produced before its lease is accepted | FD-PROV-011, FD-PROV-012, FD-PROV-019 | `freshness` *planned* | FD-PROV-011, FD-PROV-019 |
 | S7c | Compromise scope: a revealed device key yields countersignatures only for that device's leases while it is registered and not revoked, and never the `reproduced` tier | FD-PROV-009, FD-PROV-015, FD-PROV-057, FD-PROV-061 | `compromise_scope` *planned* | FD-PROV-009, FD-PROV-015, FD-PROV-057, FD-PROV-061 |
@@ -349,7 +351,7 @@ Counts come from the requirement lines under `specs/`, the example line in [READ
 
 ### mameko conformance and the reference profile
 
-- **FD-VER-032** · phase 0 · `V-CONF` — On every pull request, the `conf` job must run mameko's coordinator conformance suite, at the pinned release, against FlareDispatch's composed control plane: `host-cloudflare` under workerd with FlareDispatch's profile, its appliers on the fake GitHub, its application ports and the fake executor, and must fail on any scenario that fails ([MAMEKO-VER-022](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/verification.md), [MAMEKO-VER-024](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/verification.md)).
+- **FD-VER-032** · phase 0 · `V-CONF` — On every pull request, the `conf` job must run mameko's coordinator conformance suite, at the pinned release, against FlareDispatch's composed control plane: `host-cloudflare` under workerd with FlareDispatch's profile, its appliers on the fake GitHub, its application ports and the fake executor, and must fail on any scenario that fails ([MAMEKO-VER-022](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/verification.md), [MAMEKO-VER-024](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/verification.md)).
 - **FD-VER-033** · phase 0 · `V-DEPLOY` — On every pull request, the `profile-reference` job must run the reference-profile comparison of [profile.md](profile.md) FD-PROF-002 at the pinned mameko commit, which fails only on a difference that profile.md § Differences from the reference CI profile does not list, and the job must fail when that comparison fails.
 
 ### Formal gate

@@ -3,6 +3,11 @@
 // App's registration against the committed manifest (specs/operability.md § Drift check). Every check here is a pure
 // function of what it compares; `fd deploy` and `fd doctor` read the inputs through the ports of deploy.ts.
 import {
+  checkRegistry,
+  validateDeclaration,
+  type RegistryEntry,
+} from "@fractalboxdev/flare-dispatch-agentic";
+import {
   loadProfile,
   poolAdmissionCaps,
   profileLoader,
@@ -10,6 +15,12 @@ import {
 } from "@fractalboxdev/flare-dispatch-profile";
 import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { Effect, Schema } from "effect";
+import {
+  accessChanges,
+  accessShape,
+  type CommittedAccess,
+  type DeployedAccessApplication,
+} from "./access-application.ts";
 import { placeholdersOf, type WorkerConfig } from "./render.ts";
 
 /** One finding of the drift check. A `warning` is reported and does not fail the check (FD-OPS-023). */
@@ -124,7 +135,7 @@ export const containerClassOf = (pool: string): string =>
 
 /**
  * Each pool's admission cap must be strictly below its Container class's `max_instances` (FD-OPS-020, FD-PROF-033,
- * MAMEKO-ADM-047); a pool with no Container class fails too (FD-ARCH-001).
+ * MAMEKO-ADM-046); a pool with no Container class fails too (FD-ARCH-001).
  */
 export const admissionCapCheck = (
   worker: string,
@@ -162,6 +173,29 @@ export const unrenderedCheck = (worker: string, rendered: string): readonly Find
     fail("render", `${worker}.${p}`, "placeholder left unrendered"),
   );
 
+/**
+ * The provider registry the overlay holds, against the route kinds configuration validation accepts (FD-MDL-020) and
+ * each `workers-ai` entry's per-token rate against its Neurons price (FD-MDL-022): one failure per rejected entry.
+ */
+export const modelRegistryCheck = (entries: readonly RegistryEntry[]): readonly Finding[] =>
+  checkRegistry(entries).map((r) => fail("model-registry", `models.registry.${r.entry}`, r.reason));
+
+/** The agentic recipes of the run catalogue a deploy carries, each by run name with its declaration. */
+export type AgenticRegistry = Readonly<Record<string, { readonly declaration: unknown }>>;
+
+/**
+ * The registry validator over the agentic recipes' declarations (specs/runs/agentic.md § Declaration and catalog): one
+ * failure per rejection of `validateDeclaration`, among them a call site without its tier, a declaration without its
+ * data classes or its intent kinds (FD-AGT-002), and one that sets `privateData`, `untrustedInput` and `outbound`
+ * together (FD-AGT-004).
+ */
+export const agenticRegistryCheck = (registry: AgenticRegistry): readonly Finding[] =>
+  Object.entries(registry).flatMap(([run, entry]) =>
+    validateDeclaration(run, entry.declaration).map((r) =>
+      fail("agentic-registry", `runs.${r.run}.declaration`, r.reason),
+    ),
+  );
+
 /** mameko's profile validator over the document the deploy carries, every rejection listed (FD-OPS-021). */
 export const profileCheck = (document: ProfileDocument, context: ValidationContext) =>
   loadProfile(profileLoader(context), document).pipe(
@@ -172,6 +206,22 @@ export const profileCheck = (document: ProfileDocument, context: ValidationConte
       ),
     ),
   );
+
+/**
+ * The drift check's composition: the configuration checks' findings, then the profile step's (FD-OPS-021,
+ * `FdFormal.Drift.driftFindings`). The pull-request drift check, `fd deploy` and `fd doctor` all compose through it.
+ */
+export const withProfileStep = <E, R>(
+  configFindings: readonly Finding[],
+  profile: Effect.Effect<readonly Finding[], E, R>,
+) => profile.pipe(Effect.map((p): readonly Finding[] => [...configFindings, ...p]));
+
+/** The drift check's findings over one deploy, the profile step over the document the deploy carries (FD-OPS-021). */
+export const driftCheckFindings = (
+  configFindings: readonly Finding[],
+  document: ProfileDocument,
+  context: ValidationContext,
+) => withProfileStep(configFindings, profileCheck(document, context));
 
 /** The deployed settings of one Worker the drift check compares; secrets by name only. */
 export const DeployedSettings = Schema.Struct({
@@ -318,6 +368,59 @@ export const rulesetCheck = (required: readonly string[]): readonly Finding[] =>
     .map((c) =>
       fail("ruleset", `required_status_checks.${c}`, `the ruleset does not require ${c}`),
     );
+
+/**
+ * The hostname application's AUD tag against the overlay's `access.aud` (FD-OPS-064, FD-OPS-088). The dispatcher checks
+ * every Access JWT against `access.aud`, so on a mismatch it rejects each request Access lets through. No finding when
+ * the account holds no application on the hostname.
+ */
+export const accessAudCheck = (
+  committed: CommittedAccess,
+  deployed: readonly DeployedAccessApplication[],
+): readonly Finding[] => {
+  const app = deployed.find((d) => d.domain === committed.hostname);
+  if (app === undefined || app.aud === committed.aud) return [];
+  return [
+    fail(
+      "access",
+      `access.${committed.hostname}.aud`,
+      `the hostname's Access application has AUD ${show(app.aud)}, the overlay's access.aud is ${JSON.stringify(committed.aud)}: set access.aud to the application's AUD and deploy again`,
+    ),
+  ];
+};
+
+/**
+ * Each difference between the Access applications on the dispatcher's hostname and the committed ones (FD-OPS-088): a
+ * committed application absent, one whose name, domain, session or policies differ, one the commit does not hold, and
+ * a hostname application whose AUD tag is not the overlay's `access.aud`.
+ */
+export const accessDrift = (
+  committed: CommittedAccess,
+  deployed: readonly DeployedAccessApplication[],
+): readonly Finding[] => {
+  const changes = accessChanges(committed, deployed);
+  const live = new Map(deployed.map((d) => [d.id, d]));
+  return [
+    ...changes.create.map((a) =>
+      fail("access", `access.${a.domain}`, "a committed Access application is absent"),
+    ),
+    ...changes.update.map((u) =>
+      fail(
+        "access",
+        `access.${u.application.domain}`,
+        `deployed ${JSON.stringify(accessShape(live.get(u.id)!))}, committed ${JSON.stringify(accessShape(u.application))}`,
+      ),
+    ),
+    ...changes.remove.map((r) =>
+      fail(
+        "access",
+        `access.${r.domain}`,
+        "an Access application on the dispatcher's hostname the committed configuration does not hold",
+      ),
+    ),
+    ...accessAudCheck(committed, deployed),
+  ];
+};
 
 /** Whether any finding fails the check; warnings alone pass. */
 export const failed = (findings: readonly Finding[]): boolean =>

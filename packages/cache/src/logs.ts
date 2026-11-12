@@ -2,7 +2,7 @@
 // `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.ndjson`: the name depends only on the step's journal
 // name, the epoch and byte offsets, so a replay writes the same names and a reclaimed epoch never overwrites the
 // previous one. Each object carries `executor_id` and `executor_kind` in its custom metadata.
-import { base64url, derivedHmacKey, fromBase64url, hmacSign, hmacVerify, sha256Hex } from "./crypto.ts";
+import { base64url, sha256Hex } from "./crypto.ts";
 import type { Bucket } from "./manifest.ts";
 
 const EXECUTION_ID = /^[A-Za-z0-9:_-]{3,128}$/;
@@ -43,55 +43,6 @@ export const parseLogObjectName = (name: string): LogObject | undefined => {
   if (end < start) return undefined;
   return { executionId: m[1]!, epoch: Number(m[2]), stepKey: m[3]!, stream: m[4]!, start, end };
 };
-
-// ---- Capability token -----------------------------------------------------------------
-
-export const LOG_TOKEN_LABEL = "flare-dispatch/log/v1";
-export const MAX_CAPABILITY_TTL_MS = 7 * 24 * 3600 * 1000;
-
-/**
- * A capability token bound to one subject (an execution id for logs, an artifact id for artifacts), with an expiry of
- * at most 7 days and a key derived under a domain-separation label, compared in constant time.
- */
-export const signCapability = async (
-  secret: string,
-  label: string,
-  subject: string,
-  expiresAt: number,
-  nowMs: number,
-): Promise<string> => {
-  const exp = Math.min(expiresAt, nowMs + MAX_CAPABILITY_TTL_MS);
-  const body = `${exp}.${base64url(new TextEncoder().encode(subject))}`;
-  const mac = await hmacSign(await derivedHmacKey(secret, label), `${label}\n${body}`);
-  return `${body}.${base64url(mac)}`;
-};
-
-export const verifyCapability = async (
-  secret: string,
-  label: string,
-  subject: string,
-  token: string | null,
-  nowMs: number,
-): Promise<boolean> => {
-  if (token === null) return false;
-  const parts = token.split(".");
-  if (parts.length !== 3 || !/^[1-9][0-9]{0,15}$/.test(parts[0]!)) return false;
-  const exp = Number(parts[0]);
-  const mac = fromBase64url(parts[2]!);
-  const bound = fromBase64url(parts[1]!);
-  if (mac === undefined || bound === undefined || mac.length !== 32) return false;
-  if (new TextDecoder().decode(bound) !== subject) return false;
-  const valid = await hmacVerify(
-    await derivedHmacKey(secret, label),
-    mac,
-    `${label}\n${parts[0]}.${parts[1]}`,
-  );
-  return valid && nowMs < exp && exp - nowMs <= MAX_CAPABILITY_TTL_MS;
-};
-
-/** A log capability token bound to one execution id (FD-CACHE-087). */
-export const signLogToken = (secret: string, executionId: string, expiresAt: number, nowMs: number) =>
-  signCapability(secret, LOG_TOKEN_LABEL, executionId, expiresAt, nowMs);
 
 // ---- Reading ----------------------------------------------------------------------------
 
@@ -172,49 +123,37 @@ export interface LogExecution {
   readonly executorId?: string;
 }
 
-export interface LogRouteDeps {
+/** What serving an execution's logs reads, once the caller has been identified. */
+export interface LogServeDeps {
   readonly bucket: Bucket;
-  readonly secret: string;
-  readonly now: () => number;
   readonly execution: (executionId: string) => Promise<LogExecution | null>;
-  /** A viewer identity with read access to the execution's repository, when the request carries one. */
-  readonly viewerMayRead?: (request: Request, executionId: string) => Promise<boolean>;
   /** A fresh nonce per HTML response. */
   readonly nonce?: () => string;
 }
 
-const LOG_ROUTE = /^\/v1\/executions\/([A-Za-z0-9:_-]{3,128})\/logs(?:\/(.+))?$/;
-
-const tokenOf = (request: Request, url: URL) => {
-  const auth = request.headers.get("authorization");
-  const bearer = auth === null ? null : /^Bearer\s+(\S+)$/i.exec(auth.trim());
-  return bearer?.[1] ?? url.searchParams.get("token");
-};
-
-const plain = (status: number, body: string) =>
-  new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
+/** The answer of a log read: the response, or which of the execution and the file does not exist. */
+export type LogRead =
+  | { readonly _tag: "Served"; readonly response: Response }
+  | { readonly _tag: "NoExecution" }
+  | { readonly _tag: "NoFile" };
 
 /**
- * `GET /v1/executions/<id>/logs/<file>` and `GET /v1/executions/<id>/logs` (FD-CACHE-083): one file as NDJSON, as
- * plain text with `?format=text`, or the HTML viewer with `?format=html`; without a file, the aggregate of every file
- * in step order. A name outside the grammar is `404` (FD-CACHE-082). A terminal execution's logs are served
- * `Cache-Control: immutable` (FD-CACHE-085). Access needs a viewer identity or a log token bound to the execution.
+ * One execution's logs for a caller already identified: one file, or with no `file` the aggregate of every file in
+ * step order, as NDJSON, as plain text with `?format=text` or as the HTML viewer with `?format=html` (FD-CACHE-083).
+ * A file name outside the grammar does not exist (FD-CACHE-082).
  */
-export const handleLogs = async (request: Request, deps: LogRouteDeps): Promise<Response | null> => {
-  const url = new URL(request.url);
-  const m = LOG_ROUTE.exec(url.pathname);
-  if (m === null) return null;
-  if (request.method !== "GET") return plain(405, "method not allowed");
-  const executionId = m[1]!;
-  const file = m[2];
-  const allowed =
-    (await verifyCapability(deps.secret, LOG_TOKEN_LABEL, executionId, tokenOf(request, url), deps.now())) ||
-    (deps.viewerMayRead !== undefined && (await deps.viewerMayRead(request, executionId)));
-  if (!allowed) return plain(404, "not found");
+export const serveLogs = async (
+  request: Request,
+  target: { readonly executionId: string; readonly file: string | undefined },
+  deps: LogServeDeps,
+): Promise<LogRead> => {
+  const { executionId, file } = target;
+  if (!EXECUTION_ID.test(executionId)) return { _tag: "NoExecution" };
   const execution = await deps.execution(executionId);
-  if (execution === null) return plain(404, "not found");
-  const format = url.searchParams.get("format") ?? "ndjson";
-  if (execution.confidential === true) return confidentialPointer(executionId, execution, deps);
+  if (execution === null) return { _tag: "NoExecution" };
+  const served = (response: Response) => ({ _tag: "Served", response }) as const;
+  const format = new URL(request.url).searchParams.get("format") ?? "ndjson";
+  if (execution.confidential === true) return served(confidentialPointer(executionId, execution, deps));
   const cache = { "cache-control": execution.terminal ? IMMUTABLE : "no-store" };
   const objects =
     file === undefined
@@ -225,24 +164,28 @@ export const handleLogs = async (request: Request, deps: LogRouteDeps): Promise<
             ? undefined
             : [{ key: `logs/${executionId}/${file}`, uploaded: 0, log }];
         })();
-  if (objects === undefined) return plain(404, "not found");
+  if (objects === undefined) return { _tag: "NoFile" };
   const bodies: { key: string; text: string; meta: Record<string, string> }[] = [];
   for (const o of objects) {
     const body = await deps.bucket.get(o.key);
     if (body === null) {
-      if (file !== undefined) return plain(404, "not found");
+      if (file !== undefined) return { _tag: "NoFile" };
       continue;
     }
     bodies.push({ key: o.key, text: await body.text(), meta: body.customMetadata ?? {} });
   }
-  if (format === "html") return viewer(executionId, bodies, deps, cache);
+  if (format === "html") return served(viewer(executionId, bodies, deps, cache));
   if (format === "text")
-    return new Response(bodies.map((b) => ndjsonToText(b.text)).join("\n"), {
-      headers: { "content-type": "text/plain; charset=utf-8", ...cache },
-    });
-  return new Response(bodies.map((b) => b.text.replace(/\n?$/, "\n")).join(""), {
-    headers: { "content-type": "application/x-ndjson", ...cache },
-  });
+    return served(
+      new Response(bodies.map((b) => ndjsonToText(b.text)).join("\n"), {
+        headers: { "content-type": "text/plain; charset=utf-8", ...cache },
+      }),
+    );
+  return served(
+    new Response(bodies.map((b) => b.text.replace(/\n?$/, "\n")).join(""), {
+      headers: { "content-type": "application/x-ndjson", ...cache },
+    }),
+  );
 };
 
 /** JSON safe inside a `<script type="application/json">`: no `<` survives to close the element. */
@@ -262,7 +205,7 @@ const csp = (nonce: string) =>
 const viewer = (
   executionId: string,
   bodies: readonly { key: string; text: string; meta: Record<string, string> }[],
-  deps: LogRouteDeps,
+  deps: LogServeDeps,
   cache: Record<string, string>,
 ) => {
   const nonce = (deps.nonce ?? defaultNonce)();
@@ -288,7 +231,7 @@ const viewer = (
  * A `confidential-compute` execution keeps its logs on the device (FD-CACHE-088): the viewer shows the executor id and
  * execution id as a pointer and fetches no log content.
  */
-const confidentialPointer = (executionId: string, execution: LogExecution, deps: LogRouteDeps) => {
+const confidentialPointer = (executionId: string, execution: LogExecution, deps: LogServeDeps) => {
   const nonce = (deps.nonce ?? defaultNonce)();
   const pointer = { executionId, executorId: execution.executorId ?? "unknown" };
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>logs</title></head><body><p id="p"></p><script type="application/json" id="data">${scriptJson(pointer)}</script><script nonce="${nonce}">const d=JSON.parse(document.getElementById("data").textContent);document.getElementById("p").textContent="Logs of execution "+d.executionId+" stay on executor "+d.executorId+".";</script></body></html>`;

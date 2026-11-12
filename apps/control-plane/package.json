@@ -7,7 +7,9 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "dev": "wrangler dev"
+    "test:e2e-local": "vitest run --config vitest.e2e.config.ts",
+    "dev": "wrangler dev",
+    "test:e2e-local-device": "vitest run --config vitest.e2e-device.config.ts"
   },
   "dependencies": {
     "@fractalboxdev/flare-dispatch-agentic": "workspace:*",
@@ -22,10 +24,12 @@
     "@fractalboxdev/mameko-host-cloudflare": "workspace:*",
     "@fractalboxdev/mameko-kernel": "workspace:*",
     "@fractalboxdev/mameko-ports": "workspace:*",
+    "@fractalboxdev/mameko-store-sqlite": "workspace:*",
     "effect": "4.0.6"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261012.1",
+    "@fractalboxdev/flare-dispatch-local-ci": "workspace:*",
     "@types/node": "^22.19.0",
     "esbuild": "0.28.2",
     "miniflare": "4.20260515.0",

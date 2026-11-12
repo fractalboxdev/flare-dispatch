@@ -1,6 +1,7 @@
-// The v2 control plane Worker: mameko's coordinator on host-cloudflare, FlareDispatch's profile, the operability
-// routes and `packages/api`'s router. It shares no code with the v1 dispatcher.
+// The v2 control plane Worker: mameko's coordinator on host-cloudflare, FlareDispatch's profile, the dashboard pages
+// and `packages/api`'s router, which serves the declared `/v1/` routes. It shares no code with the v1 dispatcher.
 import { runApiMigrations } from "@fractalboxdev/flare-dispatch-api";
+import { migrateChildConclusions } from "@fractalboxdev/flare-dispatch-github";
 import { migrateIntake } from "@fractalboxdev/flare-dispatch-intake";
 import { opsFetch, scheduledHandler } from "@fractalboxdev/flare-dispatch-ops";
 import { CLASS_ORDER } from "@fractalboxdev/flare-dispatch-profile";
@@ -18,6 +19,7 @@ export {
   EpochAnchor,
   ExecutionEngine,
   ExecutorChannel,
+  IntakeUnits,
   LivenessMonitor,
 } from "./durable-objects.ts";
 export {
@@ -35,6 +37,7 @@ let migrated: Promise<unknown> | undefined;
 const migrate = (env: ControlPlaneEnv) =>
   (migrated ??= (async () => {
     await runD1Migrations(env.DB);
+    await Effect.runPromise(migrateChildConclusions(env.DB));
     await runApiMigrations(env.DB);
     await Effect.runPromise(migrateIntake(env.DB));
     await migrateLocalStore(env.DB);
@@ -43,8 +46,8 @@ const migrate = (env: ControlPlaneEnv) =>
     throw e;
   }));
 
-/** The paths `packages/api` declares that the operability routes also match; the API's routes serve them. */
-const API_OWNED = /^\/v1\/executions(\/[^/]+\/cancel)?$/;
+/** The dashboard's pages: the overview and one execution's page. The router serves the `/v1/` routes (FD-IFC-001). */
+const DASHBOARD = /^\/(executions\/[^/]+)?$/;
 
 export default {
   async fetch(
@@ -53,7 +56,7 @@ export default {
     ctx: { waitUntil(p: Promise<unknown>): void },
   ): Promise<Response> {
     const { pathname } = new URL(request.url);
-    // The deployment and plane id, which `pnpm dogfood` checks before it enrolls a device.
+    // The deployment and plane id, which `pnpm ci:local` checks before it enrolls a device.
     if (pathname === "/health")
       return Response.json({ status: "ok", deployment: deployment(env), plane_id: env.PLANE_ID });
     await migrate(env);
@@ -64,11 +67,11 @@ export default {
         channel: env.CHANNEL,
         planeId: env.PLANE_ID,
       });
-    // The compile-cache, artifact and log routes, each checking its own token (FD-CACHE-051, FD-CACHE-076).
+    // The compile-cache route checks its own token (FD-CACHE-051); the log and artifact reads are the router's.
     const cached = await cacheFetch(request, env, (p) => ctx.waitUntil(p));
     if (cached !== null) return cached;
-    // The dashboard, `/v1/ops/health`, `/v1/ops/fleet`, the install routes and `/v1/spend`, each behind its own gate.
-    if (!API_OWNED.test(pathname)) {
+    // The dashboard's pages, behind the Access gate.
+    if (DASHBOARD.test(pathname)) {
       const ops = await opsFetch(request, env as unknown as Parameters<typeof opsFetch>[1], {
         classes: CLASS_ORDER,
         fetch: boundFetch,
@@ -78,8 +81,8 @@ export default {
     return apiFetch(request, env);
   },
   /**
-   * The minute tick (FD-INT-050): liveness record, `cron-silent`, the outbox drain through the GitHub applier and
-   * intake's sweep and schedule units, and the cache, artifact and log retention sweeps.
+   * The minute tick (FD-INT-050): liveness record, `cron-silent`, the outbox drain through the GitHub applier, the
+   * enqueue of intake's sweep and schedule units (FD-INT-067), and the cache, artifact and log retention sweeps.
    */
   scheduled: scheduledHandler((env: ControlPlaneEnv) => tickDeps(env, cacheSweeps(env))),
 };

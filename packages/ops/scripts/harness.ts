@@ -5,9 +5,10 @@
 //   node --experimental-strip-types packages/ops/scripts/harness.ts replay
 //
 // Each discovers its entries across the workspace: `test/diff/*.diff.ts` exporting `subject`, `test/sim/*.sim.ts`
-// exporting `scenarios` and `test/replay/*.replay.ts` exporting `workflows`. `diff` requires the `stagedWriteGate`
-// subject; `--emit` writes the regression line or the failing seeds a nightly run appends through a pull request.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+// exporting `scenarios` and `test/replay/*.replay.ts` exporting `workflows`. `diff` requires a subject for each kernel
+// the oracle models (`DIFF_KERNELS`) and runs every subject it discovers; `--emit` writes the regression line or the
+// failing seeds a nightly run appends through a pull request.
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -18,10 +19,10 @@ import {
 } from "../src/verification/diff.ts";
 import {
   PR_SEEDS,
+  readKeptSeeds,
   runReplays,
   runSims,
   seedsToKeep,
-  type KeptSeed,
   type ReplayWorkflow,
   type SimScenario,
 } from "../src/verification/harness.ts";
@@ -44,6 +45,16 @@ const discover = async <T>(suffix: string, dir: string, name: string): Promise<T
   return out;
 };
 
+/**
+ * The kernels `oracle` answers, each with the Lean model the subject compares against (specs/verification.md § V-DIFF):
+ * the `diff` job fails when a subject is missing, so a deleted subject cannot pass the job unnoticed.
+ */
+const DIFF_KERNELS = {
+  stagedWriteGate: "formal/FdFormal/StagedWrite.lean (FD-VER-019)",
+  placement: "formal/FdFormal/Placement.lean",
+  driftProfile: "formal/FdFormal/Drift.lean (FD-OPS-021)",
+} as const;
+
 const emit = (lines: readonly unknown[]) => {
   const file = opts.get("emit");
   if (file !== undefined && lines.length > 0)
@@ -52,12 +63,12 @@ const emit = (lines: readonly unknown[]) => {
 
 if (job === "diff") {
   const subjects = await discover<DiffSubject<unknown, unknown>>(".diff.ts", "diff", "subject");
-  if (!subjects.some((s) => s.kernel === "stagedWriteGate")) {
-    console.error(
-      "diff: no test/diff subject for stagedWriteGate and its compiled Lean oracle (FD-VER-019)",
-    );
-    process.exit(1);
-  }
+  const missing = Object.entries(DIFF_KERNELS).filter(
+    ([kernel]) => !subjects.some((s) => s.kernel === kernel),
+  );
+  for (const [kernel, model] of missing)
+    console.error(`diff: no test/diff subject for ${kernel} and its compiled oracle over ${model}`);
+  if (missing.length > 0) process.exit(1);
   const regressions = parseRegressions(
     readFileSync(join(ROOT, "formal/regressions.jsonl"), "utf8"),
   );
@@ -82,13 +93,7 @@ if (job === "diff") {
   }
 } else if (job === "sim") {
   const scenarios = await discover<SimScenario>(".sim.ts", "sim", "scenarios");
-  const seedsFile = join(ROOT, "test/sim/seeds.jsonl");
-  const kept = existsSync(seedsFile)
-    ? readFileSync(seedsFile, "utf8")
-        .split("\n")
-        .filter((l) => l.trim() !== "")
-        .map((l) => JSON.parse(l) as KeptSeed)
-    : [];
+  const kept = readKeptSeeds();
   const failures = await runSims(scenarios, Number(opts.get("seeds") ?? PR_SEEDS), kept);
   for (const f of failures) console.error(`sim: ${f.scenario} seed ${f.seed}: ${f.message}`);
   emit(seedsToKeep(failures, kept));

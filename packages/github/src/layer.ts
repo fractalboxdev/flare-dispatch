@@ -25,7 +25,7 @@ import { githubWritesLayer } from "./writes.ts";
 
 /**
  * `Actuators`, with the check-run applier under `checkRun`, and `ActuatorRateLimit`; the application supplies
- * `InstallationDirectory` and `AlarmPort`.
+ * `InstallationDirectory`, `AlarmPort` and `ConcludeFacts`.
  */
 export const githubApplicationLayer = (
   client: GithubClientOptions,
@@ -39,7 +39,7 @@ export const githubApplicationLayer = (
 /**
  * Every GitHub service of one isolate under the App's own authority: `GithubApp`, `InstallationDirectory`, `GithubClient`,
  * `GithubWrites`, `GithubRead`, `InstallationQuota`, the actuator of every GitHub binding and the actuator rate limit. The
- * application supplies `AlarmPort` and `SideOutputConfig`, and, for the kinds it serves, `StagedWriteGate`,
+ * application supplies `AlarmPort`, `SideOutputConfig` and `ConcludeFacts`, and, for the kinds it serves, `StagedWriteGate`,
  * `BlobStore`, `FollowOnSubmitter`, `EmailSender` and `NoticeChannel`; a kind whose port is absent is refused.
  * Build it once per isolate, so the token cache, the repository mapping and the quota outlive one request.
  */

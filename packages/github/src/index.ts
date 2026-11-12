@@ -38,14 +38,30 @@ export {
 } from "./client.ts";
 export {
   checkConclusion,
+  ConcludeDetails,
+  concludedVerdictOf,
   concludeSummary,
   NOT_APPLICABLE_DETAILS,
   OUTPUT_LIMIT,
+  OutcomePayload,
+  PARENT_ENDED,
+  RecordedOutcome,
+  recordedVerdict,
   truncate,
   Verdict,
   verdictOf,
   type Conclusion,
 } from "./conclusion.ts";
+export {
+  ConcludeFacts,
+  ConcludeFactsUnavailable,
+  conclusionFactsOf,
+  placementReason,
+  type ConclusionFacts,
+  type ExecutionRecordFacts,
+  type PlacementFacts,
+  type ReservationFacts,
+} from "./conclude-facts.ts";
 export { drainOutbox, githubApplicationLayer, githubLiveLayer } from "./layer.ts";
 export { leaseReadToken, type LeaseCredential } from "./lease-token.ts";
 export {
@@ -82,6 +98,16 @@ export {
   type OpsIntent,
 } from "./bindings.ts";
 export { QuarantinedFailure, quarantineAnnotations } from "./conclusion.ts";
+export {
+  CHILD_CONCLUDE_KEY,
+  CHILD_CONCLUSIONS_INDEXES,
+  CHILD_CONCLUSIONS_BATCH,
+  ChildConclusionsUnavailable,
+  CHILDREN,
+  insertChildConclusions,
+  migrateChildConclusions,
+  type ConcludeKind,
+} from "./child-intents.ts";
 export { GithubApplierLive, makeGithubActuators, SIDE_OUTPUT_BINDINGS } from "./github-applier.ts";
 export {
   intentMarker,

@@ -7,11 +7,9 @@ import type { GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { Cause, Effect } from "effect";
 import type { Admission, ClassResolver, IntakeConfig } from "./config.ts";
 import { intakeError, type IntakeError } from "./config.ts";
-import { handleDispatch, type AccessIdentity } from "./dispatch.ts";
 import { errorResponse, json } from "./http.ts";
 import type { ManifestSource } from "./manifest.ts";
-import type { OidcVerifier } from "./oidc.ts";
-import type { ExecutionCanceller, InstallationEviction, ManifestReporter } from "./ports.ts";
+import type { HeldCheckReporter, InstallationEviction, ManifestReporter } from "./ports.ts";
 import type { ProtectionSnapshots } from "./protection.ts";
 import type { IntakeStore, ShedRecorder, StoreUnavailable } from "./store.ts";
 import { handleWebhook } from "./webhook.ts";
@@ -25,31 +23,24 @@ export type IntakeEnv =
   | ShedRecorder
   | ManifestSource
   | ManifestReporter
+  | HeldCheckReporter
   | GithubRead
-  | OidcVerifier
-  | AccessIdentity
   | InstallationEviction
-  | ExecutionCanceller
   | ProtectionSnapshots;
 
 /** The paths this group serves, below the `/v1/` mount, and the one method each takes. */
-export const INTAKE_PATHS = [
-  { method: "POST", pattern: "webhooks/github" },
-  { method: "POST", pattern: "dispatch/:run" },
-] as const;
+export const INTAKE_PATHS = [{ method: "POST", pattern: "webhooks/github" }] as const;
 
 const matchPath = (path: string) => {
   const parts = path.replace(/^\/+|\/+$/g, "").split("/");
   if (parts.length === 2 && parts[0] === "webhooks" && parts[1] === "github")
     return { route: "webhook" as const };
-  if (parts.length === 2 && parts[0] === "dispatch" && parts[1] !== "")
-    return { route: "dispatch" as const, run: decodeURIComponent(parts[1]!) };
   return null;
 };
 
 /**
- * `request` at `path`, the part of the URL path below `/v1/` (`webhooks/github`, `dispatch/check`). Null when the
- * group serves no such path, so the router answers `404 not_found`.
+ * `request` at `path`, the part of the URL path below `/v1/` (`webhooks/github`). Null when the group serves no such
+ * path, so the router answers `404 not_found`.
  */
 export const handleIntake = (
   request: Request,
@@ -63,9 +54,7 @@ export const handleIntake = (
       ? Effect.fail(
           intakeError(405, "method_not_allowed", `${request.method} is not served on this path`),
         )
-      : matched.route === "webhook"
-        ? handleWebhook(request)
-        : handleDispatch(matched.run, request);
+      : handleWebhook(request);
   return handled.pipe(
     Effect.catchTags({
       IntakeError: (e) => Effect.succeed(errorResponse(e, requestId)),

@@ -1,6 +1,7 @@
 // The services the routes call. Each is FlareDispatch's application port onto a mechanism another area owns: intake's
 // one door, mameko's execution record and operator operations, the incident pack, the device registry and the OIDC
 // key. A route names its port; the Worker provides the Layers. Every port fails only with an error of the error model.
+import type { OidcKeys } from "@fractalboxdev/flare-dispatch-cache/oidc";
 import { Context, type Effect } from "effect";
 import type {
   DispatchBody,
@@ -21,6 +22,10 @@ export interface DispatchSubmission {
   readonly ref: string | undefined;
   readonly sha: string | undefined;
   readonly workflowRef: string | undefined;
+  /** The commit an Actions OIDC token vouches for; undefined for an Access identity or a token with no `sha`. */
+  readonly vouchedSha: string | undefined;
+  /** The repo manifest entry's label; undefined selects the entry with no label. */
+  readonly label: string | undefined;
   readonly inputs: unknown;
   readonly class: string | undefined;
   readonly signals: DispatchBody["signals"];
@@ -150,10 +155,13 @@ export class DeviceRegistry extends Context.Service<
 
 // --- OIDC key --------------------------------------------------------------------------------------------------------
 
-/** The public half of the control plane's OIDC signing key; `undefined` while none is set (FD-IFC-051). */
+/**
+ * The control plane's OIDC key set: the current signing key and the keys retired by rotation, with their rotation
+ * time (FD-PROV-049); `undefined` while none is set (FD-IFC-051).
+ */
 export class OidcKey extends Context.Service<
   OidcKey,
-  { readonly publicJwk: Effect.Effect<Readonly<Record<string, unknown>> | undefined> }
+  { readonly keys: Effect.Effect<OidcKeys | undefined> }
 >()("@fractalboxdev/flare-dispatch-api/OidcKey") {}
 
 export type { VerdictName };

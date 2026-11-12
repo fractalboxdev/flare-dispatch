@@ -10,6 +10,7 @@ import {
   type DeployedSettings,
 } from "../index.ts";
 import { makeOperability, repositoryRoot, V2_WORKERS } from "./index.ts";
+import { accessStore } from "../access-application.test-support.ts";
 
 const ROOT = repositoryRoot(import.meta.dirname);
 let dir: string;
@@ -57,6 +58,7 @@ const fakeTarget = (calls: string[], opts: { probe?: boolean } = {}) =>
       Effect.succeed({ status: "not-applicable" as const, detail: "no Container class" }),
     writeRecord: (r) => Effect.sync(() => void calls.push(`record:${r.worker}`)),
     raiseAlarm: (name) => Effect.sync(() => void calls.push(`alarm:${name}`)),
+    ...accessStore(),
   });
 
 const service = (calls: string[], opts: { probe?: boolean } = {}) =>

@@ -1,10 +1,12 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { describe, expect, it } from "vitest";
 import { runCheck } from "./check.ts";
 import { CommandExit } from "./command.ts";
 import { ctx, fakeArtifacts, fakeExec, SHA } from "./gate.test-support.ts";
 import type { GateJobInput } from "./inputs.ts";
 import { runGateJob, writebackBranch } from "./job.ts";
+import { isKey, KEY_PATTERN } from "./manifest.ts";
+import { checkDecoder } from "./triggers.ts";
 import { runOxlint, OXLINT_PINNED_VERSION } from "./oxlint.ts";
 import { GateCache, localContentArtifacts, type CacheEntry } from "./ports.ts";
 import { LocalContent, StoreUnavailable } from "@fractalboxdev/mameko-run";
@@ -22,7 +24,7 @@ describe("artifacts on the device's local content store", () => {
       get: () => Effect.never,
     });
 
-  it("FD-GATE-012 uploads a step log of any size through the content store", async () => {
+  it("[FD-GATE-012] uploads a step log of any size through the content store", async () => {
     stored.length = 0;
     const big = "x".repeat(110 * 1024);
     const exec = fakeExec([{ match: "pnpm test", output: big }]);
@@ -34,7 +36,7 @@ describe("artifacts on the device's local content store", () => {
     expect(stored.some((bytes) => bytes.length >= big.length)).toBe(true);
   });
 
-  it("FD-GATE-012 returns the verdict when the store refuses a put", async () => {
+  it("[FD-GATE-012] returns the verdict when the store refuses a put", async () => {
     const exec = fakeExec([{ match: "pnpm test", exit: CommandExit.Exited({ code: 3 }) }]);
     const layer = Layer.mergeAll(
       exec.layer,
@@ -60,7 +62,7 @@ const withFakes = (
 ) => Layer.mergeAll(exec.layer, artifacts.layer);
 
 describe("a gate job", () => {
-  it("FD-GATE-013 sets FD_REPO, FD_SHA, FD_REF and FD_JOB in the job's environment", async () => {
+  it("[FD-GATE-013] sets FD_REPO, FD_SHA, FD_REF and FD_JOB in the job's environment", async () => {
     const exec = fakeExec();
     await run(runGateJob(job()).pipe(Effect.provide(withFakes(exec))));
     const command = exec.ran.find((r) => r.command === "pnpm test")!;
@@ -72,7 +74,7 @@ describe("a gate job", () => {
     });
   });
 
-  it("FD-GATE-014 places no executor secret in the job's environment", async () => {
+  it("[FD-GATE-014] places no executor secret in the job's environment", async () => {
     process.env["FD_TEST_SECRET"] = "held by the executor";
     try {
       const exec = fakeExec();
@@ -83,7 +85,7 @@ describe("a gate job", () => {
     }
   });
 
-  it("FD-GATE-027 runs the install once before the command, with a 600 s timeout", async () => {
+  it("[FD-GATE-027] runs the install once before the command, with a 600 s timeout", async () => {
     const exec = fakeExec();
     await run(
       runGateJob(job({ install: "pnpm install --frozen-lockfile" })).pipe(
@@ -95,7 +97,7 @@ describe("a gate job", () => {
     expect(exec.ran.find((r) => r.command.startsWith("pnpm install"))!.timeoutMs).toBe(600_000);
   });
 
-  it("FD-GATE-028 records install: exit <code> and runs no job command", async () => {
+  it("[FD-GATE-028] records install: exit <code> and runs no job command", async () => {
     const exec = fakeExec([{ match: "pnpm install", exit: CommandExit.Exited({ code: 1 }) }]);
     const outcome = await run(
       runGateJob(job({ install: "pnpm install" })).pipe(Effect.provide(withFakes(exec))),
@@ -104,7 +106,7 @@ describe("a gate job", () => {
     expect(exec.ran.map((r) => r.command)).not.toContain("pnpm test");
   });
 
-  it("FD-GATE-011 uploads the redacted output as <job key>.log before the verdict", async () => {
+  it("[FD-GATE-011] uploads the redacted output as <job key>.log before the verdict", async () => {
     const exec = fakeExec([
       { match: "pnpm test", output: "token ghp_abcdefghijklmnopqrstuvwxyz0123 ok\n" },
     ]);
@@ -113,7 +115,7 @@ describe("a gate job", () => {
     expect(artifacts.uploads.get("unit.log")).toBe("token [redacted] ok\n");
   });
 
-  it("FD-GATE-012 returns the same verdict when the log upload fails", async () => {
+  it("[FD-GATE-012] returns the same verdict when the log upload fails", async () => {
     for (const code of [0, 4]) {
       const script = [{ match: "pnpm test", exit: CommandExit.Exited({ code }) }];
       const ok = await run(
@@ -128,7 +130,7 @@ describe("a gate job", () => {
     }
   });
 
-  it("FD-GATE-018 refuses a timeoutSec outside 1 s to the run ceiling and runs no command", async () => {
+  it("[FD-GATE-018] refuses a timeoutSec outside 1 s to the run ceiling and runs no command", async () => {
     for (const timeoutSec of [0, 3601, 1.5]) {
       const exec = fakeExec();
       const outcome = await run(
@@ -139,7 +141,7 @@ describe("a gate job", () => {
     }
   });
 
-  it("FD-GATE-017 skips a draft pull request and an excluded author without a command", async () => {
+  it("[FD-GATE-017] skips a draft pull request and an excluded author without a command", async () => {
     const cases = [
       [{ pullRequest: { draft: true, author: "a" } }, "draft-pr"],
       [{ pullRequest: { draft: false, author: "dependabot[bot]" } }, "author-excluded"],
@@ -160,7 +162,7 @@ describe("a gate job", () => {
     expect(outcome).toEqual({ _tag: "success" });
   });
 
-  it("FD-GATE-015 restores and saves cache entries only through the lease-bound cache", async () => {
+  it("[FD-GATE-015] restores and saves cache entries only through the lease-bound cache", async () => {
     const calls: string[] = [];
     const cache = Layer.succeed(GateCache, {
       restore: (entry: CacheEntry) =>
@@ -188,7 +190,7 @@ describe("a gate job", () => {
     expect(calls).toEqual(["restore pnpm-store"]);
   });
 
-  it("FD-GATE-081 stages the changed files that match writeback paths on a flare-dispatch/ branch", async () => {
+  it("[FD-GATE-081] stages the changed files that match writeback paths on a flare-dispatch/ branch", async () => {
     const status = " M test/fixtures/a.json\0?? test/fixtures/new.json\0 M src/index.ts\0";
     const exec = fakeExec([{ match: "git status", output: status }], {
       "test/fixtures/a.json": '{"a":1}\n',
@@ -220,7 +222,7 @@ describe("a gate job", () => {
     expect(writebackBranch("flare-dispatch/x")).toBe("flare-dispatch/x");
   });
 
-  it("FD-GATE-081 stages nothing for a failed job", async () => {
+  it("[FD-GATE-081] stages nothing for a failed job", async () => {
     const exec = fakeExec([{ match: "pnpm test", exit: CommandExit.Exited({ code: 1 }) }]);
     const artifacts = fakeArtifacts();
     await run(
@@ -233,7 +235,48 @@ describe("a gate job", () => {
 });
 
 describe("check", () => {
-  it("FD-GATE-021 refuses a bad label and runs no command", async () => {
+  it("[FD-GATE-020] runs a labelled entry whose label matches the key pattern, and refuses one that does not", async () => {
+    const entry = { label: "lint", command: "pnpm lint" };
+    const decoded = Option.getOrThrow(
+      checkDecoder(entry)({
+        _tag: "webhook",
+        deliveryId: "d1",
+        delivery: {
+          event: "pull_request",
+          action: "synchronize",
+          repository: { fullName: "o/r", cloneUrl: ctx.repo, defaultBranch: "main" },
+          pullRequest: {
+            number: 3,
+            draft: false,
+            author: "dev",
+            headSha: SHA,
+            headRef: "f",
+            baseRef: "main",
+            baseSha: "c".repeat(40),
+          },
+        },
+      }),
+    );
+    expect(decoded.label).toBe("lint");
+
+    expect(KEY_PATTERN.source).toBe("^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$");
+    for (const label of ["a", "Z9", "unit.e2e_v2-x", "x".repeat(32)]) expect(isKey(label)).toBe(true);
+    for (const label of ["", ".a", "_a", "-a", "a b", "a:b", "a/b", "x".repeat(33)])
+      expect(isKey(label)).toBe(false);
+
+    const accepted = fakeExec();
+    await run(runCheck(decoded).pipe(Effect.provide(withFakes(accepted))));
+    expect(accepted.ran.map((r) => r.command)).toContain("pnpm lint");
+
+    const refused = fakeExec();
+    const outcome = await run(
+      runCheck({ ...decoded, label: "x".repeat(33) }).pipe(Effect.provide(withFakes(refused))),
+    );
+    expect(outcome).toEqual({ _tag: "failure", reason: "config: label" });
+    expect(refused.ran).toEqual([]);
+  });
+
+  it("[FD-GATE-021] refuses a bad label and runs no command", async () => {
     for (const label of ["-lead", "has space", "x".repeat(33)]) {
       const exec = fakeExec();
       const outcome = await run(
@@ -246,7 +289,7 @@ describe("check", () => {
     }
   });
 
-  it("FD-GATE-019 runs a step with its timeoutSec, 600 s by default", async () => {
+  it("[FD-GATE-019] runs a step with its timeoutSec, 600 s by default", async () => {
     const exec = fakeExec();
     await run(
       runCheck({
@@ -264,7 +307,7 @@ describe("check", () => {
 });
 
 describe("oxlint", () => {
-  it("FD-GATE-022 runs npx --yes oxlint@<version> with no install and a 300 s timeout", async () => {
+  it("[FD-GATE-022] runs npx --yes oxlint@<version> with no install and a 300 s timeout", async () => {
     const exec = fakeExec();
     await run(runOxlint({ ...ctx, version: "1.2.3" }).pipe(Effect.provide(withFakes(exec))));
     await run(runOxlint({ ...ctx }).pipe(Effect.provide(withFakes(exec))));
@@ -276,7 +319,7 @@ describe("oxlint", () => {
     expect(lint.every((r) => r.timeoutMs === 300_000)).toBe(true);
   });
 
-  it("FD-GATE-023 refuses a version that is not x.y.z and runs no command", async () => {
+  it("[FD-GATE-023] refuses a version that is not x.y.z and runs no command", async () => {
     const exec = fakeExec();
     const outcome = await run(
       runOxlint({ ...ctx, version: "latest" }).pipe(Effect.provide(withFakes(exec))),
@@ -285,7 +328,7 @@ describe("oxlint", () => {
     expect(exec.ran).toEqual([]);
   });
 
-  it("FD-GATE-024 skips when oxlint finds nothing to lint", async () => {
+  it("[FD-GATE-024] skips when oxlint finds nothing to lint", async () => {
     const exec = fakeExec([{ match: "oxlint", output: "No files found to lint\n" }]);
     const outcome = await run(runOxlint({ ...ctx }).pipe(Effect.provide(withFakes(exec))));
     expect(outcome).toEqual({ _tag: "skipped", detail: "nothing-to-lint" });

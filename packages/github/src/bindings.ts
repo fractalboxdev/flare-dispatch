@@ -1,19 +1,13 @@
 // The profile bindings and control-plane rules this package owns: `installationOf`,
-// the check label, the ops intents of the probes, the conclusions of a fan-out
-// parent's children and the `neutral` invariant.
+// the check label, the ops intents of the probes and the conclusions of a fan-out
+// parent's children. The `neutral` invariant lives beside the conclusion mapping.
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { insertOutboxRows } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { newRow } from "@fractalboxdev/mameko-kernel";
-import { AlarmPort } from "@fractalboxdev/mameko-ports";
-import { Effect, Match, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { InstallationDirectory } from "./applier.ts";
 import { GithubNetworkError } from "./client.ts";
-import {
-  checkConclusion,
-  NOT_APPLICABLE_DETAILS,
-  type Conclusion,
-  type Verdict,
-} from "./conclusion.ts";
+import { PARENT_CLOSED, type Verdict } from "./conclusion.ts";
 
 /** No installation serves the row's repository, so it has no delivery key. */
 export class NoInstallation extends Schema.TaggedError<NoInstallation>()("NoInstallation", {
@@ -107,19 +101,15 @@ export const insertOpsIntent = (db: D1Like, intent: OpsIntent) =>
 // ---------------------------------------------------------------------------
 // Fan-out children and the neutral invariant
 
+/** The intent key of a child's conclusion. */
+export const CHILD_CONCLUDE_KEY = "cp:check:conclude";
+
 export interface ChildCheck {
   readonly executionId: string;
   /** The child's recorded outcome, or null when it has none. */
   readonly verdict: Verdict | null;
   readonly concluded: boolean;
 }
-
-/** The verdict a child concludes with when its parent reaches its outcome first (FD-GH-020). */
-export const PARENT_CLOSED: Verdict = {
-  _tag: "failure",
-  category: "infra",
-  reason: "parent closed before this part settled",
-};
 
 /**
  * The `check.conclude` intents a fan-out parent's outcome inserts: one per child check run not yet concluded, with the
@@ -130,50 +120,8 @@ export const childConclusions = (children: readonly ChildCheck[]) =>
     .filter((c) => !c.concluded)
     .map((c) => ({
       executionId: c.executionId,
-      intentKey: "cp:check:conclude",
+      intentKey: CHILD_CONCLUDE_KEY,
       verdict: c.verdict ?? PARENT_CLOSED,
     }));
 
-/** Whether a `neutral` conclusion agrees with the recorded outcome: a listed `not-applicable` skip, nothing else. */
-export const neutralHolds = (conclusion: Conclusion, recorded: Verdict) =>
-  conclusion !== "neutral" ||
-  Match.value(recorded).pipe(
-    Match.tag(
-      "skipped",
-      ({ reason, detail }) =>
-        reason === "not-applicable" && NOT_APPLICABLE_DETAILS.includes(detail),
-    ),
-    Match.orElse(() => false),
-  );
-
-/** Raises the `neutral-invariant` page alarm when a check run concluded `neutral` on any other outcome (FD-GH-031). */
-export const checkNeutralInvariant = (
-  executionId: string,
-  scopeId: string,
-  conclusion: Conclusion,
-  recorded: Verdict,
-) =>
-  neutralHolds(conclusion, recorded)
-    ? Effect.void
-    : Effect.flatMap(
-        AlarmPort.use((a) => Effect.succeed(a)),
-        (alarms) =>
-          alarms
-            .deliver({
-              name: "neutral-invariant",
-              severity: "page",
-              dedupeKey: `neutral-invariant:${executionId}`,
-              state: "raised",
-              detail: {
-                executionId,
-                scopeId,
-                recorded,
-                mapped: checkConclusion(recorded).conclusion,
-              },
-            })
-            .pipe(
-              Effect.catchTag("AlarmDeliveryFailed", (e) =>
-                Effect.logWarning("alarm not delivered", e.reason),
-              ),
-            ),
-      );
+export { checkNeutralInvariant, neutralHolds, PARENT_CLOSED } from "./conclusion.ts";

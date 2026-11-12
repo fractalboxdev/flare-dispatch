@@ -31,13 +31,22 @@ const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{1,128}$/;
 /** Whether a header value is an `Idempotency-Key` FD-INT-010 accepts; FD-INT-011 rejects every other. */
 export const validIdempotencyKey = (value: string) => IDEMPOTENCY_KEY.test(value);
 
+/**
+ * The runs whose every request keys on the commit, so a push and a dispatch of one commit reach one execution; an
+ * `Idempotency-Key` on their dispatch keys nothing (FD-GATE-062).
+ */
+export const COMMIT_SCOPED_RUNS: ReadonlySet<string> = new Set(["worker-deploy"]);
+
 const runLabel = (r: KeyedRequest) => (r.label === null ? r.run : `${r.run}:${r.label}`);
 
-/** The three recipes in the profile's order; `commit` is total (MAMEKO-ADM-034). */
+/** The three recipes in the profile's order; `commit` is total (MAMEKO-ADM-033). */
 export const dedupRecipes: readonly DedupRecipe<KeyedRequest>[] = [
   {
     name: "idempotency-key",
-    run: (r) => (r.idempotency === null ? null : `idem:${r.repo}:${r.idempotency.key}`),
+    run: (r) =>
+      r.idempotency === null || COMMIT_SCOPED_RUNS.has(r.run)
+        ? null
+        : `idem:${r.repo}:${r.idempotency.key}`,
   },
   {
     name: "follow-on",
@@ -79,7 +88,7 @@ export interface RequestKey {
   readonly recipe: string;
   readonly canonical: string;
   readonly sha256: string;
-  /** The SHA-256 of the dispatch body's canonical JSON, for the `idempotency-key` recipe only (MAMEKO-ADM-089). */
+  /** The SHA-256 of the dispatch body's canonical JSON, for the `idempotency-key` recipe only (MAMEKO-ADM-094). */
   readonly requestDigest: string | null;
   readonly onMismatch: "duplicate" | "conflict";
 }

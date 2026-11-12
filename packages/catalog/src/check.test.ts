@@ -2,6 +2,7 @@
 // on stdin and one result line on stdout, against a real git repository.
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +17,29 @@ let root: string;
 let workspaces: string;
 let repo: string;
 let sha: string;
+let socketPath: string;
+let jobSocket: Server;
+
+/**
+ * The device executor's side of the execution socket under the host-process job runtime: the runner asks it to prepare
+ * the job's workspace before the run program and to stop the job's commands after it (MAMEKO-ISO-044).
+ */
+const startJobSocket = (path: string) =>
+  new Promise<Server>((resolve) => {
+    const server = createServer((socket) => {
+      let buffer = "";
+      socket.on("data", (chunk) => {
+        buffer += chunk.toString("utf8");
+        for (let i = buffer.indexOf("\n"); i >= 0; i = buffer.indexOf("\n")) {
+          const m = JSON.parse(buffer.slice(0, i)) as { type: string; id?: string };
+          buffer = buffer.slice(i + 1);
+          const type = m.type === "job.prepare" ? "job.prepare.ok" : m.type === "job.stop" ? "job.stop.ok" : "socket.error";
+          socket.write(`${JSON.stringify({ type, ref: m.id })}\n`);
+        }
+      });
+    });
+    server.listen(path, () => resolve(server));
+  });
 
 const git = (...args: readonly string[]) =>
   execFileSync("git", args, {
@@ -31,8 +55,10 @@ const git = (...args: readonly string[]) =>
     },
   }).trim();
 
-beforeAll(() => {
+beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), "fd-catalog-test-"));
+  socketPath = join(root, "job.sock");
+  jobSocket = await startJobSocket(socketPath);
   workspaces = join(root, "workspaces");
   execFileSync("mkdir", [workspaces]);
   repo = join(root, "repo");
@@ -47,7 +73,10 @@ beforeAll(() => {
   git("commit", "-q", "-am", "later");
 });
 
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+afterAll(() => {
+  jobSocket.close();
+  rmSync(root, { recursive: true, force: true });
+});
 
 interface Finished {
   readonly lines: readonly string[];
@@ -67,6 +96,8 @@ const runEntry = (
         entry,
         "--journal",
         join(root, `${crypto.randomUUID()}.sqlite`),
+        "--content-socket",
+        socketPath,
       ],
       {
         env: {
@@ -107,7 +138,7 @@ const check = async (steps: readonly CheckStep[], at = sha) => {
 };
 
 describe("check through the runner entry", () => {
-  it("FD-GATE-019 runs every step in a checkout of that commit and answers one result line", async () => {
+  it("[FD-GATE-019] runs every step in a checkout of that commit and answers one result line", async () => {
     await expect(
       check([
         { label: "stdout", command: "echo not-json" },
@@ -116,7 +147,7 @@ describe("check through the runner entry", () => {
     ).resolves.toEqual({ _tag: "success" });
   });
 
-  it("FD-GATE-003 records exit: <code> for the failing step and runs no step after it", async () => {
+  it("[FD-GATE-003] records exit: <code> for the failing step and runs no step after it", async () => {
     const after = join(root, "ran-after");
     await expect(
       check([
@@ -127,7 +158,7 @@ describe("check through the runner entry", () => {
     expect(existsSync(after)).toBe(false);
   });
 
-  it("FD-GATE-006 kills a step's process group at its timeout", async () => {
+  it("[FD-GATE-006] kills a step's process group at its timeout", async () => {
     const survivor = join(root, "survivor");
     await expect(
       check([{ label: "slow", command: `(sleep 2; touch ${survivor}) & sleep 30`, timeoutSec: 1 }]),
@@ -136,7 +167,7 @@ describe("check through the runner entry", () => {
     expect(existsSync(survivor)).toBe(false);
   });
 
-  it("FD-GATE-014 leaves the executor's environment out of a job, and FD-GATE-013 sets its fields", async () => {
+  it("[FD-GATE-014] leaves the executor's environment out of a job, and [FD-GATE-013] sets its fields", async () => {
     const { lines } = await runEntry(
       {
         repo: `file://${repo}`,
@@ -154,7 +185,7 @@ describe("check through the runner entry", () => {
     expect(JSON.parse(lines[0]!)).toMatchObject({ result: { _tag: "success" } });
   });
 
-  it("FD-GATE-010 reports a commit the repository lacks as infra: <error tag>, not a finding", async () => {
+  it("[FD-GATE-010] reports a commit the repository lacks as infra: <error tag>, not a finding", async () => {
     await expect(
       check([{ label: "never", command: "true" }], "0".repeat(40)),
     ).resolves.toMatchObject({ _tag: "failure", reason: "infra: CheckoutFailed" });
@@ -180,7 +211,7 @@ describe("check through the runner entry", () => {
 });
 
 describe("runCommand", () => {
-  it("FD-GATE-008 stops a command past its output limit", async () => {
+  it("[FD-GATE-008] stops a command past its output limit", async () => {
     const { exit } = await Effect.runPromise(
       runCommand({
         command: "yes",
@@ -193,7 +224,32 @@ describe("runCommand", () => {
     expect(exit).toEqual(CommandExit.OverLimit());
   });
 
-  it("FD-GATE-005 answers a command killed by a signal", async () => {
+  it("[FD-GATE-006] kills a member of the job's process group that ignores SIGTERM at the timeout", async () => {
+    const { exit, output } = await Effect.runPromise(
+      runCommand({
+        command: "(trap '' TERM; exec sleep 30) >/dev/null 2>&1 & echo $!; wait",
+        cwd: tmpdir(),
+        env: { PATH: process.env["PATH"] ?? "" },
+        timeoutMs: 500,
+      }),
+    );
+    expect(exit).toEqual(CommandExit.TimedOut());
+    const member = Number(new TextDecoder().decode(output).trim());
+    expect(member).toBeGreaterThan(0);
+    const alive = () => {
+      try {
+        process.kill(member, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const until = Date.now() + 2_000;
+    while (alive() && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+    expect(alive()).toBe(false);
+  });
+
+  it("[FD-GATE-005] answers a command killed by a signal", async () => {
     const { exit } = await Effect.runPromise(
       runCommand({ command: "kill -KILL $$", cwd: tmpdir(), env: {}, timeoutMs: 10_000 }),
     );

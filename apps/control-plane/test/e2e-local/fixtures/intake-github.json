@@ -1,0 +1,280 @@
+{
+  "app": {
+    "id": "424242"
+  },
+  "repositories": {
+    "acme/widgets": {
+      "installation": 41000001,
+      "default_branch": "main",
+      "branches": {
+        "main": "2222222222222222222222222222222222222222"
+      },
+      "files": {
+        ".github/flare-dispatch.json": {
+          "version": 1,
+          "runs": [
+            {
+              "recipe": "check",
+              "label": "ci",
+              "triggers": ["pull_request", "dispatch"],
+              "params": {
+                "steps": [
+                  {
+                    "label": "test",
+                    "command": "pnpm test",
+                    "timeoutSec": 600
+                  }
+                ]
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "release",
+              "triggers": ["push"],
+              "params": {
+                "steps": [
+                  {
+                    "label": "build",
+                    "command": "pnpm build",
+                    "timeoutSec": 600
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "acme/gadgets": {
+      "installation": 41000002,
+      "default_branch": "trunk",
+      "branches": {
+        "trunk": "4444444444444444444444444444444444444444"
+      },
+      "files": {
+        ".github/flare-dispatch.json": {
+          "version": 1,
+          "runs": [
+            {
+              "recipe": "check",
+              "triggers": ["dispatch"],
+              "params": {
+                "steps": [
+                  {
+                    "label": "test",
+                    "command": "pnpm test",
+                    "timeoutSec": 600
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "acme/broken": {
+      "installation": 41000001,
+      "default_branch": "main",
+      "branches": {
+        "main": "5555555555555555555555555555555555555555"
+      },
+      "files": {
+        ".github/flare-dispatch.json": {
+          "version": 1,
+          "runs": [
+            {
+              "recipe": "check",
+              "label": "ci",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": [
+                  {
+                    "label": "test",
+                    "command": "pnpm test",
+                    "timeoutSec": 600
+                  }
+                ]
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-00",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-01",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-02",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-03",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-04",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-05",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-06",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-07",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-08",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-09",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-10",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-11",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-12",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-13",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-14",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-15",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-16",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-17",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-18",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-19",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-20",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            },
+            {
+              "recipe": "check",
+              "label": "part-21",
+              "triggers": ["pull_request"],
+              "params": {
+                "steps": []
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

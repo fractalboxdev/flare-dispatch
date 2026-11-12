@@ -1,7 +1,7 @@
 import { Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import { fromBase64url } from "./crypto.ts";
-import { handleJwks, issueOidcToken, jwks, OIDC_RESERVED_CLAIMS, type OidcKeys } from "./oidc.ts";
+import { issueOidcToken, jwks, OIDC_RESERVED_CLAIMS, parseOidcKeys, type OidcKeys } from "./oidc.ts";
 import { failureOf } from "./support.test-support.ts";
 
 const keyPair = async (kid: string) => {
@@ -16,7 +16,7 @@ const decode = (jwt: string) =>
   JSON.parse(new TextDecoder().decode(fromBase64url(jwt.split(".")[1]!))) as Record<string, unknown>;
 
 describe("OIDC issuer", () => {
-  it("FD-PROV-049 a key retired by rotation stays in the JWKS for at least 3600 s", async () => {
+  it("[FD-PROV-049] a key retired by rotation stays in the JWKS for at least 3600 s", async () => {
     const current = await keyPair("k2");
     const old = await keyPair("k1");
     const keys: OidcKeys = { current: current.private as OidcKeys["current"], retired: [{ jwk: old.public as OidcKeys["current"], retiredAt: NOW }] };
@@ -26,8 +26,6 @@ describe("OIDC issuer", () => {
     expect(jwks(keys, NOW + 3600_000, 60).keys).toHaveLength(1);
     expect(jwks(keys, NOW + 1000, 60).keys).toHaveLength(2);
     for (const k of jwks(keys, NOW).keys) expect(k).not.toHaveProperty("d");
-    const r = handleJwks(new Request("https://ci.example.com/.well-known/jwks.json"), keys, NOW)!;
-    expect(((await r.json()) as { keys: unknown[] }).keys).toHaveLength(2);
     // A token signed by the retired key still verifies against the served set within the window.
     const before: OidcKeys = { current: old.private as OidcKeys["current"], retired: [] };
     const token = await Effect.runPromise(issueOidcToken(before, "https://ci.example.com", { run: "check", executionId: "e1", audience: "sts.amazonaws.com" }, NOW));
@@ -37,7 +35,7 @@ describe("OIDC issuer", () => {
     expect(await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, pub, fromBase64url(s!)!.buffer as ArrayBuffer, new TextEncoder().encode(`${h}.${p}`))).toBe(true);
   });
 
-  it("FD-PROV-050 sub is <run>:<execution_id>, the lifetime defaults to 900 s and caps at 3600 s, and reserved claims are refused", async () => {
+  it("[FD-PROV-050] sub is <run>:<execution_id>, the lifetime defaults to 900 s and caps at 3600 s, and reserved claims are refused", async () => {
     const k = await keyPair("k1");
     const keys: OidcKeys = { current: k.private as OidcKeys["current"], retired: [] };
     const issue = (over: object = {}) =>
@@ -53,5 +51,22 @@ describe("OIDC issuer", () => {
       expect(failureOf(await issue({ claims: { [claim]: "x" } }))).toMatchObject({ reason: "reserved-claim" });
     const custom = await issue({ claims: { repo: "acme/widgets" } });
     expect(Exit.isSuccess(custom) && decode(custom.value.jwt).repo).toBe("acme/widgets");
+  });
+
+  it("[FD-PROV-049] the secret holds one key, or after a rotation the current key and the retired ones with their rotation time", async () => {
+    const current = await keyPair("k2");
+    const old = await keyPair("k1");
+    expect(parseOidcKeys(JSON.stringify(current.private))).toEqual({
+      current: { kty: "EC", crv: "P-256", x: current.private.x, y: current.private.y, d: current.private.d, kid: "k2" },
+      retired: [],
+    });
+    const rotated = parseOidcKeys(JSON.stringify({ current: current.private, retired: [{ jwk: old.public, retiredAt: NOW }] }))!;
+    expect(jwks(rotated, NOW + 3599_000).keys.map((k) => k.kid)).toEqual(["k2", "k1"]);
+    expect(jwks(rotated, NOW + 3600_000).keys.map((k) => k.kid)).toEqual(["k2"]);
+    // Unset, not JSON, no `kid`, no private member, or not a P-256 key: no OIDC key is configured.
+    const { kid: _kid, ...noKid } = current.private;
+    const { d: _d, ...noPrivate } = current.private;
+    for (const secret of [undefined, " ", "not json", JSON.stringify(noKid), JSON.stringify(noPrivate), JSON.stringify({ ...current.private, crv: "P-384" })])
+      expect(parseOidcKeys(secret)).toBeUndefined();
   });
 });

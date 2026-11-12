@@ -7,16 +7,26 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./config": "./src/config.ts",
     "./declaration": "./src/declaration.ts",
     "./errors": "./src/errors.ts",
+    "./groups": "./src/groups.ts",
+    "./identity": "./src/identity.ts",
     "./incident": "./src/incident.ts",
+    "./link-token": "./src/link-token.ts",
+    "./links": "./src/links.ts",
     "./mcp-tools": "./src/mcp/tools.ts",
+    "./ports": "./src/ports.ts",
+    "./registry": "./src/live/registry.ts",
+    "./request-id": "./src/request-id.ts",
+    "./router": "./src/router.ts",
     "./test-support": "./src/api.test-support.ts"
   },
   "scripts": {
     "test": "vitest run"
   },
   "dependencies": {
+    "@fractalboxdev/flare-dispatch-cache": "workspace:*",
     "@fractalboxdev/flare-dispatch-catalog": "workspace:*",
     "@fractalboxdev/flare-dispatch-github": "workspace:*",
     "@fractalboxdev/flare-dispatch-profile": "workspace:*",
@@ -27,6 +37,7 @@
     "effect": "4.0.6"
   },
   "devDependencies": {
+    "@fractalboxdev/flare-dispatch-intake": "workspace:*",
     "@cloudflare/workers-types": "5.20261012.1",
     "@types/node": "^22.19.0",
     "esbuild": "0.28.2",

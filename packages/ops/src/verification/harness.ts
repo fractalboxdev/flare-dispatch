@@ -1,6 +1,8 @@
 // The `sim` and `replay` harness runners (specs/verification.md FD-VER-024, FD-VER-025). Each scenario lives in a
 // `test/sim/` or `test/replay/` directory of the package that owns it; these runners execute them with the seeds and
 // the double run the merge gate requires.
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 /** One `V-SIM` scenario: a deterministic run of the fleet for one seed, failing by throwing. */
 export interface SimScenario {
@@ -19,6 +21,54 @@ export interface KeptSeed {
 export const PR_SEEDS = 100;
 export const NIGHTLY_SEEDS = 10_000;
 
+/** The repository's `test/sim/seeds.jsonl`, which the `sim` job reads and the nightly run appends to. */
+export const KEPT_SEEDS_FILE = join(import.meta.dirname, "../../../../test/sim/seeds.jsonl");
+
+/** Every kept failing seed in `file`; none when the file does not exist. */
+export const readKeptSeeds = (file: string = KEPT_SEEDS_FILE): readonly KeptSeed[] =>
+  existsSync(file)
+    ? readFileSync(file, "utf8")
+        .split("\n")
+        .filter((l) => l.trim() !== "")
+        .map((l) => JSON.parse(l) as KeptSeed)
+    : [];
+
+/** The seeds one scenario runs: every kept seed of it, then 1 to `count`, each once. */
+export const seedsOf = (
+  scenario: string,
+  count: number,
+  kept: readonly KeptSeed[],
+): readonly number[] => [
+  ...new Set([
+    ...kept.filter((k) => k.scenario === scenario).map((k) => k.seed),
+    ...Array.from({ length: count }, (_, i) => i + 1),
+  ]),
+];
+
+/** A seeded PRNG (mulberry32) answering draws in [0, 1): one seed fixes every draw of a scenario run. */
+export const seededRandom = (seed: number): (() => number) => {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+};
+
+/** A property a scenario run broke: the requirement and what happened. */
+export interface SimViolation {
+  readonly id: string;
+  readonly message: string;
+}
+
+/** Fails a scenario run that saw any violation, naming the requirement each one breaks. */
+export const throwOnViolations = (violations: readonly SimViolation[]): void => {
+  if (violations.length > 0)
+    throw new Error(violations.map((v) => `[${v.id}] ${v.message}`).join("; "));
+};
+
 /** A failing scenario run: its seed and why. */
 export interface SimFailure {
   readonly scenario: string;
@@ -34,11 +84,7 @@ export const runSims = async (
 ): Promise<readonly SimFailure[]> => {
   const failures: SimFailure[] = [];
   for (const s of scenarios) {
-    const seeds = [
-      ...kept.filter((k) => k.scenario === s.name).map((k) => k.seed),
-      ...Array.from({ length: count }, (_, i) => i + 1),
-    ];
-    for (const seed of new Set(seeds))
+    for (const seed of seedsOf(s.name, count, kept))
       try {
         await s.run(seed);
       } catch (e) {

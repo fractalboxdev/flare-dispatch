@@ -81,6 +81,9 @@ importers:
       '@fractalboxdev/mameko-ports':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/ports
+      '@fractalboxdev/mameko-store-sqlite':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/store-sqlite
       effect:
         specifier: 4.0.6
         version: 4.0.6
@@ -88,6 +91,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: 5.20261012.1
         version: 5.20261012.1
+      '@fractalboxdev/flare-dispatch-local-ci':
+        specifier: workspace:*
+        version: link:../../packages/local-ci
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1
@@ -247,6 +253,12 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
     devDependencies:
+      '@fractalboxdev/mameko-coordinator':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/coordinator
+      '@fractalboxdev/mameko-host-cloudflare':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/host-cloudflare
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1
@@ -259,6 +271,9 @@ importers:
 
   packages/api:
     dependencies:
+      '@fractalboxdev/flare-dispatch-cache':
+        specifier: workspace:*
+        version: link:../cache
       '@fractalboxdev/flare-dispatch-catalog':
         specifier: workspace:*
         version: link:../catalog
@@ -287,6 +302,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: 5.20261012.1
         version: 5.20261012.1
+      '@fractalboxdev/flare-dispatch-intake':
+        specifier: workspace:*
+        version: link:../intake
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1
@@ -358,15 +376,45 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
     devDependencies:
+      '@fractalboxdev/mameko-coordinator':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/coordinator
+      '@fractalboxdev/mameko-host-cloudflare':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/host-cloudflare
+      '@fractalboxdev/mameko-kernel':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/kernel
+      '@fractalboxdev/mameko-ports':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/ports
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1
+      fast-check:
+        specifier: ^3.23.2
+        version: 3.23.2
       vitest:
         specifier: ^3.2.0
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
 
   packages/conformance:
     dependencies:
+      '@fractalboxdev/flare-dispatch-agentic':
+        specifier: workspace:*
+        version: link:../agentic
+      '@fractalboxdev/flare-dispatch-api':
+        specifier: workspace:*
+        version: link:../api
+      '@fractalboxdev/flare-dispatch-cache':
+        specifier: workspace:*
+        version: link:../cache
+      '@fractalboxdev/flare-dispatch-catalog':
+        specifier: workspace:*
+        version: link:../catalog
+      '@fractalboxdev/flare-dispatch-intake':
+        specifier: workspace:*
+        version: link:../intake
       '@fractalboxdev/flare-dispatch-ops':
         specifier: workspace:*
         version: link:../ops
@@ -395,6 +443,9 @@ importers:
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       miniflare:
         specifier: 4.20260515.0
         version: 4.20260515.0
@@ -485,28 +536,6 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
 
-  packages/dogfood:
-    dependencies:
-      '@effect/platform-node':
-        specifier: 4.0.6
-        version: 4.0.6(effect@4.0.6)(redis@6.3.1)
-      '@fractalboxdev/flare-dispatch-catalog':
-        specifier: workspace:*
-        version: link:../catalog
-      '@fractalboxdev/flare-dispatch-ops':
-        specifier: workspace:*
-        version: link:../ops
-      effect:
-        specifier: 4.0.6
-        version: 4.0.6
-    devDependencies:
-      '@types/node':
-        specifier: ^22.19.0
-        version: 22.20.1
-      vitest:
-        specifier: ^3.2.0
-        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
-
   packages/fd:
     dependencies:
       '@effect/platform-node':
@@ -547,6 +576,9 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
     devDependencies:
+      '@fractalboxdev/flare-dispatch-profile':
+        specifier: workspace:*
+        version: link:../profile
       '@fractalboxdev/mameko-testkit':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/testkit
@@ -603,8 +635,39 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
 
+  packages/local-ci:
+    dependencies:
+      '@effect/platform-node':
+        specifier: 4.0.6
+        version: 4.0.6(effect@4.0.6)(redis@6.3.1)
+      '@fractalboxdev/flare-dispatch-catalog':
+        specifier: workspace:*
+        version: link:../catalog
+      '@fractalboxdev/flare-dispatch-ops':
+        specifier: workspace:*
+        version: link:../ops
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.1
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
+
   packages/ops:
     dependencies:
+      '@fractalboxdev/flare-dispatch-agentic':
+        specifier: workspace:*
+        version: link:../agentic
+      '@fractalboxdev/flare-dispatch-api':
+        specifier: workspace:*
+        version: link:../api
+      '@fractalboxdev/flare-dispatch-cache':
+        specifier: workspace:*
+        version: link:../cache
       '@fractalboxdev/flare-dispatch-profile':
         specifier: workspace:*
         version: link:../profile
@@ -661,6 +724,9 @@ importers:
         specifier: 4.0.6
         version: 4.0.6
     devDependencies:
+      '@fractalboxdev/mameko-egress':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/egress
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1
@@ -957,6 +1023,9 @@ importers:
       effect:
         specifier: 4.0.6
         version: 4.0.6
+      fast-check:
+        specifier: 4.10.2
+        version: 4.10.2
 
   vendor/mameko/packages/portal:
     dependencies:
@@ -4206,6 +4275,10 @@ packages:
     resolution: {integrity: sha512-h5+1OzzfCC3Ef7VbtKdcv7zsstUQwUDlYpUTvjeUsJAssPgLn7QzbboPtL5ro04Mq0rPOsMzl7q5hIbRs2wD1A==}
     engines: {node: '>=8.0.0'}
 
+  fast-check@4.10.2:
+    resolution: {integrity: sha512-iK2f+YrcmoeGqk6fA0ea2bptcu/itMIm4NfEozq6N25+aG6h7s5HZbB/k1aV7b5w5sFLMCbbtRUsTVR+BgC3xw==}
+    engines: {node: '>=12.17.0'}
+
   fast-deep-equal@3.1.3:
     resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
 
@@ -4961,6 +5034,9 @@ packages:
 
   pure-rand@6.1.0:
     resolution: {integrity: sha512-bVWawvoZoBYpp6yIoQtQXHZjmz35RSVHnUOTefl8Vcjr8snTPY1wnpSPMWekcFwbxI6gtmT7rSYPFvz71ldiOA==}
+
+  pure-rand@8.4.2:
+    resolution: {integrity: sha512-vvuOGgcuPJAirlHvuQw1TrOiw7ptaIXXmIbNuiNOY6lNGJJH49PQ1Kj4nd783nPdQhQdicgOjVI2yI/9BD6/Ng==}
 
   quansync@1.0.0:
     resolution: {integrity: sha512-5xZacEEufv3HSTPQuchrvV6soaiACMFnq1H8wkVioctoH3TRha9Sz66lOxRwPK/qZj7HPiSveih9yAyh98gvqA==}
@@ -8446,6 +8522,10 @@ snapshots:
     dependencies:
       pure-rand: 6.1.0
 
+  fast-check@4.10.2:
+    dependencies:
+      pure-rand: 8.4.2
+
   fast-deep-equal@3.1.3: {}
 
   fast-fifo@1.3.2: {}
@@ -9458,6 +9538,8 @@ snapshots:
       - utf-8-validate
 
   pure-rand@6.1.0: {}
+
+  pure-rand@8.4.2: {}
 
   quansync@1.0.0: {}
 

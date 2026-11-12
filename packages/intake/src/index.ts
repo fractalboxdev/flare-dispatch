@@ -1,13 +1,18 @@
-export { catalogRuns, CheckParams, checkTrigger } from "./catalog.ts";
+export { catalogRuns, CheckParams, requestDecoderOf } from "./catalog.ts";
+export { catalogEventOf, deliveryOf, type TriggerContext } from "./delivery.ts";
 export {
   Admission,
   boundsOf,
   ClassResolver,
   d1Admission,
+  ExecutionStartFailed,
   IntakeConfig,
   IntakeError,
   intakeError,
+  IntakeUnavailable,
+  type AdmissionPorts,
   type ClassRequest,
+  type IntakeAdmitInput,
   type IntakeSettings,
 } from "./config.ts";
 export { cronDrift, cronMatches, MINUTE_TICK, minuteIso, parseCron } from "./cron.ts";
@@ -20,12 +25,12 @@ export {
   type RequestKey,
 } from "./dedup.ts";
 export {
-  AccessIdentity,
+  admitDispatch,
   checkSignals,
-  DISPATCH_MAX_BYTES,
-  DispatchBody,
-  handleDispatch,
+  lowerOnlyClass,
   SIGNAL_CAPS,
+  type AuthenticatedDispatch,
+  type DispatchAdmitted,
 } from "./dispatch.ts";
 export {
   CacheTriggerRecord,
@@ -63,16 +68,12 @@ export {
   validateManifest,
   type ManifestRead,
 } from "./manifest.ts";
-export { mcpDispatch, McpDispatchArgs } from "./mcp.ts";
+export { AccessIdentity, mcpDispatch, McpDispatchArgs } from "./mcp.ts";
 export {
-  ACTIONS_ISSUER,
-  ActionsClaims,
-  OidcInvalid,
-  OidcVerifier,
-  oidcVerifierLayer,
-} from "./oidc.ts";
-export {
-  ExecutionCanceller,
+  heldCheckOf,
+  HeldCheckReporter,
+  heldCheckReporterLayer,
+  type HeldCheck,
   InstallationEviction,
   installationEvictionLayer,
   MANIFEST_CHECK,
@@ -112,6 +113,8 @@ export {
   INTAKE_MIGRATIONS,
   IntakeStore,
   migrateIntake,
+  pullRequestClosedAt,
+  requestContextOf,
   ShedRecorder,
   StoreUnavailable,
   HELD_STATUS,
@@ -119,6 +122,7 @@ export {
   type HoldResult,
   type IntakeRecord,
   type RecordWithStatus,
+  type RequestContext,
   type ShedRow,
 } from "./store.ts";
 export {
@@ -132,7 +136,20 @@ export {
   type ReleaseReport,
   type Submission,
 } from "./submit.ts";
-export { planTick, runTickUnit, sweepEvent, TickUnit, type UnitResult } from "./tick.ts";
+export {
+  enqueueUnits,
+  planTick,
+  runQueuedUnit,
+  runTickUnit,
+  sweepEvent,
+  TickUnit,
+  UNIT_D1_QUERIES,
+  UNIT_SUBREQUESTS,
+  type QueuedRun,
+  type UnitBound,
+  type UnitQueueStorage,
+  type UnitResult,
+} from "./tick.ts";
 export {
   manifestAt,
   readManifest,

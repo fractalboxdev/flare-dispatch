@@ -5,13 +5,8 @@ import { AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
-import {
-  GithubApp,
-  githubAppLayer,
-  JWT_BACKDATE_SEC,
-  JWT_LIFETIME_SEC,
-  LEASE_READ_PERMISSIONS,
-} from "./app.ts";
+import { GithubApp, githubAppLayer, LEASE_READ_PERMISSIONS } from "./app.ts";
+import { fakeConcludeFacts, fakeGithub } from "./fake.test-support.ts";
 import { githubLiveLayer } from "./layer.ts";
 import { leaseReadToken } from "./lease-token.ts";
 import { GithubRead, refPatternMatches } from "./read.ts";
@@ -82,12 +77,11 @@ const run = <A, E>(
   );
 
 describe("the App JWT", () => {
-  it.each([
+  for (const [encoding, pem] of [
     ["PKCS#1", PKCS1],
     ["PKCS#8", PKCS8],
-  ])(
-    "FD-GH-068 FD-GH-067 a %s key signs an RS256 JWT with iat 60 s back and exp 600 s after iat",
-    async (_, pem) => {
+  ] as const)
+    it(`[FD-GH-067] [FD-GH-068] a ${encoding} key signs an RS256 JWT with iat 60 s back and exp 600 s after iat`, async () => {
       const jwt = await run(
         GithubApp.use((a) => a.jwt),
         fakeApi({}, []),
@@ -96,8 +90,8 @@ describe("the App JWT", () => {
       const [header, payload, signature] = jwt.split(".");
       expect(decodeSegment(header!)).toEqual({ alg: "RS256", typ: "JWT" });
       const claims = decodeSegment(payload!);
-      expect(claims.iat).toBe(NOW / 1000 - JWT_BACKDATE_SEC);
-      expect(Number(claims.exp) - Number(claims.iat)).toBe(JWT_LIFETIME_SEC);
+      expect(claims.iat).toBe(NOW / 1000 - 60);
+      expect(Number(claims.exp) - Number(claims.iat)).toBe(600);
       expect(claims.iss).toBe("123");
       const ok = verify(
         "RSA-SHA256",
@@ -106,10 +100,9 @@ describe("the App JWT", () => {
         Buffer.from(signature!.replaceAll("-", "+").replaceAll("_", "/"), "base64"),
       );
       expect(ok).toBe(true);
-    },
-  );
+    });
 
-  it("FD-GH-068 a PEM of another type fails AppKeyInvalid", async () => {
+  it("[FD-GH-068] a PEM of another type fails AppKeyInvalid", async () => {
     const pem = "-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----";
     const exit = await Effect.runPromise(
       Effect.exit(GithubApp.use((a) => a.jwt)).pipe(
@@ -121,7 +114,7 @@ describe("the App JWT", () => {
 });
 
 describe("installation tokens", () => {
-  it("FD-GH-065 caches a token and mints anew within 60 s of its expires_at", async () => {
+  it("[FD-GH-065] caches a token and mints anew within 60 s of its expires_at", async () => {
     const calls: Call[] = [];
     const fetch = fakeApi(
       { "POST /app/installations/7/access_tokens": tokenRoute(3_600_000) },
@@ -149,7 +142,7 @@ describe("installation tokens", () => {
     expect(calls[0]!.authorization).toMatch(/^Bearer [\w-]+\.[\w-]+\.[\w-]+$/);
   });
 
-  it("FD-GH-066 evicting an installation drops its token and its repository mappings", async () => {
+  it("[FD-GH-066] evicting an installation drops its token and its repository mappings", async () => {
     const calls: Call[] = [];
     const fetch = fakeApi(
       {
@@ -185,7 +178,7 @@ describe("installation tokens", () => {
     ]);
   });
 
-  it("FD-INT-043 a repository the App does not cover maps to no installation", async () => {
+  it("[FD-INT-043] a repository the App does not cover maps to no installation", async () => {
     const id = await run(
       GithubApp.use((a) => a.installationFor("acme/none")),
       fakeApi({}, []),
@@ -196,6 +189,7 @@ describe("installation tokens", () => {
 
 const alarms = Layer.mergeAll(
   Layer.succeed(AlarmPort, { deliver: () => Effect.void }),
+  fakeConcludeFacts(fakeGithub()),
   Layer.succeed(SideOutputConfig, {
     appBot: { login: "flare-dispatch[bot]", name: "flare-dispatch[bot]", email: "bot@example.com" },
     slack: undefined,
@@ -228,7 +222,7 @@ const covered = {
 };
 
 describe("the per-lease token", () => {
-  it("FD-GH-002 scopes the token to the one repository and to read permissions, expiring by the deadline", async () => {
+  it("[FD-GH-002] scopes the token to the one repository and to read permissions, expiring by the deadline", async () => {
     const calls: Call[] = [];
     const credential = await live(
       leaseReadToken({
@@ -248,7 +242,7 @@ describe("the per-lease token", () => {
 });
 
 describe("GithubRead", () => {
-  it("FD-GH-003 a read for a repository with no installation fails GithubUncredentialed, never empty", async () => {
+  it("[FD-GH-003] a read for a repository with no installation fails GithubUncredentialed, never empty", async () => {
     const result = await live(
       GithubRead.use((r) => r.openPulls("acme/none")).pipe(
         Effect.match({ onFailure: (e) => e._tag, onSuccess: (v) => v }),
@@ -258,7 +252,7 @@ describe("GithubRead", () => {
     expect(result).toBe("GithubUncredentialed");
   });
 
-  it("FD-INT-016 reads a file at a ref as text, and a missing path as null", async () => {
+  it("[FD-INT-016] reads a file at a ref as text, and a missing path as null", async () => {
     const content = Buffer.from('{"version":1}').toString("base64");
     const calls: Call[] = [];
     const [found, missing] = await live(
@@ -285,7 +279,7 @@ describe("GithubRead", () => {
     ).toBe(true);
   });
 
-  it("FD-INT-032 the required set is the union of ruleset and branch-protection checks", async () => {
+  it("[FD-INT-032] the required set is the union of ruleset and branch-protection checks", async () => {
     const checks = await live(
       GithubRead.use((r) => r.requiredChecks("acme/app", "main")),
       {
@@ -309,7 +303,7 @@ describe("GithubRead", () => {
     expect(checks).toEqual(["flare-dispatch/check:ci", "lint"]);
   });
 
-  it("FD-CACHE-017 a branch is protected by any rule that targets it or by branch protection", async () => {
+  it("[FD-CACHE-017] a branch is protected by any rule that targets it or by branch protection", async () => {
     const protectedRef = (routes: Parameters<typeof fakeApi>[0], ref: string) =>
       live(
         GithubRead.use((r) => r.refProtected("acme/app", ref)),
@@ -351,7 +345,7 @@ describe("GithubRead", () => {
     expect([ruled, classic, open, deleted]).toEqual([true, true, false, false]);
   });
 
-  it("FD-PROF-012 a tag is protected only by an active tag ruleset with a rule whose conditions name it", async () => {
+  it("[FD-PROF-012] a tag is protected only by an active tag ruleset with a rule whose conditions name it", async () => {
     const rulesets = {
       "GET /repos/acme/app/rulesets": () => ({
         status: 200,
@@ -396,7 +390,7 @@ describe("GithubRead", () => {
     ).toBe(true);
   });
 
-  it("FD-PROF-012 a ruleset ref pattern spans / only with **, and ~ALL names every ref", () => {
+  it("[FD-PROF-012] a ruleset ref pattern spans / only with **, and ~ALL names every ref", () => {
     expect(refPatternMatches("refs/tags/v*", "refs/tags/v1.2.0")).toBe(true);
     expect(refPatternMatches("refs/tags/v*", "refs/tags/v1/rc")).toBe(false);
     expect(refPatternMatches("refs/tags/**", "refs/tags/v1/rc")).toBe(true);
@@ -404,5 +398,63 @@ describe("GithubRead", () => {
     expect(refPatternMatches("~ALL", "refs/tags/anything")).toBe(true);
     expect(refPatternMatches("~DEFAULT_BRANCH", "refs/tags/main")).toBe(false);
     expect(refPatternMatches("refs/tags/v1.0", "refs/tags/v1x0")).toBe(false);
+  });
+
+  it("[FD-OPS-029] every ruleset and branch-protection request is a GET", async () => {
+    const calls: Call[] = [];
+    const routes = {
+      ...covered,
+      "GET /repos/acme/app/rules/branches/main": () => ({
+        status: 200,
+        body: [
+          {
+            type: "required_status_checks",
+            parameters: { required_status_checks: [{ context: "flare-dispatch/check:ci" }] },
+          },
+        ],
+      }),
+      "GET /repos/acme/app/branches/main/protection/required_status_checks": () => ({
+        status: 200,
+        body: { contexts: ["lint"] },
+      }),
+      "GET /repos/acme/app/rules/branches/feature": () => ({ status: 200, body: [] }),
+      "GET /repos/acme/app/branches/feature": () => ({
+        status: 200,
+        body: { protected: false, commit: { sha: "a".repeat(40) } },
+      }),
+      "GET /repos/acme/app/rulesets": () => ({
+        status: 200,
+        body: [{ id: 1, target: "tag", enforcement: "active" }],
+      }),
+      "GET /repos/acme/app/rulesets/1": () => ({
+        status: 200,
+        body: {
+          enforcement: "active",
+          conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
+          rules: [{ type: "deletion" }],
+        },
+      }),
+    };
+    await live(
+      Effect.gen(function* () {
+        const read = yield* GithubRead;
+        yield* read.requiredChecks("acme/app", "main");
+        yield* read.refProtected("acme/app", "refs/heads/main");
+        yield* read.refProtected("acme/app", "refs/heads/feature");
+        yield* read.refProtected("acme/app", "refs/tags/v1.0.0");
+      }),
+      routes,
+      calls,
+    );
+    const ruleCalls = calls.filter((c) => /\/(rules|rulesets|protection)(\/|\?|$)/.test(c.path));
+    expect(ruleCalls.map((c) => c.path.split("?")[0])).toEqual(
+      expect.arrayContaining([
+        "/repos/acme/app/rules/branches/main",
+        "/repos/acme/app/branches/main/protection/required_status_checks",
+        "/repos/acme/app/rulesets",
+        "/repos/acme/app/rulesets/1",
+      ]),
+    );
+    expect(ruleCalls.every((c) => c.method === "GET" && c.body === undefined)).toBe(true);
   });
 });

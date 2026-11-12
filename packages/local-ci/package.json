@@ -1,0 +1,26 @@
+{
+  "name": "@fractalboxdev/flare-dispatch-local-ci",
+  "version": "0.0.1",
+  "private": true,
+  "description": "`pnpm ci:local`: runs FlareDispatch's own CI through a local control plane and the real device executor.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./stack": "./src/stack.ts",
+    "./client": "./src/client.ts",
+    "./access": "./src/access.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.0.6",
+    "@fractalboxdev/flare-dispatch-catalog": "workspace:*",
+    "@fractalboxdev/flare-dispatch-ops": "workspace:*",
+    "effect": "4.0.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "vitest": "^3.2.0"
+  }
+}

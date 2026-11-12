@@ -30,7 +30,7 @@ const context = (over: Partial<LocalRunContext> = {}) => {
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(Effect.result(effect));
 
 describe("local run context", () => {
-  it("FD-LOCAL-018 records exactly check.summary and check.annotations as logged no-ops", async () => {
+  it("[FD-LOCAL-018] records exactly check.summary and check.annotations as logged no-ops", async () => {
     expect(DECORATION_KINDS).toEqual(["check.summary", "check.annotations"]);
     for (const registered of [true, false]) {
       const { ctx, sent, journal } = context({ registered });
@@ -44,7 +44,7 @@ describe("local run context", () => {
     }
   });
 
-  it("FD-LOCAL-019 FD-LOCAL-055 turns a registered execution's other appends into local.writeback keyed run:<step>:<index>", async () => {
+  it("[FD-LOCAL-019] [FD-LOCAL-055] turns a registered execution's other appends into local.writeback keyed run:<step>:<index>", async () => {
     const { ctx, sent } = context();
     await Effect.runPromise(appendIntent(ctx, "propose", 0, "pr.propose", { m: 1 }));
     await Effect.runPromise(appendIntent(ctx, "review", 2, "review", { body: "b" }));
@@ -66,14 +66,14 @@ describe("local run context", () => {
     });
   });
 
-  it("FD-LOCAL-020 fails an unregistered execution's step with RegistrationRequired", async () => {
+  it("[FD-LOCAL-020] fails an unregistered execution's step with RegistrationRequired", async () => {
     const { ctx, sent } = context({ registered: false });
     const result = await run(appendIntent(ctx, "propose", 0, "comment", {}));
     expect(result._tag === "Failure" && result.failure._tag).toBe("RegistrationRequired");
     expect(sent).toEqual([]);
   });
 
-  it("FD-LOCAL-067 sends no writeback request while offline", async () => {
+  it("[FD-LOCAL-067] sends no writeback request while offline", async () => {
     const { ctx, sent } = context({
       scheduler: { offline: () => true, grantRejected: () => false },
     });
@@ -85,7 +85,7 @@ describe("local run context", () => {
     expect(sent).toEqual([]);
   });
 
-  it("FD-LOCAL-071 sends no writeback request for a registered execution a new grant rejected (simulation)", async () => {
+  it("[FD-LOCAL-071] sends no writeback request for a registered execution a new grant rejected (simulation)", async () => {
     // Each trace interleaves grants that reject or keep in-flight executions with their appends.
     const step = fc.oneof(
       fc.record({ op: fc.constant("grant" as const), rejects: fc.subarray(["a", "b", "c"]) }),
@@ -159,7 +159,7 @@ const registerVia = (run: string, payload: unknown) =>
   });
 
 describe("local registration port", () => {
-  it("FD-LOCAL-072 records environment names beside the tree hash, base commit, digests, platform and inputs digest", async () => {
+  it("[FD-LOCAL-072] records environment names beside the tree hash, base commit, digests, platform and inputs digest", async () => {
     const { go } = harness();
     const answer = await go(
       Effect.gen(function* () {
@@ -191,7 +191,7 @@ describe("local registration port", () => {
     });
   });
 
-  it("FD-LOCAL-075 registers exactly when the execution requests reuse or writeback", async () => {
+  it("[FD-LOCAL-075] registers exactly when the execution requests reuse or writeback", async () => {
     expect(needsRegistration({ reuse: false, writeback: false })).toBe(false);
     expect(needsRegistration({ reuse: true, writeback: false })).toBe(true);
     expect(needsRegistration({ reuse: false, writeback: true })).toBe(true);

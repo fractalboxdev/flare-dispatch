@@ -65,7 +65,7 @@ const releaseHarness = (protectedRefs: string[]) =>
   });
 
 describe("resolveClass at intake", () => {
-  it("FD-PROF-013 a gating run on a pull request resolves to required when the base branch requires its check, and to interactive when it does not", async () => {
+  it("[FD-PROF-013] a gating run on a pull request resolves to required when the base branch requires its check, and to interactive when it does not", async () => {
     const required = await withRequired(["flare-dispatch/check:ci"]);
     await deliver(required, "pull_request", pullRequestPayload());
     expect(classes(required)).toEqual({ check: "required", lint: "batch" });
@@ -76,7 +76,7 @@ describe("resolveClass at intake", () => {
     expect(classes(optional)).toEqual({ check: "interactive", lint: "batch" });
   });
 
-  it("FD-PROF-013 a merge group and a gh-readonly-queue push read the required set of the base branch they name", () => {
+  it("[FD-PROF-013] a merge group and a gh-readonly-queue push read the required set of the base branch they name", () => {
     expect(
       targetBranchOf("merge_group", { merge_group: { base_ref: "refs/heads/release/2" } }),
     ).toBe("release/2");
@@ -93,7 +93,7 @@ describe("resolveClass at intake", () => {
     ).toBe("main");
   });
 
-  it("FD-PROF-014 the required set is read once per branch for 10 min, and again after a repository_ruleset or branch_protection_rule webhook", async () => {
+  it("[FD-PROF-014] the required set is read once per branch for 10 min, and again after a repository_ruleset or branch_protection_rule webhook", async () => {
     const h = await withRequired(["flare-dispatch/check:ci"]);
     await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }), "d-1");
     await deliver(h, "pull_request", pullRequestPayload({ head: "2".repeat(40) }), "d-2");
@@ -128,7 +128,7 @@ describe("resolveClass at intake", () => {
     expect(requiredReads(h)).toBe(4);
   });
 
-  it("FD-PROF-014 an organization ruleset event that names no repository drops every repository's cached set", async () => {
+  it("[FD-PROF-014] an organization ruleset event that names no repository drops every repository's cached set", async () => {
     const h = await withRequired(["flare-dispatch/check:ci"]);
     await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }), "d-1");
     await deliver(h, "repository_ruleset", { action: "deleted" }, "d-2");
@@ -136,7 +136,7 @@ describe("resolveClass at intake", () => {
     expect(requiredReads(h)).toBe(2);
   });
 
-  it("FD-PROF-015 a required set that times out or answers a server error resolves the gating run to required, and is not cached", async () => {
+  it("[FD-PROF-015] a required set that times out or answers a server error resolves the gating run to required, and is not cached", async () => {
     const h = await withRequired([]);
     h.reads.failures.set(
       `requiredChecks ${REPO}`,
@@ -156,7 +156,7 @@ describe("resolveClass at intake", () => {
     expect(checkClasses(h, "3".repeat(40))).toEqual(["interactive"]);
   });
 
-  it("FD-PROF-016 a required set the App may not read takes the run default and raises ruleset-permission", async () => {
+  it("[FD-PROF-016] a required set the App may not read takes the run default and raises ruleset-permission", async () => {
     const h = await withRequired(["flare-dispatch/check:ci"]);
     h.reads.failures.set(
       `requiredChecks ${REPO}`,
@@ -177,7 +177,7 @@ describe("resolveClass at intake", () => {
     ]);
   });
 
-  it("FD-PROF-015 FD-PROF-016 a read failure maps to the Unavailable reason the binding acts on", () => {
+  it("[FD-PROF-015] [FD-PROF-016] a read failure maps to the Unavailable reason the binding acts on", () => {
     const http = (status: number, rateLimited = false) =>
       unavailableOf(new GithubHttpError({ status, message: "", rateLimited })).reason;
     expect([http(401), http(403), http(403, true), http(429, true), http(500), http(404)]).toEqual([
@@ -194,7 +194,7 @@ describe("resolveClass at intake", () => {
     );
   });
 
-  it("FD-PROF-012 a release-allowlisted run on a push of a ruleset-protected tag resolves to release, and on an unprotected tag does not", async () => {
+  it("[FD-PROF-012] a release-allowlisted run on a push of a ruleset-protected tag resolves to release, and on an unprotected tag does not", async () => {
     const tag = "refs/tags/v1.2.0";
     const guarded = await releaseHarness([tag]);
     await deliver(guarded, "push", pushPayload(tag));
@@ -209,7 +209,7 @@ describe("resolveClass at intake", () => {
     expect(classes(branch)).toEqual({ "worker-deploy": "required" });
   });
 
-  it("FD-PROF-013 FD-PROF-018 the catalogue's check resolves to required on a pull request its base requires, and to its batch default when dispatched", () => {
+  it("[FD-PROF-013] [FD-PROF-018] the catalogue's check resolves to required on a pull request its base requires, and to its batch default when dispatched", () => {
     const check = catalogRuns("development")("check")!;
     const request: ClassRequest = {
       run: check,
@@ -233,7 +233,7 @@ describe("resolveClass at intake", () => {
     ).toBe("batch");
   });
 
-  it("FD-PROF-024 a fork pull request resolves with the label untrusted-input", async () => {
+  it("[FD-PROF-024] a fork pull request resolves with the label untrusted-input", async () => {
     const h = await resolving();
     await deliver(h, "pull_request", pullRequestPayload({ headRepo: "mallory/app" }));
     expect(h.records().map((r) => [r.run, r.labels_json])).toEqual([
@@ -253,7 +253,7 @@ describe("protected triggers", () => {
   };
   const triggers = (h: Harness) => [...new Set(h.records().map((r) => r.cache_trigger_json))];
 
-  it("FD-CACHE-017 a push to a branch or tag a ruleset or branch protection protects records protected: true; any other push records false", async () => {
+  it("[FD-CACHE-017] a push to a branch or tag a ruleset or branch protection protects records protected: true; any other push records false", async () => {
     const release = await pushed("refs/heads/release/2", ["refs/heads/release/2"]);
     expect(triggers(release)).toEqual([
       JSON.stringify({ _tag: "Push", ref: "refs/heads/release/2", protected: true }),
@@ -268,14 +268,14 @@ describe("protected triggers", () => {
     ]);
   });
 
-  it("FD-CACHE-020 a gh-readonly-queue push is never a protected trigger and reads no protection", async () => {
+  it("[FD-CACHE-020] a gh-readonly-queue push is never a protected trigger and reads no protection", async () => {
     const ref = `refs/heads/gh-readonly-queue/main/pr-12-${HEAD}`;
     const h = await pushed(ref, [ref]);
     expect(triggers(h)).toEqual([JSON.stringify({ _tag: "Push", ref, protected: false })]);
     expect(h.reads.calls).not.toContain(`refProtected ${REPO}`);
   });
 
-  it("FD-CACHE-017 a push whose protection cannot be read runs as an unprotected trigger and writes no protected tier, except on the default branch", async () => {
+  it("[FD-CACHE-017] a push whose protection cannot be read runs as an unprotected trigger and writes no protected tier, except on the default branch", async () => {
     const h = await harness();
     h.reads.failures.set(
       `refProtected ${REPO}`,

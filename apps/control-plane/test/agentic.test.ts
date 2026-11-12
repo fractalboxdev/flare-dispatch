@@ -1,10 +1,28 @@
 // The actuators: the agentic `pr.propose` and `pr.close` appliers over the GitHub package's actuator.
-import { GitData, GitDataError } from "@fractalboxdev/flare-dispatch-agentic";
+import {
+  GitData,
+  GitDataError,
+  StagedWriteReadFailed,
+  WritebackRecords,
+} from "@fractalboxdev/flare-dispatch-agentic";
 import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
+import {
+  d1IntakeStore,
+  IntakeStore,
+  type IntakeRecord,
+} from "@fractalboxdev/flare-dispatch-intake";
+import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import { Actuators, actuatorRegistry, type IntentRow } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
-import { writebackApplier, writebackRecordsDeferred } from "../src/agentic.ts";
+import {
+  guardLease,
+  issuedCredentials,
+  writebackApplier,
+  writeCredentialIn,
+} from "../src/agentic.ts";
+import { leaseCacheAt } from "../src/cache-execution.ts";
+import type { ControlPlaneEnv } from "../src/config.ts";
 
 const row = (kind: string, payload: unknown): IntentRow =>
   ({
@@ -43,9 +61,17 @@ const refusingGit = Layer.succeed(
   }),
 );
 
+/** Records whose every read fails; no routed row in these tests reaches them. */
+const unreadRecords = Layer.succeed(WritebackRecords, {
+  blobs: () => Effect.fail(new StagedWriteReadFailed({ source: "artifacts", detail: "unread" })),
+  modelCalls: () => Effect.fail(new StagedWriteReadFailed({ source: "gateway", detail: "unread" })),
+  issuedCredentials: () =>
+    Effect.fail(new StagedWriteReadFailed({ source: "credentials", detail: "unread" })),
+});
+
 const applierWith = (seen: string[]) =>
   writebackApplier("flare-dispatch[bot]").pipe(
-    Layer.provide(Layer.mergeAll(base(seen), refusingGit, writebackRecordsDeferred)),
+    Layer.provide(Layer.mergeAll(base(seen), refusingGit, unreadRecords)),
   );
 
 const apply = (seen: string[], r: IntentRow) =>
@@ -56,7 +82,7 @@ const apply = (seen: string[], r: IntentRow) =>
   );
 
 describe("the writeback appliers inside every actuator", () => {
-  it("FD-AGT-009 routes pr.close to the agentic applier, which checks its branch before any GitHub call", async () => {
+  it("[FD-AGT-009] routes pr.close to the agentic applier, which checks its branch before any GitHub call", async () => {
     const seen: string[] = [];
     const answer = await apply(
       seen,
@@ -66,7 +92,7 @@ describe("the writeback appliers inside every actuator", () => {
     expect(answer).toMatchObject({ _tag: "refused", reason: "writeback: branch-invalid" });
   });
 
-  it("FD-AGT-009 refuses a pr.propose whose payload does not decode, without the GitHub applier", async () => {
+  it("[FD-AGT-009] refuses a pr.propose whose payload does not decode, without the GitHub applier", async () => {
     const seen: string[] = [];
     expect(await apply(seen, row("pr.propose", {}))).toMatchObject({
       _tag: "refused",
@@ -75,13 +101,13 @@ describe("the writeback appliers inside every actuator", () => {
     expect(seen).toEqual([]);
   });
 
-  it("FD-GH-001 leaves every other kind to the GitHub package's applier", async () => {
+  it("[FD-GH-001] leaves every other kind to the GitHub package's applier", async () => {
     const seen: string[] = [];
     expect(await apply(seen, row("check.conclude", {}))).toMatchObject({ externalRef: "base" });
     expect(seen).toEqual(["check.conclude"]);
   });
 
-  it("FD-AGT-001 lists each agentic recipe with a body in the catalogue, on a cloud executor", () => {
+  it("[FD-AGT-001] lists each agentic recipe with a body in the catalogue, on a cloud executor", () => {
     for (const name of ["pr-review", "improve-pr", "spec-drift-pr", "ci-triage-pr"]) {
       const found = lookupRun("production", name);
       expect(found._tag).toBe("Available");
@@ -90,5 +116,141 @@ describe("the writeback appliers inside every actuator", () => {
       expect(found.entry.agentic?.declaration.needsModel).toBeDefined();
     }
     expect(lookupRun("production", "release-notes")._tag).toBe("NotInCatalogue");
+  });
+});
+
+const intakeRecord: IntakeRecord = {
+  executionId: "x1",
+  trigger: "webhook",
+  run: "spec-drift-pr",
+  label: null,
+  repo: "acme/widgets",
+  sha: "a".repeat(40),
+  ref: "refs/pull/7/head",
+  inputs: {},
+  className: "batch",
+  labels: [],
+  attempt: 1,
+  familyRoot: "x1",
+  installation: null,
+  caller: null,
+  notBefore: null,
+  spendLine: null,
+  placementConstraint: null,
+  cacheTrigger: { _tag: "PullRequest", number: 7 },
+  eligibleKinds: null,
+  createdAt: 0,
+};
+
+describe("the issued-credential read", () => {
+  const leased = async () => {
+    const db = await migratedD1();
+    await Effect.runPromise(
+      Effect.flatMap(IntakeStore, (s) => s.put(intakeRecord)).pipe(
+        Effect.provide(d1IntakeStore(db)),
+      ),
+    );
+    for (const sql of [
+      "insert into executions (id, scope_id, run, status, enqueued_at, deadline_at) values ('x1', 'acme/widgets', 'spec-drift-pr', 'success', 0, 1900000000000)",
+      `insert into executors (executor_id, kind, posture_tier, labels_json, slots_json)
+         values ('c1', 'cloudflare', 'unmanaged', '[]', '{}')`,
+      "insert into placements (execution_id, state, epoch, executor_id, accepted_epoch) values ('x1', 'accepted', 2, 'c1', 2)",
+      `insert into lease_records (execution_id, epoch, class, executor_id, executor_kind, "end", ended_at)
+         values ('x1', 1, 'batch', 'd1', 'device', 'reclaimed', 5)`,
+    ])
+      await db.prepare(sql).run();
+    return db;
+  };
+
+  it("answers the compile-cache token of every lease the execution held, recomputed from intake's record", async () => {
+    const env = {
+      DB: await leased(),
+      PUBLIC_ORIGIN: "https://cp.example",
+      COMPILE_CACHE_SECRET: "secret",
+    } as unknown as ControlPlaneEnv;
+    const tokens = await Effect.runPromise(issuedCredentials(env)("x1"));
+    const expected = await Promise.all(
+      [
+        { epoch: 1, kind: "device" },
+        { epoch: 2, kind: "cloudflare" },
+      ].map(
+        async (lease) =>
+          (await leaseCacheAt(env, intakeRecord, lease, 1_900_000_000_000)).upload_grant
+            .compile_cache?.token,
+      ),
+    );
+    expect(expected.every((t) => typeof t === "string" && t.startsWith("cc3."))).toBe(true);
+    expect([...tokens].sort()).toEqual([...expected].sort());
+  });
+
+  it("fails, never answers empty, when intake holds no record of the execution", async () => {
+    const env = {
+      DB: await leased(),
+      COMPILE_CACHE_SECRET: "secret",
+    } as unknown as ControlPlaneEnv;
+    const failure = await Effect.runPromise(Effect.flip(issuedCredentials(env)("x2")));
+    expect(failure).toMatchObject({ _tag: "StagedWriteReadFailed", source: "credentials" });
+  });
+});
+
+describe("the lease credential guard", () => {
+  const APP_KEY = "-----BEGIN RSA PRIVATE KEY-----\nMIIEapp\n-----END RSA PRIVATE KEY-----";
+  const env = { GITHUB_APP_PRIVATE_KEY: APP_KEY } as unknown as ControlPlaneEnv;
+  const lease = (inputs: unknown) => ({
+    run: "pr-review",
+    scope_id: "acme/widgets",
+    inputs,
+    credentials: {},
+    upload_grant: { compile_cache: { token: "cc3.abc.def" } },
+  });
+
+  it("[FD-AGT-008] passes a lease payload that carries no write credential unchanged", async () => {
+    const clean = lease({
+      sha: "a".repeat(40),
+      steps: [{ label: "test", command: "pnpm test" }],
+    });
+    expect(await Effect.runPromise(guardLease(env, clean))).toBe(clean);
+  });
+
+  it("[FD-AGT-008] fails the grant of a lease payload that carries the App private key or an installation token", async () => {
+    const withKey = lease({
+      steps: [
+        {
+          label: "x",
+          command: `echo '${APP_KEY.split("\n")[0]}...'`,
+          env: { K: APP_KEY },
+        },
+      ],
+    });
+    expect(await Effect.runPromise(Effect.flip(guardLease(env, withKey)))).toMatchObject({
+      _tag: "CredentialInPayload",
+      field: "inputs.steps[0].command",
+    });
+    const withToken = {
+      ...lease({}),
+      credentials: { github: `ghs_${"t".repeat(36)}` },
+    };
+    expect(await Effect.runPromise(Effect.flip(guardLease(env, withToken)))).toMatchObject({
+      _tag: "CredentialInPayload",
+      field: "credentials.github",
+    });
+  });
+
+  it("[FD-AGT-008] fails a lease payload that carries the deploy's App key even without its PEM armour", async () => {
+    const bare = {
+      GITHUB_APP_PRIVATE_KEY: "app-key-material-0123456789",
+    } as unknown as ControlPlaneEnv;
+    expect(
+      await Effect.runPromise(
+        Effect.flip(guardLease(bare, lease({ key: "app-key-material-0123456789" }))),
+      ),
+    ).toMatchObject({ _tag: "CredentialInPayload", field: "inputs.key" });
+  });
+
+  it("[FD-AGT-008] names the field of a request's inputs that carries a write credential, for intake to refuse", () => {
+    const inputsGuard = writeCredentialIn(env);
+    expect(inputsGuard({ steps: [{ label: "test", command: "pnpm test" }] })).toBeNull();
+    expect(inputsGuard({ steps: [{ label: "k", command: APP_KEY }] })).toBe("steps[0].command");
+    expect(inputsGuard({ token: `ghs_${"t".repeat(36)}` })).toBe("token");
   });
 });

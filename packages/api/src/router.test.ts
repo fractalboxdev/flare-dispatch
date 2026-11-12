@@ -9,7 +9,7 @@ import {
   type Harness,
 } from "./api.test-support.ts";
 import { FlareDispatchApi } from "./declaration.ts";
-import { declaredGroups, logsGroup } from "./groups.ts";
+import { artifactsGroup, declaredGroups, logsGroup, operabilityGroup } from "./groups.ts";
 import { DuplicateRoute, matchPath, mount, routerGroup } from "./router.ts";
 import { Effect, Layer } from "effect";
 
@@ -21,7 +21,7 @@ beforeAll(async () => {
 const json = async (response: Response) => (await response.json()) as Record<string, unknown>;
 
 describe("declaration and router", () => {
-  it("FD-IFC-001: the mounted routes are exactly the declaration's endpoints", () => {
+  it("[FD-IFC-001]: the mounted routes are exactly the declaration's endpoints", () => {
     const declared: string[] = [];
     HttpApi.reflect(FlareDispatchApi, {
       onGroup: () => {},
@@ -34,11 +34,52 @@ describe("declaration and router", () => {
           .handle("file", () => Effect.succeed("")),
       ),
     );
-    const mounted = mount(...declaredGroups, logs).routes.map((r) => `${r.method} ${r.path}`);
+    const artifacts = artifactsGroup(
+      HttpApiBuilder.group(FlareDispatchApi, "artifacts", (handlers) =>
+        handlers
+          .handle("get", () => Effect.succeed(new Uint8Array()))
+          .handle("list", () => Effect.succeed({ artifacts: [], cursor: null })),
+      ),
+    );
+    const operability = operabilityGroup(
+      HttpApiBuilder.group(FlareDispatchApi, "operability", (handlers) =>
+        handlers
+          .handle("fleet", () => Effect.succeed([]))
+          .handle("phaseGate", () =>
+            Effect.succeed({
+              gate: 0,
+              windowStart: 0,
+              windowEnd: 0,
+              measures: [],
+              pageAlarms: [],
+              killLines: [],
+            }),
+          )
+          .handle("spend", () =>
+            Effect.succeed({
+              month: "2027-01",
+              budget: 0,
+              settled: 0,
+              reserved: 0,
+              committed: 0,
+              classes: [],
+              floor: 0,
+              measured_reserve_runway_days: null,
+              control_state: "run" as const,
+              resets_at: 0,
+            }),
+          )
+          .handle("installNew", () => Effect.succeed(""))
+          .handle("installCallback", () => Effect.succeed("")),
+      ),
+    );
+    const mounted = mount(...declaredGroups, operability, logs, artifacts).routes.map(
+      (r) => `${r.method} ${r.path}`,
+    );
     expect(mounted.sort()).toEqual(declared.sort());
   });
 
-  it("FD-IFC-004: a path no route claims answers 404 not_found with the error shape", async () => {
+  it("[FD-IFC-004]: a path no route claims answers 404 not_found with the error shape", async () => {
     const response = await h.fetch("/nowhere");
     expect(response.status).toBe(404);
     const body = await json(response);
@@ -47,12 +88,12 @@ describe("declaration and router", () => {
     expect(typeof body["message"]).toBe("string");
   });
 
-  it("FD-IFC-010, FD-IFC-004: an unclaimed /v1 path passes the Access gate before its 404", async () => {
+  it("[FD-IFC-010], [FD-IFC-004]: an unclaimed /v1 path passes the Access gate before its 404", async () => {
     expect((await h.fetch("/v1/nothing-here")).status).toBe(401);
     expect((await h.fetch("/v1/nothing-here", await h.asAccess(MEMBER))).status).toBe(404);
   });
 
-  it("FD-IFC-005, FD-IFC-003: another method on a known path answers 405 only after the identity gate", async () => {
+  it("[FD-IFC-005], [FD-IFC-003]: another method on a known path answers 405 only after the identity gate", async () => {
     expect((await h.fetch("/v1/executions", { method: "DELETE" })).status).toBe(401);
     const response = await h.fetch(
       "/v1/executions",
@@ -62,7 +103,7 @@ describe("declaration and router", () => {
     expect(await json(response)).toMatchObject({ error: "method_not_allowed" });
   });
 
-  it("FD-IFC-006: a body over the limit answers 413 without being parsed", async () => {
+  it("[FD-IFC-006]: a body over the limit answers 413 without being parsed", async () => {
     const big = "x".repeat(1_048_577);
     const response = await h.fetch(
       "/v1/ops/halt",
@@ -76,7 +117,7 @@ describe("declaration and router", () => {
     expect(await json(response)).toMatchObject({ error: "payload_too_large" });
   });
 
-  it("FD-IFC-006: a streamed body with no length is bounded too", async () => {
+  it("[FD-IFC-006]: a streamed body with no length is bounded too", async () => {
     const chunk = new Uint8Array(512 * 1024);
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -96,7 +137,7 @@ describe("declaration and router", () => {
     expect(response.status).toBe(413);
   });
 
-  it("FD-IFC-007: a body that fails its schema answers 400 invalid_body naming the first failing path", async () => {
+  it("[FD-IFC-007]: a body that fails its schema answers 400 invalid_body naming the first failing path", async () => {
     const response = await h.fetch(
       "/v1/ops/halt",
       await h.asAccess(OPERATOR, {
@@ -111,7 +152,7 @@ describe("declaration and router", () => {
     expect(body["message"]).toContain("state");
   });
 
-  it("FD-IFC-007: a body that is not JSON answers 400 invalid_body", async () => {
+  it("[FD-IFC-007]: a body that is not JSON answers 400 invalid_body", async () => {
     const response = await h.fetch(
       "/v1/ops/halt",
       await h.asAccess(OPERATOR, {
@@ -124,7 +165,7 @@ describe("declaration and router", () => {
     expect((await json(response))["error"]).toBe("invalid_body");
   });
 
-  it("FD-IFC-008: a defect answers 500 internal with the request id and no exception text", async () => {
+  it("[FD-IFC-008]: a defect answers 500 internal with the request id and no exception text", async () => {
     // An `operators` list that is not an array makes the cancel route's group check throw.
     const cancel = await h.fetch("/v1/executions/01JEXEC0000000000000000000/cancel", {
       ...(await h.asAccess(MEMBER, { method: "POST" })),
@@ -137,7 +178,7 @@ describe("declaration and router", () => {
     expect(typeof body["request_id"]).toBe("string");
   });
 
-  it("FD-IFC-009: every error carries exactly error, message and request_id", async () => {
+  it("[FD-IFC-009]: every error carries exactly error, message and request_id", async () => {
     const response = await h.fetch("/v1/executions/missing", await h.asAccess(MEMBER));
     expect(response.status).toBe(404);
     expect(Object.keys(await json(response)).sort()).toEqual(["error", "message", "request_id"]);

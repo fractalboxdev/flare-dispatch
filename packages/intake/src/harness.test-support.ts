@@ -1,27 +1,46 @@
 // The intake test harness: mameko's real admission over a SQLite D1, the fake
 // GitHub reads, a fixed run catalogue, recording doubles for the ports intake
-// calls, an OIDC issuer whose keys the test holds, and webhook fixtures.
-import { generateKeyPairSync, createPrivateKey, sign } from "node:crypto";
-import { InstallationQuota, installationQuotaLayer } from "@fractalboxdev/flare-dispatch-github";
+// calls, and webhook fixtures.
 import {
+  ActuatorRateLimitLive,
+  CheckRunApplierLive,
+  InstallationQuota,
+  installationQuotaLayer,
+} from "@fractalboxdev/flare-dispatch-github";
+import {
+  fakeGithub,
+  fakeLayers,
   fakeReadLayer,
   fakeReads,
   fakeRepo,
+  type FakeGithub,
   type FakeReads,
   type FakeRepo,
 } from "@fractalboxdev/flare-dispatch-github/testing";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
-import type { Resolution } from "@fractalboxdev/mameko-coordinator";
+import {
+  drainOnce,
+  type ExecutionPayload,
+  type Resolution,
+} from "@fractalboxdev/mameko-coordinator";
+import { d1OutboxStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { AlarmPort, type Alarm } from "@fractalboxdev/mameko-ports";
-import { Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
+import { Clock, Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
-import { d1Admission, IntakeConfig, type ClassRequest, type IntakeSettings } from "./config.ts";
-import { AccessIdentity } from "./dispatch.ts";
+import {
+  d1Admission,
+  IntakeConfig,
+  type AdmissionPorts,
+  type ClassRequest,
+  IntakeError,
+  type IntakeSettings,
+} from "./config.ts";
+import { admitDispatch, type AuthenticatedDispatch } from "./dispatch.ts";
+import { AccessIdentity } from "./mcp.ts";
 import { commitOf, WebhookFields, type DispatchEvent } from "./event.ts";
 import { manifestSourceLayer } from "./manifest.ts";
-import { ACTIONS_ISSUER, JWKS_URL, oidcVerifierLayer } from "./oidc.ts";
 import { profileClassResolver } from "./layer.ts";
-import { ExecutionCanceller, InstallationEviction, ManifestReporter } from "./ports.ts";
+import { heldCheckReporterLayer, InstallationEviction, ManifestReporter } from "./ports.ts";
 import { protectionSnapshotsLayer } from "./protection.ts";
 import type { IntakeRun } from "./runs.ts";
 import { signBody } from "./signature.ts";
@@ -31,7 +50,6 @@ import { migratedD1, recordingResolver } from "./testing.ts";
 export const NOW = Date.UTC(2026, 10, 4, 12, 0, 0);
 export const SECRET = "webhook-secret";
 export const APP_ID = 4242;
-export const AUDIENCE = "https://control-plane.example.com";
 export const REPO = "acme/app";
 export const SHA = "a".repeat(40);
 export const HEAD = "b".repeat(40);
@@ -88,45 +106,18 @@ export const DEFAULT_MANIFEST = manifest([
   { recipe: "nightly", triggers: ["cron"], schedules: [{ cron: "0 3 * * *" }] },
 ]);
 
-/** The test issuer's signing key, published at the Actions JWKS URL the fake `fetch` answers. */
-const issuer = generateKeyPairSync("rsa", { modulusLength: 2048 });
-const jwk = issuer.publicKey.export({ format: "jwk" }) as { n: string; e: string };
-const b64u = (b: Buffer | string) => Buffer.from(b).toString("base64url");
-
-export const actionsToken = (
-  claims: Record<string, unknown>,
-  kid = "k1",
-  key = issuer.privateKey,
-) => {
-  const header = b64u(JSON.stringify({ alg: "RS256", kid, typ: "JWT" }));
-  const payload = b64u(
-    JSON.stringify({
-      iss: ACTIONS_ISSUER,
-      aud: AUDIENCE,
-      exp: NOW / 1000 + 300,
-      sub: `repo:${REPO}:ref:refs/heads/main`,
-      repository: REPO,
-      ref: "refs/heads/main",
-      workflow_ref: `${REPO}/.github/workflows/ci.yml@refs/heads/main`,
-      ...claims,
-    }),
-  );
-  return `${header}.${payload}.${b64u(sign("RSA-SHA256", Buffer.from(`${header}.${payload}`), key))}`;
-};
-export const otherKey = createPrivateKey(
-  generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
-    type: "pkcs8",
-    format: "pem",
-  }),
-);
-
 export interface Recorded {
   readonly resolved: ClassRequest[];
   readonly reported: { repo: string; sha: string; errors: readonly string[] }[];
-  readonly cancelled: { executionId: string; cause: string }[];
+  /**
+   * Every workflow cancel admission, a group cancel or a per-execution cancel asked for, in order (MAMEKO-ADM-062,
+   * MAMEKO-ADM-064, MAMEKO-ADM-065).
+   */
+  readonly workflowCancels: { executionId: string; cause: string }[];
   readonly evicted: string[];
   readonly alarms: Alarm[];
-  jwksFetches: number;
+  /** Every `ExecutionEngine` start admission asked for, in order. */
+  readonly started: ExecutionPayload[];
 }
 
 export interface HarnessOptions {
@@ -136,6 +127,8 @@ export interface HarnessOptions {
   readonly resolve?: (r: ClassRequest) => Resolution;
   /** Resolve classes through the profile's `resolveClass` binding instead of the recording resolver. */
   readonly profileResolver?: boolean;
+  /** Answers each workflow start after it is recorded; a start succeeds by default. */
+  readonly startExecution?: AdmissionPorts["startExecution"];
 }
 
 /** A default repository: `main` at `BASE` carrying the default manifest. */
@@ -155,10 +148,10 @@ export const harness = async (options: HarnessOptions = {}) => {
   const recorded: Recorded = {
     resolved: [],
     reported: [],
-    cancelled: [],
+    workflowCancels: [],
     evicted: [],
     alarms: [],
-    jwksFetches: 0,
+    started: [],
   };
   const settings: IntakeSettings = {
     catalog: (name) => CATALOG[name],
@@ -166,18 +159,14 @@ export const harness = async (options: HarnessOptions = {}) => {
     appId: APP_ID,
     webhookSecret: SECRET,
     webhookEvents: undefined,
-    oidcAudience: AUDIENCE,
-    dispatchers: ["dev@example.com"],
     allows: () => true,
     confidentiality: () => "unclassified",
+    writeCredentialIn: () => null,
     ...options.settings,
   };
-  const fetch = (async (input: string | URL | Request) => {
-    if (String(input) !== JWKS_URL) return Response.json({}, { status: 404 });
-    recorded.jwksFetches++;
-    return Response.json({ keys: [{ ...jwk, kty: "RSA", kid: "k1", alg: "RS256", use: "sig" }] });
-  }) as typeof globalThis.fetch;
   const readLayer = fakeReadLayer(reads);
+  // The check runs GitHub holds; a held request's queued check run is written here (FD-INT-057).
+  const github: FakeGithub = fakeGithub();
   const config = Layer.succeed(IntakeConfig, settings);
   const protection = protectionSnapshotsLayer.pipe(Layer.provide(readLayer));
   const alarms = Layer.succeed(AlarmPort, {
@@ -189,16 +178,25 @@ export const harness = async (options: HarnessOptions = {}) => {
       : recordingResolver(recorded.resolved, options.resolve);
   const layer = Layer.mergeAll(
     config,
-    d1Admission(db),
+    d1Admission(db, settings.profile, {
+      alarms,
+      cancelExecution: (executionId, cause) =>
+        Effect.sync(() => void recorded.workflowCancels.push({ executionId, cause })),
+      startExecution: (payload) =>
+        Effect.andThen(
+          Effect.sync(() => void recorded.started.push(payload)),
+          options.startExecution?.(payload) ?? Effect.void,
+        ),
+    }),
     d1IntakeStore(db),
     d1ShedRecorder(db),
     manifestSourceLayer,
     readLayer,
-    oidcVerifierLayer(fetch),
     resolver,
     protection,
     alarms,
     installationQuotaLayer(),
+    heldCheckReporterLayer(db, settings.profile).pipe(Layer.provide(readLayer)),
     Layer.succeed(ManifestReporter, {
       invalid: (repo, sha, errors) =>
         Effect.sync(() => void recorded.reported.push({ repo, sha, errors })),
@@ -207,10 +205,6 @@ export const harness = async (options: HarnessOptions = {}) => {
       installation: (id) => Effect.sync(() => void recorded.evicted.push(`installation ${id}`)),
       repositories: (repos) =>
         Effect.sync(() => void recorded.evicted.push(...repos.map((r) => `repo ${r}`))),
-    }),
-    Layer.succeed(ExecutionCanceller, {
-      cancel: (executionId, cause) =>
-        Effect.sync(() => void recorded.cancelled.push({ executionId, cause })),
     }),
     Layer.succeed(AccessIdentity, {
       identity: (r) => Effect.succeed(r.headers.get("x-test-identity")),
@@ -225,6 +219,7 @@ export const harness = async (options: HarnessOptions = {}) => {
   return {
     db,
     reads,
+    github,
     recorded,
     settings,
     run,
@@ -238,6 +233,82 @@ export const harness = async (options: HarnessOptions = {}) => {
   };
 };
 export type Harness = Awaited<ReturnType<typeof harness>>;
+
+/** Drains the real check rows under a permit; intake itself writes no execution check to GitHub. */
+export const drainHeldChecks = (h: Harness) =>
+  h.run(
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      yield* drainOnce({
+        now,
+        token: (id) => `test-${id}-${now}`,
+        random: () => 0,
+        actuatorOf: Object.fromEntries(
+          Object.entries(h.settings.profile.intent_kinds).map(([kind, entry]) => [
+            kind,
+            entry.actuator,
+          ]),
+        ),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            d1OutboxStore(h.db),
+            CheckRunApplierLive.pipe(Layer.provide(fakeLayers(h.github))),
+            ActuatorRateLimitLive.pipe(
+              Layer.provide(Layer.merge(installationQuotaLayer(), fakeLayers(h.github))),
+            ),
+          ),
+        ),
+      );
+    }),
+  );
+
+// ---------------------------------------------------------------------------
+// Dispatch fixtures
+
+/** A dispatch as the HTTP API's declared route hands it to intake: an Actions caller of `REPO` on `main`. */
+export const authenticated = (
+  overrides: Partial<AuthenticatedDispatch> = {},
+): AuthenticatedDispatch => ({
+  trigger: "dispatch",
+  run: "check",
+  repository: REPO,
+  ref: "refs/heads/main",
+  sha: undefined,
+  label: "ci",
+  inputs: { sha: HEAD },
+  signals: undefined,
+  classInput: null,
+  caller: {
+    kind: "actions-oidc",
+    id: `actions:${REPO}:${REPO}/.github/workflows/ci.yml@refs/heads/main`,
+    workflowRef: `${REPO}/.github/workflows/ci.yml@refs/heads/main`,
+    ref: "refs/heads/main",
+  },
+  vouchedSha: undefined,
+  idempotency: null,
+  ...overrides,
+});
+
+/** An authenticated dispatch through intake's admission. */
+export const admit = (h: Harness, d: AuthenticatedDispatch) => h.run(admitDispatch(d));
+
+/** The refusal of an authenticated dispatch: its status, code and the execution a `conflict` names. */
+export const refusal = (h: Harness, d: AuthenticatedDispatch) =>
+  h.run(
+    admitDispatch(d).pipe(
+      Effect.flip,
+      Effect.map((e) =>
+        e instanceof IntakeError
+          ? {
+              status: e.status,
+              code: e.code,
+              ...(e.executionId === undefined ? {} : { executionId: e.executionId }),
+            }
+          : { status: 503, code: "store_unavailable" },
+      ),
+    ),
+  );
 
 // ---------------------------------------------------------------------------
 // Webhook fixtures
@@ -275,13 +346,22 @@ export const signedWebhook = async (
 const repository = (full_name = REPO) => ({ full_name });
 
 export const pullRequestPayload = (
-  overrides: { action?: string; head?: string; headRepo?: string | null; number?: number } = {},
+  overrides: {
+    action?: string;
+    head?: string;
+    headRepo?: string | null;
+    number?: number;
+    closedAt?: string | null;
+    updatedAt?: string;
+  } = {},
 ) => ({
   action: overrides.action ?? "synchronize",
   repository: repository(),
   installation: { id: 7 },
   pull_request: {
     number: overrides.number ?? 12,
+    ...(overrides.closedAt === undefined ? {} : { closed_at: overrides.closedAt }),
+    ...(overrides.updatedAt === undefined ? {} : { updated_at: overrides.updatedAt }),
     head: {
       sha: overrides.head ?? HEAD,
       ref: "feature",
@@ -329,17 +409,6 @@ export const checkSuiteRerequested = (head = HEAD, appId = APP_ID) => ({
   installation: { id: 7 },
   check_suite: { head_sha: head, app: { id: appId } },
 });
-
-export const dispatchRequest = (
-  run: string,
-  body: unknown,
-  headers: Record<string, string> = { authorization: `Bearer ${actionsToken({})}` },
-) =>
-  new Request(`https://control-plane.example.com/v1/dispatch/${run}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...headers },
-    body: typeof body === "string" ? body : JSON.stringify(body),
-  });
 
 /** The JSON body of a response the route group served. */
 export const bodyOf = async (r: Response | null): Promise<Record<string, unknown>> => {

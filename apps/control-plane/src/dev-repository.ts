@@ -1,5 +1,5 @@
 // The repository a `development` deployment with no GitHub App reads: one commit of one repository, as the local
-// command that starts the deployment captured it (`pnpm dogfood` writes it from the checkout). Only the facts it holds
+// command that starts the deployment captured it (`pnpm ci:local` writes it from the checkout). Only the facts it holds
 // answer; every other read fails, so no caller decides on a read that never happened.
 import { Schema } from "effect";
 import { deployment, type ControlPlaneEnv } from "./config.ts";
@@ -15,7 +15,12 @@ export const DevRepository = Schema.Struct({
   files: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
   /** The repository's confidentiality mode; absent is `unclassified`, mameko's fail-closed default. */
   confidentiality: Schema.optionalKey(
-    Schema.Literals(["non-confidential", "unclassified", "confidential-model", "confidential-compute"]),
+    Schema.Literals([
+      "non-confidential",
+      "unclassified",
+      "confidential-model",
+      "confidential-compute",
+    ]),
   ),
 });
 export type DevRepository = typeof DevRepository.Type;

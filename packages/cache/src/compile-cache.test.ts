@@ -52,7 +52,7 @@ const req = (path: string, method: string, bearer: string | null, init: RequestI
   } as never);
 
 describe("compile-cache route", () => {
-  it("FD-CACHE-056 serves GET, HEAD, PUT, PROPFIND Depth 0 and MKCOL", async () => {
+  it("[FD-CACHE-056] serves GET, HEAD, PUT, PROPFIND Depth 0 and MKCOL", async () => {
     const t = await token();
     expect((await req("acme/widgets/a/b/", "MKCOL", t)).status).toBe(201);
     expect((await req("acme/widgets/a/b/", "PROPFIND", t, { headers: { depth: "0" } })).status).toBe(207);
@@ -69,7 +69,7 @@ describe("compile-cache route", () => {
     expect(await stat.text()).toContain("<D:getcontentlength>1000</D:getcontentlength>");
   });
 
-  it("FD-CACHE-056 streams a body larger than one chunk through to R2 and back", async () => {
+  it("[FD-CACHE-056] streams a body larger than one chunk through to R2 and back", async () => {
     const t = await token();
     const size = 8 * MiB;
     const bytes = new Uint8Array(size).map((_, i) => i % 251);
@@ -79,7 +79,7 @@ describe("compile-cache route", () => {
     expect(back[size - 1]).toBe((size - 1) % 251);
   });
 
-  it("FD-CACHE-057 the token binds repository, execution, epoch, namespaces and an expiry no later than deadline_at", async () => {
+  it("[FD-CACHE-057] the token binds repository, execution, epoch, namespaces and an expiry no later than deadline_at", async () => {
     const fields = await leaseCacheFields(
       { repo: "Acme/Widgets", executionId: "exec-pr", class: "interactive", constraints: [], trigger: { _tag: "PullRequest", number: 7 } },
       { epoch: 3, executorKind: "cloudflare", deadlineAt: 5_000 },
@@ -94,7 +94,7 @@ describe("compile-cache route", () => {
     expect(await verifyCompileCacheToken(SECRET, REPO, fields.upload_grant.compile_cache!.token, 5_000)).toEqual({ ok: false, reason: "expired" });
   });
 
-  it("FD-CACHE-058 the namespaces come from the token, never from the path or headers", async () => {
+  it("[FD-CACHE-058] the namespaces come from the token, never from the path or headers", async () => {
     const base = await token({ executionId: "exec-main", read: [BASE], write: BASE });
     await req("acme/widgets/k", "PUT", base, { body: "base", headers: { "content-length": "4" } });
     const pr = await token();
@@ -109,7 +109,7 @@ describe("compile-cache route", () => {
     expect(await bucket.head(compileObjectKey(BASE, "protected/acme/widgets/cloud/k"))).toBeNull();
   });
 
-  it("FD-CACHE-059 a missing, expired, malformed, forged or other-repository token is 403 and touches no object", async () => {
+  it("[FD-CACHE-059] a missing, expired, malformed, forged or other-repository token is 403 and touches no object", async () => {
     const other = await token({ repo: "acme/other" });
     const expired = await token({ expiresAt: Date.now() - 1 });
     const forged = await signCompileCacheToken("wrong-secret", { repo: REPO, executionId: "e", epoch: 1, read: [BASE], write: BASE, expiresAt: Date.now() + 60_000 });
@@ -121,7 +121,7 @@ describe("compile-cache route", () => {
     expect((await bucket.list()).objects).toHaveLength(0);
   });
 
-  it("FD-CACHE-053 FD-CACHE-054 a PUT over 100 MiB is 413 and one past the ledger's bound is 507", async () => {
+  it("[FD-CACHE-053] [FD-CACHE-054] a PUT over 100 MiB is 413 and one past the ledger's bound is 507", async () => {
     const t = await token({ executionId: "exec-big" });
     const huge = await handleCompileCache(
       new Request("http://x/v1/compile-cache/acme/widgets/huge", {
@@ -138,7 +138,7 @@ describe("compile-cache route", () => {
     expect(handled?.status).toBe(507);
   });
 
-  it("FD-CACHE-055 FD-CACHE-051 a terminal execution or an old epoch's token cannot write", async () => {
+  it("[FD-CACHE-055] [FD-CACHE-051] a terminal execution or an old epoch's token cannot write", async () => {
     const t = await token();
     const call = (lease: { epoch: number; terminal: boolean } | null) =>
       handleCompileCache(
@@ -150,7 +150,7 @@ describe("compile-cache route", () => {
     expect((await call({ epoch: 1, terminal: false }))?.status).toBe(201);
   });
 
-  it("FD-CACHE-061 a GET of an object older than TTL/2 rewrites it, so its age restarts", async () => {
+  it("[FD-CACHE-061] a GET of an object older than TTL/2 rewrites it, so its age restarts", async () => {
     await bucket.put(compileObjectKey(PR, "old"), "cached");
     const pending: Promise<unknown>[] = [];
     const later = Date.now() + 8 * 24 * 3600 * 1000;

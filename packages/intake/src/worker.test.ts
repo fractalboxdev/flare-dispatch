@@ -1,12 +1,15 @@
 // The route group as the Worker mounts it: `intakeLayer` over `githubLiveLayer`, a GitHub reached through `fetch`,
 // and mameko's admission on a SQLite D1.
 import { generateKeyPairSync } from "node:crypto";
-import { githubLiveLayer, SideOutputConfig } from "@fractalboxdev/flare-dispatch-github";
+import {
+  ConcludeFacts,
+  githubLiveLayer,
+  SideOutputConfig,
+} from "@fractalboxdev/flare-dispatch-github";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
 import { AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { describe, expect, it } from "vitest";
-import { AccessIdentity } from "./dispatch.ts";
 import {
   APP_ID,
   BASE,
@@ -20,7 +23,6 @@ import {
   signedWebhook,
 } from "./harness.test-support.ts";
 import { intakeLayer, profileClassResolver } from "./layer.ts";
-import { ExecutionCanceller } from "./ports.ts";
 import { handleIntake } from "./routes.ts";
 import { migratedD1 } from "./testing.ts";
 
@@ -87,6 +89,7 @@ const worker = async (manifestText = DEFAULT_MANIFEST, required: readonly string
     Layer.provide(
       Layer.mergeAll(
         alarms,
+        Layer.succeed(ConcludeFacts, { of: () => Effect.succeed(null) }),
         Layer.succeed(SideOutputConfig, {
           appBot: { login: "app[bot]", name: "app[bot]", email: "app@example.com" },
           slack: undefined,
@@ -97,24 +100,18 @@ const worker = async (manifestText = DEFAULT_MANIFEST, required: readonly string
   );
   const intake = intakeLayer({
     db,
-    fetch,
     settings: {
       catalog: (name) => CATALOG[name],
       profile: buildProfile("production"),
       appId: APP_ID,
       webhookSecret: SECRET,
       webhookEvents: undefined,
-      oidcAudience: undefined,
-      dispatchers: [],
       allows: () => true,
       confidentiality: () => "unclassified",
+      writeCredentialIn: () => null,
     },
   });
-  const layer = Layer.mergeAll(
-    intake,
-    Layer.succeed(AccessIdentity, { identity: () => Effect.succeed(null) }),
-    Layer.succeed(ExecutionCanceller, { cancel: () => Effect.void }),
-  ).pipe(
+  const layer = intake.pipe(
     Layer.provideMerge(profileClassResolver.pipe(Layer.provide(alarms))),
     Layer.provideMerge(intake),
     Layer.provideMerge(githubLayer),
@@ -128,7 +125,7 @@ const worker = async (manifestText = DEFAULT_MANIFEST, required: readonly string
 };
 
 describe("the intake routes on the live Layers", () => {
-  it("FD-INT-001 FD-INT-016 a signed pull request reaches admission through the App's token and reads", async () => {
+  it("[FD-INT-001] [FD-INT-016] a signed pull request reaches admission through the App's token and reads", async () => {
     const w = await worker();
     const r = await w.handle(
       await signedWebhook("pull_request", pullRequestPayload()),
@@ -148,7 +145,7 @@ describe("the intake routes on the live Layers", () => {
     ]);
   });
 
-  it("FD-PROF-013 FD-PROF-014 a gating run whose check the base branch's ruleset requires resolves to required", async () => {
+  it("[FD-PROF-013] [FD-PROF-014] a gating run whose check the base branch's ruleset requires resolves to required", async () => {
     const w = await worker(DEFAULT_MANIFEST, ["flare-dispatch/check:ci"]);
     await w.handle(await signedWebhook("pull_request", pullRequestPayload()), "webhooks/github");
     expect(w.db.sqlite.prepare("select run, class from executions order by run").all()).toEqual([
@@ -158,21 +155,12 @@ describe("the intake routes on the live Layers", () => {
     expect(w.calls).toContain(`GET /repos/${REPO}/rules/branches/main`);
   });
 
-  it("FD-INT-018 an invalid manifest posts the failing flare-dispatch/manifest check run through the App", async () => {
+  it("[FD-INT-018] an invalid manifest posts the failing flare-dispatch/manifest check run through the App", async () => {
     const w = await worker('{"version": 2}');
     await w.handle(await signedWebhook("pull_request", pullRequestPayload()), "webhooks/github");
     expect(w.calls).toContain(`POST /repos/${REPO}/check-runs`);
     expect(w.db.sqlite.prepare("select reason from shed order by id").all()).toEqual([
       { reason: "manifest: invalid" },
     ]);
-  });
-
-  it("FD-INT-034 FD-IFC-027 a dispatch with no OIDC audience configured and no Access identity answers 401", async () => {
-    const w = await worker();
-    const r = await w.handle(
-      new Request("https://cp.example.com/v1/dispatch/check", { method: "POST", body: "{}" }),
-      "dispatch/check",
-    );
-    expect(r!.status).toBe(401);
   });
 });

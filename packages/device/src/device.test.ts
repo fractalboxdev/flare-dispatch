@@ -25,7 +25,7 @@ const tempDir = async () => {
 };
 
 describe("CPU priority", () => {
-  it("FD-EXEC-059 required at user-initiated, interactive at utility, batch and capacity leases at background", () => {
+  it("[FD-EXEC-059] required at user-initiated, interactive at utility, batch and capacity leases at background", () => {
     const profile = buildProfile("production");
     const qos = (c: string) => cpuPriority(profile, c)?.["apple-container"];
     expect([qos("required"), qos("interactive"), qos("batch"), qos("capacity-lease")]).toEqual([
@@ -63,7 +63,7 @@ describe("device extension", () => {
     expect(h.operations).not.toContain("statement");
   });
 
-  it("FD-EXEC-007 restores only from a namespace a lease handed to the extension may read", async () => {
+  it("[FD-EXEC-007] restores only from a namespace a lease handed to the extension may read", async () => {
     const s = await state();
     send(s, {
       type: "proxies",
@@ -93,7 +93,7 @@ describe("device extension", () => {
     });
   });
 
-  it("FD-CACHE-009 FD-CACHE-010 L1 evicts the least recently read entry first, and evict answers the bytes freed", async () => {
+  it("[FD-CACHE-009] [FD-CACHE-010] L1 evicts the least recently read entry first, and evict answers the bytes freed", async () => {
     const l1 = new L1(await tempDir(), 30);
     l1.put(NS_READ, "a", new Uint8Array(10));
     l1.put(NS_READ, "b", new Uint8Array(10));
@@ -225,7 +225,7 @@ describe("MCP server", () => {
       }).pipe(Effect.provide(schedulerSocketLayer(path))),
     ) as Promise<{ result: { structuredContent: unknown; isError: boolean } }>;
 
-  it("FD-LOCAL-038 serves rehearse, get_verdict, get_failure_summary, cancel and lease_status, each over the scheduler socket", async () => {
+  it("[FD-LOCAL-038] serves rehearse, get_verdict, get_failure_summary, cancel and lease_status, each over the scheduler socket", async () => {
     const scheduler = await fakeScheduler();
     const list = (await Effect.runPromise(
       handleMessage({ jsonrpc: "2.0", id: 1, method: "tools/list" }).pipe(
@@ -266,7 +266,7 @@ describe("MCP server", () => {
     scheduler.close();
   });
 
-  it("FD-LOCAL-038 answers scheduler_unreachable when the socket is absent", async () => {
+  it("[FD-LOCAL-038] answers scheduler_unreachable when the socket is absent", async () => {
     const result = await call(join(await tempDir(), "absent.sock"), "lease_status");
     expect(result.result).toMatchObject({
       isError: true,
@@ -274,7 +274,7 @@ describe("MCP server", () => {
     });
   });
 
-  it("FD-IFC-078 refuses a wait over 600 s on rehearse or 60 s on get_verdict with invalid_wait", async () => {
+  it("[FD-IFC-078] refuses a wait over 600 s on rehearse or 60 s on get_verdict with invalid_wait", async () => {
     const path = join(await tempDir(), "absent.sock");
     expect(
       (await call(path, "rehearse", { run: "check", wait_seconds: 601 })).result.structuredContent,

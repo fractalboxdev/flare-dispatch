@@ -43,7 +43,7 @@ const message = async (response: { text(): Promise<string> }) => {
 };
 
 describe("MCP over Streamable HTTP on workerd", () => {
-  it("FD-IFC-072: the request-scoped endpoint answers a sessionless tools/call (revision 2026-07-28)", async () => {
+  it("[FD-IFC-072]: the request-scoped endpoint answers a sessionless tools/call (revision 2026-07-28)", async () => {
     const response = await mf.dispatchFetch("http://x/mcp", {
       method: "POST",
       headers: {
@@ -73,7 +73,7 @@ describe("MCP over Streamable HTTP on workerd", () => {
     expect(JSON.stringify(reply.result)).toContain('"status":"done"');
   });
 
-  it("FD-IFC-072: the request-scoped endpoint refuses a sessionful initialize", async () => {
+  it("[FD-IFC-072]: the request-scoped endpoint refuses a sessionful initialize", async () => {
     const response = await mf.dispatchFetch("http://x/mcp", {
       method: "POST",
       headers: { "content-type": "application/json", accept: ACCEPT },
@@ -91,7 +91,7 @@ describe("MCP over Streamable HTTP on workerd", () => {
     expect(response.status).toBeGreaterThanOrEqual(400);
   });
 
-  it("FD-IFC-072: the long-lived endpoint initializes a session and answers tools/call (revision 2025-06-18)", async () => {
+  it("[FD-IFC-072]: the long-lived endpoint initializes a session and answers tools/call (revision 2025-06-18)", async () => {
     const init = await mf.dispatchFetch("http://x/mcp-session", {
       method: "POST",
       headers: { "content-type": "application/json", accept: ACCEPT },

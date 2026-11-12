@@ -212,9 +212,8 @@ jobs:
       # The committed wrangler.jsonc carries placeholders for every
       # account-specific value; the real file is the operator overlay, stored
       # base64-encoded (one line, so log masking covers all of it) and written
-      # over the placeholders here — the same single-file overwrite
-      # actions/deploy-dispatcher-action performs. A missing secret fails the
-      # job rather than deploying placeholders.
+      # over the placeholders here. A missing secret fails the job rather than
+      # deploying placeholders.
       - name: Apply operator overlay
         shell: bash
         run: |

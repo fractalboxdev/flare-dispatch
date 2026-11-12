@@ -2,6 +2,7 @@
 // pull request on `specs/**`, or a `pr.close` when the specs are in sync (specs/runs/agentic.md § `spec-drift-pr`).
 import type { RunResult } from "@fractalboxdev/mameko-run";
 import { Effect, Exit, Schema } from "effect";
+import { sanitizeModelText } from "../boundary.ts";
 import { inAllowlist } from "../staged-write/gate.ts";
 import { extractJson } from "./pr-review.ts";
 import {
@@ -108,7 +109,7 @@ export const runSpecDrift = (input: SpecDriftInput) =>
       message: "docs(specs): reconcile the specs with the code",
       pr: {
         title: "Reconcile the specs with the code",
-        body: answer.value.summary,
+        body: sanitizeModelText(answer.value.summary),
         draft: true,
         labels: ["spec-drift"],
       },

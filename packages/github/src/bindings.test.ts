@@ -32,7 +32,7 @@ const directory = Layer.succeed(InstallationDirectory, {
 });
 
 describe("installationOf", () => {
-  it("FD-GH-056 the limit key is the id of the installation that serves the row's repository", async () => {
+  it("[FD-GH-056] the limit key is the id of the installation that serves the row's repository", async () => {
     expect(
       await Effect.runPromise(installationOf("acme/app").pipe(Effect.provide(directory))),
     ).toBe("7");
@@ -44,7 +44,7 @@ describe("installationOf", () => {
 });
 
 describe("check labels", () => {
-  it("FD-GH-007 a checkLabel outside ^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$ is rejected with InvalidCheckLabel", async () => {
+  it("[FD-GH-007] a checkLabel outside ^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$ is rejected with InvalidCheckLabel", async () => {
     expect(await Effect.runPromise(validateCheckLabel("ci.lint-1"))).toBe("ci.lint-1");
     for (const bad of ["", "-x", "has space", "a".repeat(33), "a/b"]) {
       const exit = await Effect.runPromise(Effect.exit(validateCheckLabel(bad)));
@@ -54,7 +54,7 @@ describe("check labels", () => {
 });
 
 describe("fan-out children", () => {
-  it("FD-GH-020 a parent's outcome concludes every child not yet concluded, with its outcome or parent closed", () => {
+  it("[FD-GH-020] a parent's outcome concludes every child not yet concluded, with its outcome or parent closed", () => {
     const success: Verdict = { _tag: "success" };
     expect(
       childConclusions([
@@ -84,12 +84,12 @@ const VERDICTS: readonly Verdict[] = [
 ];
 
 describe("the conclusion mapping", () => {
-  it("FD-GH-021 every verdict of the closed union maps through checkConclusion to one of four conclusions", () => {
+  it("[FD-GH-021] every verdict of the closed union maps through checkConclusion to one of four conclusions", () => {
     const conclusions = new Set(VERDICTS.map((v) => checkConclusion(v).conclusion));
     expect([...conclusions].sort()).toEqual(["cancelled", "failure", "neutral", "success"]);
   });
 
-  it("FD-GH-031 a neutral conclusion on any outcome but a listed not-applicable skip pages neutral-invariant", async () => {
+  it("[FD-GH-031] a neutral conclusion on any outcome but a listed not-applicable skip pages neutral-invariant", async () => {
     expect(VERDICTS.filter((v) => neutralHolds(checkConclusion(v).conclusion, v))).toHaveLength(
       VERDICTS.length,
     );
@@ -138,7 +138,7 @@ const apply = (gh: FakeGithub, r: IntentRow) => withApplier(gh, (a) => a.apply(r
 const lookup = (gh: FakeGithub, r: IntentRow) => withApplier(gh, (a) => a.lookup(r));
 
 describe("quarantined failures", () => {
-  it("FD-GH-077 each quarantined failure is a warning annotation and a summary line, 50 annotations per request", async () => {
+  it("[FD-GH-077] each quarantined failure is a warning annotation and a summary line, 50 annotations per request", async () => {
     const quarantined = Array.from({ length: 60 }, (_, i) => ({
       test: `t${i}`,
       path: "src/a.test.ts",
@@ -165,7 +165,7 @@ describe("quarantined failures", () => {
 });
 
 describe("check-run lookup", () => {
-  it("FD-GH-090 found only when exactly one check run carries the execution id and shows the effect", async () => {
+  it("[FD-GH-090] found only when exactly one check run carries the execution id and shows the effect", async () => {
     const gh = fakeGithub();
     const open = row("check.open", ref);
     expect(await lookup(gh, open)).toEqual({ _tag: "absent" });
@@ -180,7 +180,7 @@ describe("check-run lookup", () => {
     expect(await lookup(gh, open)).toMatchObject({ _tag: "undetermined" });
   });
 
-  it("FD-GH-091 no execution id, an unserved kind or a rejected payload is refused without a GitHub call", async () => {
+  it("[FD-GH-091] no execution id, an unserved kind or a rejected payload is refused without a GitHub call", async () => {
     const gh = fakeGithub();
     expect(await apply(gh, row("check.open", ref, { executionId: null }))).toMatchObject({
       _tag: "refused",

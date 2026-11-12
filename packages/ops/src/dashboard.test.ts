@@ -1,21 +1,27 @@
+import { refusalReason } from "@fractalboxdev/flare-dispatch-agentic";
+import { DASHBOARD_LINK_LIFETIME_S } from "@fractalboxdev/flare-dispatch-api/config";
+import { checkLinkToken, mintLinkToken } from "@fractalboxdev/flare-dispatch-api/link-token";
+import { insertOutboxRows } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { newRow } from "@fractalboxdev/mameko-kernel";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recordingAlarms, sqliteDb, type TestDb } from "./d1.test-support.ts";
 import {
   classFigures,
-  DASHBOARD_LINK_TTL_S,
-  dashboardLink,
+  dashboardLogLink,
+  executionDetail,
+  executionPath,
   fleet,
+  linkConfigFrom,
   listExecutions,
-  mintLinkToken,
   overview,
   parseExecutionQuery,
   percentile,
   raiseOnce,
+  renderExecutionDetail,
   renderExecutions,
   renderFleet,
   renderOverview,
-  verifyLinkToken,
 } from "./index.ts";
 
 let t: TestDb;
@@ -152,6 +158,103 @@ describe("executions view", () => {
   });
 });
 
+/** One outbox row of an execution, in the state and with the answer a drain left it in. */
+const outboxRow = async (
+  executionId: string,
+  id: string,
+  kind: string,
+  state: string,
+  lastError: string | null,
+) => {
+  await insertOutboxRows(t.db, [
+    {
+      id,
+      limitKey: "7",
+      tier: "effect",
+      priority: 0,
+      classRank: 1,
+      drawsReserve: false,
+      intent: {
+        executionId,
+        scopeId: "acme/app",
+        intentKey: `cp:${kind}:${id}`,
+        kind,
+        payload: { executionId },
+        payloadDigest: "d",
+        effectClass: "adoptable",
+        attempts: 0,
+      },
+      row: newRow({ effectClass: "adoptable", insertedAt: NOW + Number(id) }),
+    },
+  ]);
+  await t.db
+    .prepare("update outbox set state = ?, last_error = ?, attempts = 1 where id = ?")
+    .bind(state, lastError, id)
+    .run();
+};
+
+/** The text of each list item in the page's reason lists. */
+const listedReasons = (html: string) =>
+  [...html.matchAll(/<li class="mono">([^<]*)<\/li>/g)].map((m) => m[1]);
+
+describe("execution page", () => {
+  it("[FD-AGT-018] lists every reason of a refused pr.propose row under its first reason kind", async () => {
+    await execution("e1", { status: "success", run: "spec-drift-pr" });
+    const reason = refusalReason([
+      { kind: "branch-invalid" },
+      { kind: "protected-path", path: "runs/x.ts" },
+      { kind: "secret-detected", path: "specs/a.md", line: 3, detail: "aws-access-key-id" },
+    ]);
+    await outboxRow("e1", "1", "check.conclude", "applied", null);
+    await outboxRow("e1", "2", "pr.propose", "refused", reason);
+    const detail = await executionDetail(t.db, "e1");
+    expect(detail?.outbox.map((o) => [o.kind, o.state, o.lastError])).toEqual([
+      ["check.conclude", "applied", null],
+      ["pr.propose", "refused", reason],
+    ]);
+    const html = renderExecutionDetail(detail!, null);
+    expect(html).toContain("writeback: branch-invalid<ul");
+    expect(listedReasons(html)).toEqual([
+      "branch-invalid",
+      "protected-path runs/x.ts",
+      "secret-detected specs/a.md:3 (aws-access-key-id)",
+    ]);
+    expect(await executionDetail(t.db, "missing")).toBeNull();
+    const page = await listExecutions(t.db, {}, 50, null);
+    expect(renderExecutions(page, {}, {})).toContain(`href="${executionPath("e1")}"`);
+  });
+
+  it("[FD-AGT-038] shows the reason of a refused or expired pr.propose row beside the execution's unchanged verdict", async () => {
+    await execution("e1", { status: "success", run: "spec-drift-pr" });
+    await outboxRow("e1", "1", "pr.propose", "expired", "writeback: read artifacts");
+    let html = renderExecutionDetail((await executionDetail(t.db, "e1"))!, null);
+    expect(html).toContain("<tr><th>Verdict</th><td>success</td></tr>");
+    expect(html).toMatch(/<td class="notify">expired<\/td>/);
+    expect(html).toContain('<span class="mono">writeback: read artifacts</span>');
+    expect(listedReasons(html)).toEqual([]);
+
+    await execution("e2", { status: "success", run: "spec-drift-pr" });
+    await outboxRow("e2", "2", "pr.propose", "expired", "github createTree: 502");
+    html = renderExecutionDetail((await executionDetail(t.db, "e2"))!, null);
+    expect(html).toContain("<tr><th>Verdict</th><td>success</td></tr>");
+    expect(html).toContain('<span class="mono">github createTree: 502</span>');
+
+    await execution("e3", { status: "success", run: "spec-drift-pr" });
+    await outboxRow("e3", "3", "pr.propose", "expired", null);
+    html = renderExecutionDetail((await executionDetail(t.db, "e3"))!, null);
+    expect(html).toContain("expired with no recorded reason");
+
+    await execution("e4", { status: "success", run: "spec-drift-pr" });
+    await outboxRow("e4", "4", "pr.propose", "refused", "writeback: human-commits-present");
+    html = renderExecutionDetail((await executionDetail(t.db, "e4"))!, null);
+    expect(html).toContain("<tr><th>Verdict</th><td>success</td></tr>");
+    expect(listedReasons(html)).toEqual(["human-commits-present"]);
+
+    const { results } = await t.db.prepare("select id, status from executions order by id").all();
+    expect(results).toEqual(["e1", "e2", "e3", "e4"].map((id) => ({ id, status: "success" })));
+  });
+});
+
 describe("overview", () => {
   it("[FD-OPS-070] per class: queue depth, queue age p50 and p95, placement rate by executor kind over 24 h, alarms and control state", async () => {
     for (let i = 1; i <= 20; i++)
@@ -220,59 +323,74 @@ describe("fleet view", () => {
 
 describe("link tokens", () => {
   const key = "link-key-material";
-  it("[FD-OPS-067] a dashboard link carries a token for that one object that expires within 3600 s", async () => {
-    const nowS = 1_800_000_000;
-    const link = await dashboardLink({
-      linkKey: key,
-      purpose: "log",
-      id: "e1",
-      path: "/v1/executions/e1/logs/run.log",
-      nowSeconds: nowS,
+  const nowS = 1_800_000_000;
+  const configOf = (env: Record<string, unknown>) =>
+    Effect.runPromise(linkConfigFrom({ LINK_KEY: key, ...env }, "https://fd.example.com"));
+  const tokenOf = (link: string) => new URL(link).searchParams.get("t")!;
+  const check = (token: string, over: Partial<Parameters<typeof checkLinkToken>[2]> = {}) =>
+    checkLinkToken(key, token, {
+      purpose: "logs",
+      objectId: "e 1",
+      nowS,
+      currentEpoch: 3,
+      ...over,
+    });
+
+  it("[FD-OPS-067] a dashboard link carries the API's link token for that one execution, expiring within 3600 s", async () => {
+    const config = await configOf({ LINK_EPOCH: "3" });
+    const link = (await Effect.runPromise(dashboardLogLink(config, "e 1", nowS)))!;
+    expect(link.split("?")[0]).toBe("https://fd.example.com/v1/executions/e%201/logs");
+    const token = tokenOf(link);
+    expect(Number(token.split(".")[0])).toBe(nowS + DASHBOARD_LINK_LIFETIME_S);
+    expect(await check(token)).toEqual({ _tag: "Granted" });
+    expect(await check(token, { objectId: "e 2" })).toEqual({ _tag: "Invalid" });
+    expect(await check(token, { purpose: "artifact" })).toEqual({ _tag: "Invalid" });
+    expect(await check(token, { nowS: nowS + 3600 })).toEqual({ _tag: "Expired" });
+    expect(await check(token, { currentEpoch: 4 })).toEqual({ _tag: "Revoked" });
+    const forged = await mintLinkToken("other", {
+      purpose: "logs",
+      objectId: "e 1",
+      expiresAtS: nowS + 60,
       epoch: 3,
     });
-    const token = decodeURIComponent(link.split("?t=")[1]!);
-    expect(Number(token.split(".")[0])).toBe(nowS + DASHBOARD_LINK_TTL_S);
-    const verify = (over: Partial<Parameters<typeof verifyLinkToken>[0]>) =>
-      Effect.runPromise(
-        Effect.result(
-          verifyLinkToken({
-            linkKey: key,
-            purpose: "log",
-            id: "e1",
-            token,
-            nowSeconds: nowS,
-            currentEpoch: 3,
-            ...over,
-          }),
-        ),
+    expect(await check(forged)).toEqual({ _tag: "Invalid" });
+    expect(
+      await Effect.runPromise(
+        dashboardLogLink(await configOf({ LINK_KEY: undefined }), "e 1", nowS),
+      ),
+    ).toBeNull();
+  });
+
+  it("[FD-IFC-019] a dashboard link lasts 3600 s, or the configured link lifetime where that is shorter", async () => {
+    const expiryUnder = async (lifetime: string | undefined) =>
+      Number(
+        tokenOf(
+          (await Effect.runPromise(
+            dashboardLogLink(await configOf({ LINK_LIFETIME_S: lifetime }), "e 1", nowS),
+          ))!,
+        ).split(".")[0],
+      ) - nowS;
+    expect(await expiryUnder(undefined)).toBe(3600);
+    expect(await expiryUnder("604800")).toBe(3600);
+    expect(await expiryUnder("600")).toBe(600);
+  });
+
+  it("[FD-IFC-023] the dashboard refuses a link key equal to another capability secret", async () => {
+    for (const name of [
+      "WEBHOOK_SECRET",
+      "OIDC_SIGNING_JWK",
+      "PROVENANCE_KEY",
+      "COMPILE_CACHE_SECRET",
+      "INSTALL_STATE_KEY",
+    ]) {
+      const refused = await Effect.runPromise(
+        Effect.result(linkConfigFrom({ LINK_KEY: key, [name]: key }, "https://fd.example.com")),
       );
-    expect(await verify({})).toMatchObject({ _tag: "Success" });
-    expect(await verify({ id: "e2" })).toMatchObject({
-      _tag: "Failure",
-      failure: { code: "forbidden" },
-    });
-    expect(await verify({ purpose: "artifact" })).toMatchObject({
-      _tag: "Failure",
-      failure: { code: "forbidden" },
-    });
-    expect(await verify({ nowSeconds: nowS + 3600 })).toMatchObject({
-      _tag: "Failure",
-      failure: { code: "link_expired" },
-    });
-    expect(await verify({ currentEpoch: 4 })).toMatchObject({
-      _tag: "Failure",
-      failure: { code: "link_revoked" },
-    });
-    const forged = await mintLinkToken({
-      linkKey: "other",
-      purpose: "log",
-      id: "e1",
-      expiresAt: nowS + 60,
-      epoch: 3,
-    });
-    expect(await verify({ token: forged })).toMatchObject({
-      _tag: "Failure",
-      failure: { code: "forbidden" },
-    });
+      expect(refused, name).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "ConfigInvalid", issues: [`LINK_KEY: the link key equals ${name}`] },
+      });
+    }
+    expect((await configOf({ COMPILE_CACHE_SECRET: "another" })).linkKey).toBe(key);
   });
 });

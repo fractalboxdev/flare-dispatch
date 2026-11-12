@@ -2,10 +2,11 @@
 // capacity lease becomes one admission request of trigger kind `local` with the
 // `local-only` placement constraint, under which the control plane posts no
 // GitHub check and admits no cloud spend (FD-INT-061). mameko checks the
-// capacity lease before the port is called (MAMEKO-PROTO-081).
+// capacity lease before the port is called (MAMEKO-PROTO-082).
 import { LocalRegistration } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer, Schema } from "effect";
 import { IntakeConfig, type Admission, type ClassResolver } from "./config.ts";
+import type { HeldCheckReporter } from "./ports.ts";
 import type { IntakeStore, ShedRecorder } from "./store.ts";
 import { submission, submit } from "./submit.ts";
 
@@ -30,7 +31,7 @@ export const localRegistrationLayer = Layer.effect(
   LocalRegistration,
   Effect.gen(function* () {
     const context = yield* Effect.context<
-      IntakeConfig | Admission | ClassResolver | IntakeStore | ShedRecorder
+      IntakeConfig | Admission | ClassResolver | IntakeStore | ShedRecorder | HeldCheckReporter
     >();
     const rejected = { _tag: "rejected" } as const;
     return {

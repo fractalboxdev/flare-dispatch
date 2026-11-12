@@ -1,32 +1,40 @@
-// The cache, artifact and log area on the Worker: a lease's cache fields, the compile-cache, artifact and log routes,
-// and the retention sweeps the minute tick runs. Every route checks its own token; a viewer with a valid Access
-// identity of the team reads too.
+// The cache, artifact and log area on the Worker: a lease's cache fields, the compile-cache route, the log and artifact
+// reads the router serves behind the link surface (FD-IFC-017), and the minute tick's steps (cache-retention.ts). The
+// compile-cache route checks its own token (FD-CACHE-057). A private repository's artifact is read only by its link
+// token's holder, an operator or the identity that dispatched its execution (FD-CACHE-076), and the listing writes
+// each artifact it shows with a link token for that artifact (FD-CACHE-077).
 import {
   ApiConfig,
-  apiConfigFromEnv,
-  authenticateAccess,
-  ConfigInvalid,
-  JwksSourceLive,
+  apiError,
+  artifactUrl,
+  CurrentIdentity,
+  errorBody,
+  FlareDispatchApi,
+  inGroup,
+  type ApiError,
+  type Identity,
 } from "@fractalboxdev/flare-dispatch-api";
 import {
-  ARTIFACT_SCHEMA,
-  handleArtifacts,
+  ARTIFACT_PAGE_SIZE,
+  artifactPage,
+  artifactVisible,
+  findArtifact,
   handleCompileCache,
-  handleLogs,
-  leaseCacheFields,
   ledgersOf,
-  sweepArtifacts,
-  sweepCache,
-  sweepLogs,
+  serveArtifact,
+  serveLogs,
+  type ArtifactReader,
 } from "@fractalboxdev/flare-dispatch-cache";
 import type { IntakeRecord } from "@fractalboxdev/flare-dispatch-intake";
-import type { TickStep } from "@fractalboxdev/flare-dispatch-ops";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare";
-import type { ExecutorKind } from "@fractalboxdev/mameko-kernel";
-import { Effect } from "effect";
+import { Context, Effect, Layer, Match } from "effect";
+import { HttpServerResponse, type HttpServerRequest } from "effect/http";
+import { HttpApiBuilder } from "effect/http-api";
 import type { ControlPlaneEnv } from "./config.ts";
-import { cacheExecutionOf } from "./cache-execution.ts";
-import { apiEnvOf } from "./http.ts";
+import { leaseCacheAt, type LeaseOf } from "./cache-execution.ts";
+import { migrateCache } from "./cache-retention.ts";
+
+export { cacheSweeps, migrateCache } from "./cache-retention.ts";
 
 /** The bindings this area reads beside the control plane's. */
 export interface CacheEnv {
@@ -36,13 +44,9 @@ export interface CacheEnv {
   readonly CACHE_LEDGER?: DurableObjectNamespace;
   /** The secret compile-cache tokens derive from (FD-CACHE-057). */
   readonly COMPILE_CACHE_SECRET?: string;
-  /** The secret log and artifact capability tokens derive from. */
-  readonly CACHE_TOKEN_SECRET?: string;
   /** The public origin a compile-cache endpoint names. */
   readonly PUBLIC_ORIGIN?: string;
 }
-
-const TERMINAL = "status not in ('pending', 'running')";
 
 const first = async <T>(db: D1Like, sql: string, ...binds: unknown[]): Promise<T | undefined> =>
   (
@@ -52,168 +56,273 @@ const first = async <T>(db: D1Like, sql: string, ...binds: unknown[]): Promise<T
       .all()
   ).results[0] as T | undefined;
 
-/** A lease's `cache_namespaces` and `upload_grant`, from the won placement's epoch and executor kind. */
-export const leaseCache = async (env: ControlPlaneEnv & CacheEnv, record: IntakeRecord) => {
-  const placement = await first<{ epoch: number; kind: ExecutorKind | null }>(
+/**
+ * A lease's `cache_namespaces` and `upload_grant`, from the won placement's epoch and executor kind; no URL outlives the
+ * execution's `deadline_at` as admission wrote it.
+ */
+export const leaseCache = async (
+  env: ControlPlaneEnv & CacheEnv,
+  record: IntakeRecord,
+  deadlineAt: number,
+) => {
+  const placement = await first<LeaseOf>(
     env.DB,
     `select p.epoch, x.kind from placements p left join executors x on x.executor_id = p.executor_id
      where p.execution_id = ?`,
     record.executionId,
   );
-  return leaseCacheFields(
-    cacheExecutionOf(record),
-    {
-      epoch: placement?.epoch ?? 1,
-      executorKind: placement?.kind ?? "device",
-      deadlineAt: record.deadlineAtMs,
-    },
-    { publicOrigin: env.PUBLIC_ORIGIN, tokenSecret: env.COMPILE_CACHE_SECRET },
-  );
+  return leaseCacheAt(env, record, placement ?? { epoch: 1, kind: null }, deadlineAt);
 };
 
-/** Whether the request carries a valid Access identity of the team: any member reads an execution's logs. */
-const viewer = (env: ControlPlaneEnv) => async (request: Request) => {
-  const config = apiConfigFromEnv(apiEnvOf(env), new URL(request.url).origin);
-  if (config instanceof ConfigInvalid) return false;
-  const outcome = await Effect.runPromise(
-    authenticateAccess(request, { redirectBrowser: false }).pipe(
-      Effect.provideService(ApiConfig, config),
-      Effect.provide(JwksSourceLive),
-      Effect.orElseSucceed(() => null),
-    ),
-  );
-  return outcome?._tag === "Access";
-};
-
-let artifactsMigrated: Promise<unknown> | undefined;
-
-/** The artifact rows' table (FD-CACHE-073). */
-export const migrateCache = (db: D1Like) =>
-  (artifactsMigrated ??= (async () => {
-    for (const sql of ARTIFACT_SCHEMA) await db.prepare(sql).run();
-  })().catch((e: unknown) => {
-    artifactsMigrated = undefined;
-    throw e;
-  }));
-
+/** A binding this deploy lacks answers `unavailable` in the error model's shape (FD-IFC-009). */
 const unavailable = (what: string) =>
-  Response.json({ error: "not_configured", message: what }, { status: 503 });
+  Response.json(errorBody(apiError("unavailable", what), crypto.randomUUID()), { status: 503 });
 
-const ROUTES = /^\/v1\/(compile-cache\/|artifacts\/|executions\/[^/]+\/(logs|artifacts)(\/|$))/;
+const executionStatus = (db: D1Like, id: string) =>
+  first<{ status: string; epoch: number | null; executor_id: string | null }>(
+    db,
+    `select e.status, p.epoch, p.executor_id from executions e left join placements p on p.execution_id = e.id
+     where e.id = ?`,
+    id,
+  );
 
-/** Serves a compile-cache, artifact or log route, or answers null for a path this area does not serve. */
+const isTerminal = (s: { readonly status: string }) =>
+  s.status !== "pending" && s.status !== "running";
+
+/** Serves a compile-cache route, or answers null for a path this area does not serve. */
 export const cacheFetch = async (
   request: Request,
   env: ControlPlaneEnv & CacheEnv,
   waitUntil: (p: Promise<unknown>) => void,
 ): Promise<Response | null> => {
   const { pathname } = new URL(request.url);
-  if (!ROUTES.test(pathname)) return null;
+  if (!pathname.startsWith("/v1/compile-cache/")) return null;
   const bucket = env.CACHE;
   if (bucket === undefined) return unavailable("this deploy binds no CACHE bucket");
-  const status = async (id: string) =>
-    first<{ status: string; epoch: number | null; executor_id: string | null }>(
-      env.DB,
-      `select e.status, p.epoch, p.executor_id from executions e left join placements p on p.execution_id = e.id
-       where e.id = ?`,
-      id,
-    );
-  const terminal = (s: { status: string }) => s.status !== "pending" && s.status !== "running";
-  if (pathname.startsWith("/v1/compile-cache/")) {
-    if (env.CACHE_LEDGER === undefined) return unavailable("this deploy binds no CACHE_LEDGER");
-    return handleCompileCache(request, {
-      bucket,
-      ledgers: ledgersOf(env.CACHE_LEDGER),
-      secret: env.COMPILE_CACHE_SECRET,
-      now: Date.now,
-      waitUntil,
-      lease: async (id) => {
-        const s = await status(id);
-        return s === undefined || s.epoch === null
-          ? null
-          : { epoch: s.epoch, terminal: terminal(s) };
-      },
-    });
-  }
-  const secret = env.CACHE_TOKEN_SECRET;
-  if (secret === undefined || secret === "")
-    return unavailable("this deploy holds no CACHE_TOKEN_SECRET");
-  const mayRead = viewer(env);
-  if (/\/logs(\/|$)/.test(pathname))
-    return handleLogs(request, {
-      bucket,
-      secret,
-      now: Date.now,
-      execution: async (id) => {
-        const s = await status(id);
-        return s === undefined
-          ? null
-          : {
-              terminal: terminal(s),
-              ...(s.executor_id === null ? {} : { executorId: s.executor_id }),
-            };
-      },
-      viewerMayRead: (r) => mayRead(r),
-    });
-  await migrateCache(env.DB);
-  return handleArtifacts(request, {
-    db: env.DB as unknown as D1Database,
+  if (env.CACHE_LEDGER === undefined) return unavailable("this deploy binds no CACHE_LEDGER");
+  return handleCompileCache(request, {
     bucket,
-    secret,
+    ledgers: ledgersOf(env.CACHE_LEDGER),
+    secret: env.COMPILE_CACHE_SECRET,
     now: Date.now,
-    terminal: async (id) => {
-      const s = await status(id);
-      return s !== undefined && terminal(s);
+    waitUntil,
+    lease: async (id) => {
+      const s = await executionStatus(env.DB, id);
+      return s === undefined || s.epoch === null
+        ? null
+        : { epoch: s.epoch, terminal: isTerminal(s) };
     },
-    viewerMayRead: (r) => mayRead(r),
   });
 };
 
+// --- Log and artifact reads behind the router -------------------------------------------------------------------------
+
+/** The caller of an artifact read, as the router's gate identified it, and whether it is an operator. */
+export interface ArtifactViewer {
+  readonly identity: Identity;
+  readonly operator: boolean;
+}
+
+/** One page of an execution's artifacts, as the cache area lists them. */
+type ArtifactListing = Awaited<ReturnType<typeof artifactPage>>;
+
+/** The identity that dispatched an execution, as intake recorded its caller; null for a webhook or cron execution. */
+const dispatcherOf = async (db: D1Like, executionId: string) =>
+  (
+    await first<{ caller: string | null }>(
+      db,
+      "select caller from intake_records where execution_id = ?",
+      executionId,
+    )
+  )?.caller ?? null;
+
 /**
- * The retention sweeps (FD-CACHE-062 to FD-CACHE-066, FD-CACHE-079, FD-CACHE-089). No GitHub read answers when a pull
- * request closed, so a pull-request namespace ages out by its TTL alone; an execution with no settled reservation has
- * no end time, so its logs stay.
+ * Who reads a private repository's artifact (FD-CACHE-076): the holder of a link token bound to that artifact, an
+ * operator, or the Access identity that dispatched the execution that produced it.
  */
-export const cacheSweeps =
-  (env: ControlPlaneEnv & CacheEnv) =>
-  (now: number): readonly TickStep[] => {
-    const bucket = env.CACHE;
-    const ledger = env.CACHE_LEDGER;
-    if (bucket === undefined || ledger === undefined) return [];
-    return [
-      {
-        step: "cache-sweep",
-        effect: Effect.promise(() =>
-          sweepCache(bucket, now, {
-            ledgers: ledgersOf(ledger),
-            pullRequestClosedAt: async () => null,
-          }),
-        ),
-      },
-      {
-        step: "artifact-sweep",
-        effect: Effect.promise(async () => {
-          await migrateCache(env.DB);
-          return sweepArtifacts(env.DB as unknown as D1Database, bucket, now);
-        }),
-      },
-      {
-        step: "log-sweep",
-        effect: Effect.promise(() =>
-          sweepLogs(
-            bucket,
-            async (id) =>
-              (
-                await first<{ at: number | null }>(
-                  env.DB,
-                  `select r.updated_at as at from executions e join reservations r on r.execution_id = e.id
-                 where e.id = ? and e.${TERMINAL} and r.state in ('settled', 'released')`,
-                  id,
-                )
-              )?.at ?? null,
-            now,
-          ),
-        ),
-      },
-    ];
+export const artifactReader =
+  (db: D1Like, viewer: ArtifactViewer): ArtifactReader =>
+  async (row) =>
+    Match.value(viewer.identity).pipe(
+      Match.tagsExhaustive({
+        Link: ({ purpose, objectId }) => purpose === "artifact" && objectId === row.artifact_id,
+        Access: async ({ id }) =>
+          viewer.operator ||
+          (await dispatcherOf(db, row.execution_id))?.toLowerCase() === id.toLowerCase(),
+        Actions: () => false,
+        Unidentified: () => false,
+      }),
+    );
+
+/**
+ * The log and artifact reads the router's handlers call once the gate has identified the caller: an Access identity
+ * or a link token bound to the execution or artifact (FD-IFC-017). Each answers an error from the error model.
+ */
+export class CacheReads extends Context.Service<
+  CacheReads,
+  {
+    readonly logs: (
+      request: Request,
+      executionId: string,
+      file: string | undefined,
+    ) => Effect.Effect<Response, ApiError>;
+    readonly artifact: (
+      request: Request,
+      artifactId: string,
+      browsePath: string | undefined,
+      viewer: ArtifactViewer,
+    ) => Effect.Effect<Response, ApiError>;
+    readonly artifacts: (
+      executionId: string,
+      page: { readonly limit: number; readonly cursor: string },
+      viewer: ArtifactViewer,
+    ) => Effect.Effect<ArtifactListing, ApiError>;
+  }
+>()("@fractalboxdev/flare-dispatch-control-plane/CacheReads") {}
+
+/** A deploy that binds no `CACHE` bucket has no log or artifact to read; each read answers `unavailable`. */
+const cacheReadsUnbound = Layer.succeed(CacheReads)({
+  logs: () => Effect.fail(apiError("unavailable", "this deploy binds no CACHE bucket")),
+  artifact: () => Effect.fail(apiError("unavailable", "this deploy binds no CACHE bucket")),
+  artifacts: () => Effect.fail(apiError("unavailable", "this deploy binds no CACHE bucket")),
+});
+
+/** The reads over the deploy's `CACHE` bucket and the artifact rows in D1. */
+export const cacheReads = (env: ControlPlaneEnv & CacheEnv): Layer.Layer<CacheReads> => {
+  const bucket = env.CACHE;
+  if (bucket === undefined) return cacheReadsUnbound;
+  const db = env.DB as unknown as D1Database;
+  const terminal = async (id: string) => {
+    const s = await executionStatus(env.DB, id);
+    return s !== undefined && isTerminal(s);
   };
+  const artifactDeps = { db, bucket, now: Date.now, terminal };
+  const migratedDb = Effect.promise(() => migrateCache(env.DB));
+  return Layer.succeed(CacheReads)({
+    logs: (request, executionId, file) =>
+      Effect.gen(function* () {
+        const read = yield* Effect.promise(() =>
+          serveLogs(
+            request,
+            { executionId, file },
+            {
+              bucket,
+              execution: async (id) => {
+                const s = await executionStatus(env.DB, id);
+                return s === undefined
+                  ? null
+                  : {
+                      terminal: isTerminal(s),
+                      ...(s.executor_id === null ? {} : { executorId: s.executor_id }),
+                    };
+              },
+            },
+          ),
+        );
+        return yield* Match.value(read).pipe(
+          Match.tagsExhaustive({
+            Served: ({ response }) => Effect.succeed(response),
+            NoExecution: () =>
+              Effect.fail(apiError("execution_not_found", `no execution ${executionId}`)),
+            NoFile: () => Effect.fail(apiError("not_found", "no such log file")),
+          }),
+        );
+      }),
+    artifact: (request, artifactId, browsePath, viewer) =>
+      Effect.gen(function* () {
+        yield* migratedDb;
+        const row = yield* Effect.promise(() => findArtifact(artifactDeps, artifactId));
+        const visible =
+          row !== null &&
+          (yield* Effect.promise(() => artifactVisible(row, artifactReader(env.DB, viewer))));
+        if (row === null || !visible)
+          return yield* apiError("not_found", `no artifact ${artifactId}`);
+        const read = yield* Effect.promise(() =>
+          serveArtifact(request, row, browsePath, artifactDeps),
+        );
+        return yield* Match.value(read).pipe(
+          Match.tagsExhaustive({
+            Served: ({ response }) => Effect.succeed(response),
+            Missing: () => Effect.fail(apiError("not_found", "no such artifact file")),
+            OnExecutor: ({ executorId }) =>
+              Effect.fail(
+                apiError("conflict", `artifact ${artifactId} is kept on executor ${executorId}`),
+              ),
+          }),
+        );
+      }),
+    artifacts: (executionId, page, viewer) =>
+      Effect.gen(function* () {
+        yield* migratedDb;
+        return yield* Effect.promise(() =>
+          artifactPage(artifactDeps, executionId, page, artifactReader(env.DB, viewer)),
+        );
+      }),
+  });
+};
+
+const response = <R>(effect: Effect.Effect<Response, ApiError, R>) =>
+  Effect.map(effect, (r) => HttpServerResponse.fromWeb(r));
+
+const sourceOf = (request: HttpServerRequest.HttpServerRequest) => request.source as Request;
+
+/** The caller the router's gate identified, and whether the overlay lists it in `operators`. */
+const currentViewer = Effect.gen(function* () {
+  const identity = yield* CurrentIdentity;
+  const config = yield* ApiConfig;
+  const operator = Match.value(identity).pipe(
+    Match.tag("Access", ({ id }) => inGroup(config, "operators", id)),
+    Match.orElse(() => false),
+  );
+  return { identity, operator } satisfies ArtifactViewer;
+});
+
+/** The logs group's handlers (FD-CACHE-083). */
+export const LogsHandlers = HttpApiBuilder.group(FlareDispatchApi, "logs", (handlers) =>
+  handlers
+    .handle("aggregate", ({ params, request }) =>
+      response(CacheReads.use((reads) => reads.logs(sourceOf(request), params.id, undefined))),
+    )
+    .handle("file", ({ params, request }) =>
+      response(CacheReads.use((reads) => reads.logs(sourceOf(request), params.id, params.file))),
+    ),
+);
+
+/**
+ * The artifacts group's handlers (FD-CACHE-075, FD-CACHE-076, FD-CACHE-078). The listing writes each artifact's URL
+ * with a link token bound to that artifact, for the configured link lifetime (FD-CACHE-077).
+ */
+export const ArtifactsHandlers = HttpApiBuilder.group(FlareDispatchApi, "artifacts", (handlers) =>
+  handlers
+    .handle("get", ({ params, request }) =>
+      response(
+        Effect.gen(function* () {
+          const viewer = yield* currentViewer;
+          return yield* CacheReads.use((reads) =>
+            reads.artifact(
+              sourceOf(request),
+              params.artifact_id,
+              params["*"] === undefined || params["*"] === "" ? undefined : params["*"],
+              viewer,
+            ),
+          );
+        }),
+      ),
+    )
+    .handle("list", ({ params, query }) =>
+      Effect.gen(function* () {
+        const viewer = yield* currentViewer;
+        const page = yield* CacheReads.use((reads) =>
+          reads.artifacts(
+            params.id,
+            { limit: query.limit ?? ARTIFACT_PAGE_SIZE, cursor: query.cursor ?? "" },
+            viewer,
+          ),
+        );
+        const artifacts = yield* Effect.forEach(page.artifacts, (entry) =>
+          Effect.map(artifactUrl(entry.artifact_id, "listing"), (url) => ({ ...entry, url })),
+        );
+        return { artifacts, cursor: page.cursor };
+      }),
+    ),
+);

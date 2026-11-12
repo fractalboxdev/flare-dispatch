@@ -14,7 +14,13 @@ import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { CheckRunApplierLive, InstallationDirectory, Payloads } from "./applier.ts";
 import { GithubHttpError, GithubNetworkError } from "./client.ts";
-import { fakeGithub, fakeLayers, row, type FakeGithub } from "./fake.test-support.ts";
+import {
+  fakeConcludeFacts,
+  fakeGithub,
+  fakeLayers,
+  row,
+  type FakeGithub,
+} from "./fake.test-support.ts";
 import { githubApplicationLayer } from "./layer.ts";
 import { ActuatorRateLimitLive, installationQuotaLayer } from "./rate-limit.ts";
 
@@ -60,14 +66,16 @@ const pass = (
 const fakeApplication = (gh: FakeGithub) =>
   Layer.mergeAll(
     CheckRunApplierLive.pipe(Layer.provide(fakeLayers(gh))),
-    ActuatorRateLimitLive.pipe(Layer.provide(installationQuotaLayer())),
+    ActuatorRateLimitLive.pipe(
+      Layer.provide(Layer.merge(installationQuotaLayer(), fakeLayers(gh))),
+    ),
   );
 
 const state = (outbox: ReturnType<typeof memoryOutboxStore>, id: string) =>
   outbox.rows.get(id)?.row;
 
 describe("the applier under the drainer", () => {
-  it("FD-GH-010 MAMEKO-OUT-018 a create GitHub made but answered 502 is found on the retry", async () => {
+  it("[FD-GH-010] MAMEKO-OUT-018 a create GitHub made but answered 502 is found on the retry", async () => {
     const gh = fakeGithub();
     const outbox = memoryOutboxStore();
     await outbox.seed([stored("1", row("check.open", ref))]);
@@ -82,7 +90,7 @@ describe("the applier under the drainer", () => {
     expect(gh.runs).toHaveLength(1);
   });
 
-  it("FD-GH-010 MAMEKO-OUT-022 MAMEKO-OUT-024 a lost acknowledgement is adopted by lookup", async () => {
+  it("[FD-GH-010] MAMEKO-OUT-022 MAMEKO-OUT-024 a lost acknowledgement is adopted by lookup", async () => {
     const gh = fakeGithub();
     const outbox = memoryOutboxStore();
     await outbox.seed([stored("1", row("check.open", ref))]);
@@ -95,7 +103,7 @@ describe("the applier under the drainer", () => {
     expect(gh.calls.filter((c) => c === "create")).toHaveLength(1);
   });
 
-  it("FD-GH-052 MAMEKO-OUT-042 the outcome row goes first; the later check.open adopts its check run", async () => {
+  it("[FD-GH-052] MAMEKO-OUT-042 the outcome row goes first; the later check.open adopts its check run", async () => {
     const gh = fakeGithub();
     const outbox = memoryOutboxStore();
     await outbox.seed([
@@ -112,6 +120,43 @@ describe("the applier under the drainer", () => {
     expect(state(outbox, "1")?.state).toBe("applied");
     expect(state(outbox, "2")?.state).toBe("refused");
     expect(state(outbox, "3")?.state).toBe("applied");
+  });
+});
+
+describe("mameko's outcome row under the drainer", () => {
+  it("[FD-GH-014] the outcome row keyed `outcome` with payload { outcome } concludes the check run and is applied", async () => {
+    const gh = fakeGithub();
+    gh.facts.set("exec-1", {
+      name: ref.name,
+      headSha: ref.head_sha,
+      attempt: 1,
+      detailsUrl: undefined,
+      details,
+      recorded: { _tag: "failure", category: "finding", reason: "lint: 3 errors" },
+    });
+    const outbox = memoryOutboxStore();
+    await outbox.seed([
+      stored("1", row("check.open", ref)),
+      stored(
+        "2",
+        row(
+          "check.conclude",
+          { outcome: { _tag: "Failure", reason: "lint: 3 errors", epoch: 1 } },
+          { intentKey: "outcome" },
+        ),
+        "outcome",
+      ),
+    ]);
+    await pass(fakeApplication(gh), outbox, NOW);
+    expect(state(outbox, "2")).toMatchObject({ state: "applied", externalRef: "1000" });
+    expect(state(outbox, "1")?.state).toBe("applied");
+    expect(gh.runs).toMatchObject([
+      {
+        status: "completed",
+        conclusion: "failure",
+        output: { title: "lint: 3 errors" },
+      },
+    ]);
   });
 });
 
@@ -146,6 +191,7 @@ describe("githubApplicationLayer", () => {
         Layer.mergeAll(
           Layer.succeed(InstallationDirectory, { installationFor: () => Effect.succeed(7) }),
           Layer.succeed(AlarmPort, { deliver: () => Effect.void }),
+          fakeConcludeFacts(fakeGithub()),
         ),
       ),
     );

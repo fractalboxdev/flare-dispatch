@@ -4,8 +4,8 @@ defaultTargets = ["FdFormal", "oracle"]
 [[lean_lib]]
 name = "FdFormal"
 
-# The differential-test oracle: the staged-write model answering one JSON event per stdin line (specs/verification.md
-# § V-DIFF). `lake build oracle` writes it to .lake/build/bin/oracle.
+# The differential-test oracle: the staged-write, placement and drift models answering one JSON event per stdin line
+# (specs/verification.md § V-DIFF). `lake build oracle` writes it to .lake/build/bin/oracle.
 [[lean_exe]]
 name = "oracle"
 root = "Oracle"

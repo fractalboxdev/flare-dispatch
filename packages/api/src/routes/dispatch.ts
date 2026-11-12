@@ -50,6 +50,7 @@ export const submissionOf = (
   const common = {
     trigger,
     run,
+    label: body.label,
     inputs: body.inputs,
     class: body.class,
     signals: body.signals,
@@ -72,6 +73,7 @@ export const submissionOf = (
               ref: actions.ref,
               sha: body.sha ?? actions.sha,
               workflowRef: actions.workflowRef,
+              vouchedSha: actions.sha,
             }),
       Access: () =>
         Effect.succeed<DispatchSubmission>({
@@ -80,6 +82,7 @@ export const submissionOf = (
           ref: body.ref,
           sha: body.sha,
           workflowRef: undefined,
+          vouchedSha: undefined,
         }),
     }),
   );

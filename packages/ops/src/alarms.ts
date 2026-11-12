@@ -31,6 +31,34 @@ export const ALARMS_MIGRATION = `create table if not exists fd_alarms (
   first_raised_at integer not null,
   updated_at integer not null)`;
 
+/**
+ * Each change of an alarm's state, which `fd_alarms` overwrites: the phase gate reads every raise and resolve of its
+ * window from it (specs/verification.md FD-VER-029). The triggers write a row on every `fd_alarms` write that sets a
+ * new state, so each writer of `fd_alarms` records its transitions; a row `fd_alarms` held before the triggers existed
+ * is copied once, stamped with its first raise.
+ */
+export const ALARM_TRANSITIONS_MIGRATIONS: readonly string[] = [
+  `create table if not exists fd_alarm_transitions (
+  dedupe_key text not null,
+  name text not null,
+  severity text not null,
+  state text not null,
+  at integer not null)`,
+  "create index if not exists fd_alarm_transitions_key on fd_alarm_transitions (dedupe_key, at)",
+  `create trigger if not exists fd_alarms_inserted after insert on fd_alarms begin
+  insert into fd_alarm_transitions (dedupe_key, name, severity, state, at)
+  values (new.dedupe_key, new.name, new.severity, new.state, new.updated_at);
+end`,
+  `create trigger if not exists fd_alarms_state_changed after update of state on fd_alarms
+  when new.state <> old.state begin
+  insert into fd_alarm_transitions (dedupe_key, name, severity, state, at)
+  values (new.dedupe_key, new.name, new.severity, new.state, new.updated_at);
+end`,
+  `insert into fd_alarm_transitions (dedupe_key, name, severity, state, at)
+  select a.dedupe_key, a.name, a.severity, a.state, a.first_raised_at from fd_alarms a
+  where not exists (select 1 from fd_alarm_transitions t where t.dedupe_key = a.dedupe_key)`,
+];
+
 /** Sends an email; the Worker supplies it over its `send_email` binding. */
 export interface EmailSender {
   readonly send: (to: string, subject: string, text: string) => Promise<void>;

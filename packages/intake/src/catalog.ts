@@ -1,48 +1,121 @@
-// The run catalogue as intake reads it, built from FlareDispatch's catalogue
-// package. `check` answers `pull_request`, `push` and `merge_group` webhooks with
-// the steps its manifest entry names, and dispatches with their own inputs.
-import { CheckStep, lookupRun, requestPlacement } from "@fractalboxdev/flare-dispatch-catalog";
+// The run catalogue as intake reads it, built from FlareDispatch's catalogue package. A run's manifest key selects
+// its parameter schema and its catalogue request decoder (specs/runs/gate.md § Recipes); the decoder takes the
+// webhook as the catalogue's `WebhookDelivery`. A run with no gate manifest key answers dispatches only.
+import {
+  CheckStep,
+  DeploySmokeEntrySchema,
+  deploymentStatusDecoder,
+  gateContextOf,
+  lookupRun,
+  MatrixEntrySchema,
+  offloadTestDecoder,
+  OxlintEntrySchema,
+  oxlintDecoder,
+  requestPlacement,
+  SandboxImageEntrySchema,
+  sandboxImageDecoder,
+  WorkerDeployEntrySchema,
+  workerDeployDecoder,
+  WorkerDeployInput,
+  workerDeploySerialGroup,
+  type CatalogEntry,
+  type CheckInput,
+  type DispatchEvent as CatalogEvent,
+  type WorkerDeployEntry,
+} from "@fractalboxdev/flare-dispatch-catalog";
 import type { Deployment } from "@fractalboxdev/flare-dispatch-profile";
 import { Match, Option, Schema } from "effect";
-import { commitOf, WebhookFields, type DispatchEvent } from "./event.ts";
+import { catalogEventOf, type TriggerContext } from "./delivery.ts";
+import type { DispatchEvent } from "./event.ts";
 import type { EntryView, IntakeRun, RunCatalog } from "./runs.ts";
 
+/** A `check` entry's parameters: the steps one execution runs in order (FD-GATE-019). */
 export const CheckParams = Schema.Struct({
   steps: Schema.Array(CheckStep).check(Schema.isMinLength(1)),
 });
 
-const CHECK_EVENTS: ReadonlySet<string> = new Set(["pull_request", "push", "merge_group"]);
-const PR_ACTIONS: ReadonlySet<string> = new Set([
-  "opened",
-  "synchronize",
-  "reopened",
-  "ready_for_review",
-]);
+type CatalogDecoder = (event: CatalogEvent) => Option.Option<unknown>;
 
-/** `check`'s request decoder: a commit-bearing webhook and the entry's steps make its input. */
-export const checkTrigger = (event: DispatchEvent, entry: EntryView): Option.Option<unknown> =>
-  Match.value(event).pipe(
-    Match.tag("webhook", (w) => {
-      if (!CHECK_EVENTS.has(w.event)) return Option.none();
-      if (w.event === "pull_request" && (w.action === null || !PR_ACTIONS.has(w.action)))
-        return Option.none();
-      if (w.event === "merge_group" && w.action !== "checks_requested") return Option.none();
-      const fields = Schema.decodeUnknownOption(WebhookFields)(w.payload);
-      const params = Schema.decodeUnknownOption(CheckParams)(entry.params);
-      return Option.flatMap(Option.all({ fields, params }), ({ fields: f, params: p }) =>
-        Option.map(commitOf(f), (sha) => ({
-          repo: `https://github.com/${f.repository?.full_name ?? ""}.git`,
-          sha,
-          ref:
-            f.pull_request?.head.ref !== undefined
-              ? `refs/heads/${f.pull_request.head.ref}`
-              : (f.ref ?? f.merge_group?.base_ref ?? ""),
-          steps: p.steps,
+/** What intake reads of one manifest key: the entry's parameter schema and the decoder its parameters bind. */
+interface ManifestRecipe {
+  readonly params: Schema.Decoder<unknown>;
+  readonly decoder: (params: unknown, view: EntryView) => Option.Option<CatalogDecoder>;
+}
+
+const recipe = <A>(
+  params: Schema.Decoder<A>,
+  decoder: (params: A, view: EntryView) => CatalogDecoder,
+): ManifestRecipe => ({
+  params,
+  decoder: (raw, view) =>
+    Option.map(Schema.decodeUnknownOption(params)(raw), (p) => decoder(p, view)),
+});
+
+/** `check` on a gate event: one execution runs the entry's steps under the entry's label (FD-GATE-017, -019). */
+const checkDecoder =
+  (params: typeof CheckParams.Type, view: EntryView): CatalogDecoder =>
+  (event) =>
+    Match.value(event).pipe(
+      Match.tag("webhook", ({ delivery }) =>
+        Option.map(gateContextOf(delivery), (ctx): CheckInput => ({
+          ...ctx,
+          ...(view.skipAuthors === undefined ? {} : { skipAuthors: view.skipAuthors }),
+          ...(view.label === null ? {} : { label: view.label }),
+          steps: params.steps,
         })),
-      );
-    }),
-    Match.orElse(() => Option.none()),
-  );
+      ),
+      Match.orElse(() => Option.none()),
+    );
+
+/** The manifest entry's label is the deploy's label, so the dedup key and the serial group agree (FD-GATE-062). */
+const labelled = (params: WorkerDeployEntry, label: string | null): WorkerDeployEntry => {
+  const { label: _ignored, ...rest } = params;
+  return label === null ? rest : { ...rest, label };
+};
+
+/** Each gate manifest key's parameters and request decoder (specs/runs/gate.md § Recipes). */
+const MANIFEST_RECIPES: Readonly<Record<string, ManifestRecipe>> = {
+  check: recipe(CheckParams, checkDecoder),
+  oxlint: recipe(OxlintEntrySchema, (p, view) => oxlintDecoder(p, view.skipAuthors)),
+  offloadTest: recipe(MatrixEntrySchema, (p, view) => offloadTestDecoder(p, view.skipAuthors)),
+  workerDeploy: recipe(WorkerDeployEntrySchema, (p, view) =>
+    workerDeployDecoder(labelled(p, view.label)),
+  ),
+  deploySmoke: recipe(DeploySmokeEntrySchema, (p) => deploymentStatusDecoder(p)),
+  sandboxImage: recipe(SandboxImageEntrySchema, (p) => sandboxImageDecoder(p)),
+};
+
+const manifestRecipeOf = (entry: CatalogEntry): ManifestRecipe | undefined =>
+  entry.manifestKey !== null && Object.hasOwn(MANIFEST_RECIPES, entry.manifestKey)
+    ? MANIFEST_RECIPES[entry.manifestKey]
+    : undefined;
+
+/** A run's request decoder: its manifest key's catalogue decoder over the webhook's delivery. */
+export const requestDecoderOf =
+  (entry: CatalogEntry) =>
+  (event: DispatchEvent, view: EntryView, context: TriggerContext): Option.Option<unknown> => {
+    const found = manifestRecipeOf(entry);
+    if (found === undefined) return Option.none();
+    return Option.flatMap(
+      Option.all([found.decoder(view.params, view), catalogEventOf(event, context)]),
+      ([decode, catalogEvent]) => decode(catalogEvent),
+    );
+  };
+
+/**
+ * The serial group of a request to a run that declares `serialize`: a `worker-deploy` request joins its repository,
+ * branch and label's group (FD-GATE-063); an input that does not decode joins none.
+ */
+const serialKeyOf = (entry: CatalogEntry): Pick<IntakeRun, "serialKey"> =>
+  entry.spec.serialize === true && entry.spec.name === "worker-deploy"
+    ? {
+        serialKey: (inputs) =>
+          Option.match(Schema.decodeUnknownOption(WorkerDeployInput)(inputs), {
+            onNone: () => null,
+            onSome: (i) => workerDeploySerialGroup(i.scope, i.branch, i.entry.label),
+          }),
+      }
+    : {};
 
 /** The deployment's runs; a run the deployment refuses to execute is not in its catalogue. */
 export const catalogRuns =
@@ -51,9 +124,9 @@ export const catalogRuns =
     Match.value(lookupRun(deployment, name)).pipe(
       Match.tag("Available", ({ entry }): IntakeRun | undefined => ({
         name: entry.spec.name,
-        params: CheckParams,
+        params: manifestRecipeOf(entry)?.params ?? Schema.Unknown,
         input: entry.input,
-        trigger: checkTrigger,
+        trigger: requestDecoderOf(entry),
         defaultClass: entry.spec.limits.qosClass,
         qosCeiling: entry.spec.limits.qosCeiling,
         hostedModelCalls: entry.spec.needsModel,
@@ -61,8 +134,9 @@ export const catalogRuns =
         ownsCheck: true,
         gating: true,
         retries: entry.spec.retries,
-        declaresGrant: entry.spec.grants.setup.length + entry.spec.grants.agent.length > 0,
+        grants: { setup: [...entry.spec.grants.setup], agent: [...entry.spec.grants.agent] },
         placement: (inputs) => requestPlacement(entry.spec, inputs),
+        ...serialKeyOf(entry),
       })),
       Match.orElse(() => undefined),
     );

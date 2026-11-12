@@ -1,8 +1,10 @@
 // The agentic area on the control plane: the local-work ports over the D1 database with the reads they take from the
-// control plane, and the `pr.propose` and `pr.close` appliers inside every registered actuator. A read this deploy
-// cannot make fails, so no caller decides on an answer that was never read.
+// control plane, the staged write's records, and the `pr.propose` and `pr.close` appliers inside every registered
+// actuator. A read this deploy cannot make fails, so no caller decides on an answer that was never read.
 import {
+  assertNoWriteCredential,
   CapacityUsage,
+  type CredentialInPayload,
   GitData,
   GitDataError,
   gitDataLayer,
@@ -13,7 +15,11 @@ import {
   StagedWriteReadFailed,
   WritebackRecords,
   writebackAppliers,
+  writebackRecordsLayer,
+  type WriteCredentials,
 } from "@fractalboxdev/flare-dispatch-agentic";
+import { artifactPath } from "@fractalboxdev/flare-dispatch-cache";
+import { d1IntakeStore, IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
 import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
 import { GithubApp, GithubRead, tokenFromApp } from "@fractalboxdev/flare-dispatch-github";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare";
@@ -26,6 +32,7 @@ import {
   type LookupAnswer,
 } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
+import { leaseCacheAt, type LeaseOf } from "./cache-execution.ts";
 import { deployment, type ControlPlaneEnv } from "./config.ts";
 import { boundFetch } from "./github.ts";
 
@@ -39,6 +46,38 @@ export const migrateLocalStore = (db: D1Like) =>
     migrated = undefined;
     throw e;
   }));
+
+/**
+ * The write credentials this deploy holds: the GitHub App private key. An installation token lives only for the call
+ * that minted it, so the guard's installation-token shape covers every one of them.
+ */
+export const heldWriteCredentials = (env: ControlPlaneEnv): WriteCredentials => ({
+  appPrivateKey: env.GITHUB_APP_PRIVATE_KEY ?? "",
+  installationTokens: [],
+});
+
+/**
+ * The field of a request's inputs that holds the App private key, a PEM private key or an installation token, or null.
+ * Intake refuses such a request before admission, since the lease carries the recorded inputs (FD-AGT-008).
+ */
+export const writeCredentialIn =
+  (env: ControlPlaneEnv) =>
+  (inputs: unknown): string | null =>
+    assertNoWriteCredential(inputs, heldWriteCredentials(env))?.field ?? null;
+
+/**
+ * The lease payload, checked before `exec.lease` leaves the control plane: a payload with the App private key, a PEM
+ * private key or an installation token in any field fails the grant, so no executor, device executor or job sandbox
+ * receives a write credential (FD-AGT-008). Intake refuses such inputs before admission; this check covers every
+ * field the lease adds to them.
+ */
+export const guardLease = <L>(
+  env: ControlPlaneEnv,
+  lease: L,
+): Effect.Effect<L, CredentialInPayload> => {
+  const hit = assertNoWriteCredential(lease, heldWriteCredentials(env));
+  return hit === null ? Effect.succeed(lease) : Effect.fail(hit);
+};
 
 /** The posture the registry records for a device enrolled with no posture source. */
 export const postureLayer = Layer.succeed(PostureSource, {
@@ -73,24 +112,63 @@ export const reuseInputsLayer = Layer.effect(
   }),
 );
 
-/** The staged write's records live in the artifact store, which no applier read reaches yet. */
-export const writebackRecordsDeferred = Layer.succeed(WritebackRecords, {
-  blobs: () =>
-    Effect.fail(
-      new StagedWriteReadFailed({ source: "artifacts", detail: "no staged-write blob reader" }),
-    ),
-  modelCalls: () =>
-    Effect.fail(
-      new StagedWriteReadFailed({ source: "gateway", detail: "no model-call record reader" }),
-    ),
-  issuedCredentials: () =>
-    Effect.fail(
-      new StagedWriteReadFailed({
-        source: "credentials",
-        detail: "no issued-credential record reader",
-      }),
-    ),
-});
+/**
+ * The compile-cache token of every lease the execution held, recomputed from intake's record: the one credential a
+ * lease carries (FD-AGT-029). A missing record fails the read, so the secret scan never runs without them.
+ */
+export const issuedCredentials = (env: ControlPlaneEnv) => (executionId: string) =>
+  Effect.gen(function* () {
+    const failed = (detail: string) => new StagedWriteReadFailed({ source: "credentials", detail });
+    const record = yield* (yield* IntakeStore)
+      .get(executionId)
+      .pipe(Effect.mapError((e) => failed(e.message)));
+    if (record === null) return yield* failed(`no intake record for ${executionId}`);
+    const leases = yield* Effect.tryPromise({
+      try: async () =>
+        (
+          await env.DB.prepare(
+            `select epoch, executor_kind as kind from lease_records where execution_id = ?1
+             union select p.epoch, x.kind from placements p
+               left join executors x on x.executor_id = p.executor_id where p.execution_id = ?1`,
+          )
+            .bind(executionId)
+            .all()
+        ).results as LeaseOf[],
+      catch: (cause) => failed(String(cause)),
+    });
+    const execution = yield* Effect.tryPromise({
+      try: async () =>
+        (
+          await env.DB.prepare(`select deadline_at from executions where id = ?1`)
+            .bind(executionId)
+            .all()
+        ).results[0] as { deadline_at: number } | undefined,
+      catch: (cause) => failed(String(cause)),
+    });
+    if (execution === undefined) return yield* failed(`no execution row for ${executionId}`);
+    const tokens: string[] = [];
+    for (const lease of leases) {
+      const grant = yield* Effect.tryPromise({
+        try: () => leaseCacheAt(env, record, lease, execution.deadline_at),
+        catch: (cause) => failed(String(cause)),
+      });
+      const token = grant.upload_grant.compile_cache?.token;
+      if (token !== undefined) tokens.push(token);
+    }
+    return tokens;
+  }).pipe(Effect.provide(d1IntakeStore(env.DB)));
+
+/**
+ * The staged write's records: its blobs from the `CACHE` bucket's `artifacts/` prefix, the gateway's model calls and
+ * the issued credentials (FD-AGT-013). A deploy that binds no `CACHE` bucket fails every blob read.
+ */
+export const writebackRecords = (env: ControlPlaneEnv) =>
+  writebackRecordsLayer({
+    db: env.DB,
+    artifacts: env.CACHE,
+    artifactPath,
+    issuedCredentials: issuedCredentials(env),
+  });
 
 /** A capacity lease's usage report is mameko's, which it does not send yet. */
 export const capacityUsageDeferred = Layer.succeed(CapacityUsage, {
@@ -135,12 +213,7 @@ export const localPorts = (env: ControlPlaneEnv) =>
     runKnown: (run) => lookupRun(deployment(env), run)._tag === "Available",
   }).pipe(
     Layer.provide(
-      Layer.mergeAll(
-        reuseInputsLayer,
-        postureLayer,
-        writebackRecordsDeferred,
-        capacityUsageDeferred,
-      ),
+      Layer.mergeAll(reuseInputsLayer, postureLayer, writebackRecords(env), capacityUsageDeferred),
     ),
   );
 

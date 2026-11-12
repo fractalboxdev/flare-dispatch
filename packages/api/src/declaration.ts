@@ -128,7 +128,11 @@ export const DispatchBody = Schema.Struct({
   /** `<owner>/<repo>`, the execution's tenant scope. */
   repository: Schema.NonEmptyString,
   ref: Schema.optionalKey(Schema.String),
-  sha: Schema.optionalKey(Schema.String),
+  sha: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/))),
+  /** The repo manifest entry's label; absent selects the entry with no label. */
+  label: Schema.optionalKey(
+    Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/)),
+  ),
   /** Decoded by the run's input schema at intake (FD-IFC-029). */
   inputs: Schema.Unknown,
   /** Passed to `resolveClass` as its `class` input (FD-IFC-033). */
@@ -228,6 +232,68 @@ export const OpenIdConfiguration = Schema.Struct({
 
 export const Health = Schema.Struct({ status: Schema.Literal("ok") });
 
+// --- Operability -----------------------------------------------------------------------------------------------------
+
+/** One executor of the fleet view: kind, heartbeat age, drain and quarantine flags, slots per class (FD-OPS-071). */
+export const FleetEntry = Schema.Struct({
+  executorId: Schema.String,
+  kind: Schema.String,
+  heartbeatAgeMs: Schema.NullOr(Schema.Number),
+  drain: Schema.Boolean,
+  quarantine: Schema.Boolean,
+  slots: Schema.Record(
+    Schema.String,
+    Schema.Struct({ inUse: Schema.Number, total: Schema.Number }),
+  ),
+});
+
+/** The spend view of MAMEKO-SPD-058, in micro-USD, as `GET /v1/spend` answers it (FD-SPD-057). */
+export const SpendViewBody = Schema.Struct({
+  month: Schema.String,
+  budget: Schema.Number,
+  settled: Schema.Number,
+  reserved: Schema.Number,
+  committed: Schema.Number,
+  classes: Schema.Array(
+    Schema.Struct({
+      class: Schema.String,
+      line: Schema.Number,
+      /** List micro-USD per hour; null for a class with no burn lane. */
+      lane: Schema.NullOr(Schema.Number),
+      admitted_list_rate: Schema.Number,
+      /** Null for the lowest-rank class, whose share is the floor `φ` rather than a reserve. */
+      reserve: Schema.NullOr(Schema.Number),
+    }),
+  ),
+  floor: Schema.Number,
+  measured_reserve_runway_days: Schema.NullOr(Schema.Number),
+  control_state: Schema.Literals(["run", "halt-cloud", "halt-all"]),
+  resets_at: Schema.Number,
+});
+export type SpendViewBody = typeof SpendViewBody.Type;
+
+/** One page-alarm episode of the window: raised at `raisedAt` (no earlier than the window start), resolved or not. */
+export const PageAlarmEpisode = Schema.Struct({
+  name: Schema.String,
+  dedupeKey: Schema.String,
+  raisedAt: Schema.Number,
+  resolvedAt: Schema.NullOr(Schema.Number),
+});
+export type PageAlarmEpisode = typeof PageAlarmEpisode.Type;
+
+/** What `GET /v1/ops/phase-gate?gate=<n>` answers and the `phase-gate` job's records file holds (FD-VER-028). */
+export const PhaseGateRecords = Schema.Struct({
+  gate: Schema.Number,
+  windowStart: Schema.Number,
+  windowEnd: Schema.Number,
+  measures: Schema.Array(
+    Schema.Struct({ name: Schema.String, holds: Schema.Boolean, detail: Schema.String }),
+  ),
+  pageAlarms: Schema.Array(PageAlarmEpisode),
+  killLines: Schema.Array(Schema.String),
+});
+export type PhaseGateRecords = typeof PhaseGateRecords.Type;
+
 // --- Groups ----------------------------------------------------------------------------------------------------------
 
 const errors = { error: ApiErrors };
@@ -325,9 +391,12 @@ export class WellKnownGroup extends HttpApiGroup.make("wellKnown")
   )
   .middleware(ErrorModel) {}
 
-/** A log as the route serves it: NDJSON, or plain text with `?format=text` (FD-CACHE-083). */
+/**
+ * A log as the route serves it: NDJSON, plain text with `?format=text` (FD-CACHE-083), or the HTML viewer with
+ * `?format=html` (FD-CACHE-084).
+ */
 const LogText = Schema.String.pipe(HttpApiSchema.asText({ contentType: "application/x-ndjson" }));
-const LogQuery = { format: Schema.optionalKey(Schema.Literal("text")) };
+const LogQuery = { format: Schema.optionalKey(Schema.Literals(["text", "html"])) };
 
 /**
  * The redacted step logs. The cache-artifacts area implements these handlers; the declaration holds their schemas so
@@ -350,11 +419,93 @@ export class LogsGroup extends HttpApiGroup.make("logs")
   )
   .middleware(ErrorModel) {}
 
+/** An artifact's body or a browse file, as stored, with the content type recorded at upload. */
+const ArtifactBody = Schema.Uint8Array.pipe(
+  HttpApiSchema.asUint8Array({ contentType: "application/octet-stream" }),
+);
+
+/** One artifact row as a listing shows it (FD-CACHE-078). */
+export const ArtifactEntry = Schema.Struct({
+  artifact_id: Schema.String,
+  name: Schema.String,
+  size: Schema.Number,
+  sha256: Schema.String,
+  content_type: Schema.String,
+  epoch: Schema.Number,
+  producer: Schema.Struct({ executor_id: Schema.String, executor_kind: Schema.String }),
+  expires_at: Schema.Number,
+  /** The artifact's URL, with a link token bound to that artifact while the deployment holds a link key (FD-CACHE-077). */
+  url: Schema.String,
+});
+
+export const ArtifactsPage = Schema.Struct({
+  artifacts: Schema.Array(ArtifactEntry),
+  /** The cursor of the next page; `null` on the last page. */
+  cursor: Schema.NullOr(Schema.String),
+});
+
+/**
+ * The stored artifacts. The cache-artifacts area implements these handlers; an artifact and its browse paths serve a
+ * link token for that artifact (FD-IFC-017).
+ */
+export class ArtifactsGroup extends HttpApiGroup.make("artifacts")
+  .add(
+    /** The artifact itself, or with a path below it one file of its browse expansion (FD-CACHE-073). */
+    HttpApiEndpoint.get("get", "/v1/artifacts/:artifact_id/*", {
+      params: { artifact_id: Schema.String, "*": Schema.optionalKey(Schema.String) },
+      success: ArtifactBody,
+      ...errors,
+    }),
+    HttpApiEndpoint.get("list", "/v1/executions/:id/artifacts", {
+      ...IdParam,
+      query: {
+        limit: Schema.optionalKey(Schema.NumberFromString.check(Schema.isInt())),
+        cursor: Schema.optionalKey(Schema.String),
+      },
+      success: ArtifactsPage,
+      ...errors,
+    }),
+  )
+  .middleware(ErrorModel) {}
+
+/** An HTML page a browser renders: the install form and the new App's credentials page. */
+const HtmlPage = Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/html" }));
+
+/**
+ * The operability routes beside the operator operations: the fleet view, the phase gate's records, the spend view and
+ * the GitHub App install flow. The operability area implements these handlers.
+ */
+export class OperabilityGroup extends HttpApiGroup.make("operability")
+  .add(
+    HttpApiEndpoint.get("fleet", "/v1/ops/fleet", {
+      success: Schema.Array(FleetEntry),
+      ...errors,
+    }),
+    HttpApiEndpoint.get("phaseGate", "/v1/ops/phase-gate", {
+      /** Gate n, a phase from 0 to 3. */
+      query: { gate: Schema.Literals(["0", "1", "2", "3"]) },
+      success: PhaseGateRecords,
+      ...errors,
+    }),
+    HttpApiEndpoint.get("spend", "/v1/spend", { success: SpendViewBody, ...errors }),
+    /** The form that posts the App manifest to GitHub with a new single-use state (FD-OPS-073). */
+    HttpApiEndpoint.get("installNew", "/v1/github/install/new", { success: HtmlPage, ...errors }),
+    /** The manifest conversion and the new App's credentials, `Cache-Control: no-store` (FD-OPS-074, FD-OPS-075). */
+    HttpApiEndpoint.get("installCallback", "/v1/github/install/callback", {
+      query: { state: Schema.optionalKey(Schema.String), code: Schema.optionalKey(Schema.String) },
+      success: HtmlPage,
+      ...errors,
+    }),
+  )
+  .middleware(ErrorModel) {}
+
 /** The declaration. Every route the dispatcher serves through the router is an endpoint of one of these groups. */
 export class FlareDispatchApi extends HttpApi.make("flare-dispatch")
   .add(DispatchGroup)
   .add(ExecutionsGroup)
   .add(OpsGroup)
+  .add(OperabilityGroup)
   .add(ExecutorsGroup)
   .add(WellKnownGroup)
-  .add(LogsGroup) {}
+  .add(LogsGroup)
+  .add(ArtifactsGroup) {}

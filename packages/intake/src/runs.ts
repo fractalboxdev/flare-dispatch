@@ -2,6 +2,7 @@
 // input schemas, its class and the FlareDispatch declarations beside
 // `defineRun`'s answer (specs/run-model.md § Run catalogue).
 import { Option, Schema } from "effect";
+import type { TriggerContext } from "./delivery.ts";
 import type { DispatchEvent } from "./event.ts";
 
 /** A run's `cooldown { seconds, scope }` (FD-INT-057). */
@@ -15,6 +16,8 @@ export interface Cooldown {
 export interface EntryView {
   readonly label: string | null;
   readonly params: unknown;
+  /** The manifest's `skipAuthors`; absent leaves each recipe's default (FD-GATE-017). */
+  readonly skipAuthors?: readonly string[];
 }
 
 export interface IntakeRun {
@@ -24,7 +27,11 @@ export interface IntakeRun {
   /** The run's input schema; a dispatch's inputs and a re-run's recorded inputs must pass it (FD-INT-040, FD-INT-055). */
   readonly input: Schema.Decoder<unknown>;
   /** The request decoder: the run's input for an event, or none when the run does not answer it. */
-  readonly trigger: (event: DispatchEvent, entry: EntryView) => Option.Option<unknown>;
+  readonly trigger: (
+    event: DispatchEvent,
+    entry: EntryView,
+    context: TriggerContext,
+  ) => Option.Option<unknown>;
   /** `limits.qosClass`, the class `resolveClass` starts from. */
   readonly defaultClass: string;
   /** `limits.qosCeiling`, the highest class `resolveClass` gives the run; absent caps at `required`. */
@@ -38,8 +45,8 @@ export interface IntakeRun {
   readonly gating: boolean;
   readonly retries: number;
   readonly cooldown?: Cooldown;
-  /** The run declares a grant in its `setup` or `agent` egress phase, which keeps it off a host-process device. */
-  readonly declaresGrant?: boolean;
+  /** The run's grants per egress phase; any grant keeps it off a host-process device (MAMEKO-LEASE-084). */
+  readonly grants?: { readonly setup: readonly string[]; readonly agent: readonly string[] };
   /**
    * The placement constraints and capability labels a request with these inputs declares, e.g. `cloud-pinned` for
    * `worker-deploy` and a publishing `sandbox-image` (FD-GATE-061, FD-GATE-080); none when absent.
@@ -48,6 +55,11 @@ export interface IntakeRun {
     readonly constraints: readonly string[];
     readonly labels: readonly string[];
   };
+  /**
+   * The serial group a request with these inputs joins, for a run that declares `serialize`: one `worker-deploy`
+   * target, `worker-deploy:<repo>@<branch>[:<label>]` (FD-GATE-063). Absent or null joins none (MAMEKO-ADM-068).
+   */
+  readonly serialKey?: (inputs: unknown) => string | null;
 }
 
 /** The run catalogue: a run by name, or undefined when the deployment serves no such run. */

@@ -13,6 +13,8 @@ export const OPERATOR = "operator@example.com";
 export interface AccessTeam {
   readonly teamDomain: string;
   readonly jwt: (email: string) => Promise<string>;
+  /** A token signed by the team's key with the identity's claims overridden: another `aud` or `iss`, say. */
+  readonly jwtWith: (email: string, claims: Readonly<Record<string, unknown>>) => Promise<string>;
   readonly close: () => Promise<void>;
 }
 
@@ -30,12 +32,14 @@ export const startAccessTeam = async (): Promise<AccessTeam> => {
   const address = server.address();
   const port = typeof address === "object" && address !== null ? address.port : 0;
   const teamDomain = `http://127.0.0.1:${port}`;
+  const jwtWith = (email: string, claims: Readonly<Record<string, unknown>>) => {
+    const now = Math.floor(Date.now() / 1000);
+    return signer.sign({ iss: teamDomain, aud: [AUD], email, iat: now, exp: now + 600, ...claims });
+  };
   return {
     teamDomain,
-    jwt: (email) => {
-      const now = Math.floor(Date.now() / 1000);
-      return signer.sign({ iss: teamDomain, aud: [AUD], email, iat: now, exp: now + 600 });
-    },
+    jwt: (email) => jwtWith(email, {}),
+    jwtWith,
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };
 };
@@ -61,7 +65,7 @@ export const newDevice = async () => {
   };
 };
 
-/** A device's registration; a host-process device advertises `isolation:none` (MAMEKO-LEASE-085). */
+/** A device's registration; a host-process device advertises `isolation:none` (MAMEKO-LEASE-086). */
 export const registration = (
   executorId: string,
   identity: unknown,
@@ -74,8 +78,13 @@ export const registration = (
   code_hash: null,
 });
 
-/** A device's signed upgrade: the connect signature `routeExecutorUpgrade` verifies. */
-export const connect = async (mf: Miniflare, executorId: string, keys: Keys) => {
+/** A device's signed upgrade: the connect signature `routeExecutorUpgrade` verifies, bound to `planeId`. */
+export const connect = async (
+  mf: Miniflare,
+  executorId: string,
+  keys: Keys,
+  planeId: string = PLANE,
+) => {
   const path = "/v1/executors/connect";
   const nonce = randomBytes(32).toString("hex");
   const at = Date.now();
@@ -83,7 +92,7 @@ export const connect = async (mf: Miniflare, executorId: string, keys: Keys) => 
     method: "GET",
     path,
     executorId,
-    planeId: PLANE,
+    planeId,
     connectAt: at,
     nonce,
   });
@@ -123,11 +132,11 @@ export const connect = async (mf: Miniflare, executorId: string, keys: Keys) => 
 };
 export type Socket = Awaited<ReturnType<typeof connect>>;
 
-export const hello = (executorId: string) => ({
+export const hello = (executorId: string, planeId: string = PLANE) => ({
   type: "session.hello",
   id: "h1",
   executor_id: executorId,
-  plane_id: PLANE,
+  plane_id: planeId,
   boot_id: "b",
   executor_version: "t",
   versions: { min: 1, max: 1 },

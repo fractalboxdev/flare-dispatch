@@ -8,7 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./ledger-object": "./src/ledger-object.ts",
-    "./device": "./src/device/index.ts"
+    "./device": "./src/device/index.ts",
+    "./oidc": "./src/oidc.ts"
   },
   "scripts": {
     "test": "vitest run"

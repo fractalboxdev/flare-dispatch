@@ -1,5 +1,6 @@
-# The dispatch action's test suite on every pull request that changes the action, the `fd` package it runs from or the
-# HTTP API declaration its client derives from (FD-IFC-062).
+# The dispatch action's test suite on every pull request that changes a file the action runs: the action, the `fd`
+# package it runs from, the HTTP API declaration its client derives from with that package's manifest, and the lockfile
+# its install step reads (FD-IFC-062).
 name: fd-action
 on:
   pull_request:
@@ -9,6 +10,8 @@ on:
       - "packages/api/src/errors.ts"
       - "packages/api/src/request-id.ts"
       - "packages/api/src/mcp/**"
+      - "packages/api/package.json"
+      - "pnpm-lock.yaml"
       - ".github/workflows/fd-action.yml"
 jobs:
   test:

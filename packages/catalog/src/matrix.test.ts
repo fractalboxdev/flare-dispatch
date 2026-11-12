@@ -61,19 +61,19 @@ const runWith = (script: ChildScript, entry: MatrixEntry, over: Partial<OffloadT
 const jobs = (...list: MatrixJob[]) => ({ jobs: list });
 
 describe("offload-test", () => {
-  it("FD-GATE-025 runs a single command as the job test", async () => {
+  it("[FD-GATE-025] runs a single command as the job test", async () => {
     const { outcome, children } = await runWith(ok, { command: "pnpm test" });
     expect(outcome).toEqual({ _tag: "success" });
     expect(children.started.map((s) => s.key)).toEqual(["test"]);
   });
 
-  it("FD-GATE-026 refuses an entry with no command and starts no job", async () => {
+  it("[FD-GATE-026] refuses an entry with no command and starts no job", async () => {
     const { outcome, children } = await runWith(ok, {});
     expect(outcome).toEqual({ _tag: "failure", reason: "config: no command" });
     expect(children.started).toEqual([]);
   });
 
-  it("FD-GATE-027 gives every job the entry's install command", async () => {
+  it("[FD-GATE-027] gives every job the entry's install command", async () => {
     const { children } = await runWith(ok, {
       install: "pnpm i",
       ...jobs({ key: "a", command: "x" }),
@@ -81,7 +81,7 @@ describe("offload-test", () => {
     expect(children.started[0]!.input).toMatchObject({ install: "pnpm i", command: "x" });
   });
 
-  it("FD-GATE-017 skips a draft pull request without starting a job", async () => {
+  it("[FD-GATE-017] skips a draft pull request without starting a job", async () => {
     const { outcome, children } = await runWith(
       ok,
       { command: "t" },
@@ -95,7 +95,7 @@ describe("offload-test", () => {
 });
 
 describe("job matrix expansion", () => {
-  it("FD-GATE-029 refuses 0 jobs and more than 64", () => {
+  it("[FD-GATE-029] refuses 0 jobs and more than 64", () => {
     expect(expandMatrix([], "other")).toEqual({ failure: Outcome.failure("config: matrix size") });
     expect(
       expandMatrix(
@@ -110,7 +110,7 @@ describe("job matrix expansion", () => {
     });
   });
 
-  it("FD-GATE-032 refuses a bad or duplicate job key", () => {
+  it("[FD-GATE-032] refuses a bad or duplicate job key", () => {
     for (const list of [
       [{ key: "-x", command: "c" }],
       [
@@ -121,7 +121,7 @@ describe("job matrix expansion", () => {
       expect(expandMatrix(list, "other")).toEqual({ failure: Outcome.failure("config: job key") });
   });
 
-  it("FD-GATE-034 expands shards into <key>-<i> with FD_SHARD_INDEX and FD_SHARD_TOTAL", () => {
+  it("[FD-GATE-034] expands shards into <key>-<i> with FD_SHARD_INDEX and FD_SHARD_TOTAL", () => {
     const result = expandMatrix([{ key: "e2e", command: "c", shards: 3 }], "other");
     if (!("jobs" in result)) throw new Error("expected jobs");
     expect(result.jobs.map((j) => [j.key, j.env])).toEqual([
@@ -134,7 +134,7 @@ describe("job matrix expansion", () => {
     });
   });
 
-  it("FD-GATE-037 refuses a needs cycle or an unknown needs key", () => {
+  it("[FD-GATE-037] refuses a needs cycle or an unknown needs key", () => {
     expect(
       expandMatrix(
         [
@@ -149,7 +149,7 @@ describe("job matrix expansion", () => {
     });
   });
 
-  it("FD-GATE-052 keeps heavy jobs off pull_request and merge_group triggers", () => {
+  it("[FD-GATE-052] keeps heavy jobs off pull_request and merge_group triggers", () => {
     const list: MatrixJob[] = [
       { key: "unit", command: "c" },
       { key: "soak", command: "c", heavy: true },
@@ -163,13 +163,13 @@ describe("job matrix expansion", () => {
     expect("jobs" in push && push.jobs.map((j) => j.key)).toEqual(["unit", "soak", "after-soak"]);
   });
 
-  it("FD-GATE-031 derives each job's dedup key from the parent's", () => {
+  it("[FD-GATE-031] derives each job's dedup key from the parent's", () => {
     expect(childDedupKey("offload-test:o/r:abc", "e2e-2")).toBe("offload-test:o/r:abc/e2e-2");
   });
 });
 
 describe("job matrix run", () => {
-  it("FD-GATE-030 and FD-GATE-031 start each job as its own child with a derived dedup key", async () => {
+  it("[FD-GATE-030] and [FD-GATE-031] start each job as its own child with a derived dedup key", async () => {
     const { children } = await runWith(
       ok,
       jobs({ key: "a", command: "x" }, { key: "b", command: "y" }),
@@ -180,7 +180,7 @@ describe("job matrix run", () => {
     ]);
   });
 
-  it("FD-GATE-033 starts no more than window jobs at once, 10 by default", async () => {
+  it("[FD-GATE-033] starts no more than window jobs at once, 10 by default", async () => {
     const slow: ChildScript = () => ({
       verdict: { _tag: "Recorded", outcome: Outcome.success() },
       afterMs: 5,
@@ -193,7 +193,7 @@ describe("job matrix run", () => {
     );
   });
 
-  it("FD-GATE-035 and FD-GATE-036 start a job only after its needs succeed, else record it not started", async () => {
+  it("[FD-GATE-035] and [FD-GATE-036] start a job only after its needs succeed, else record it not started", async () => {
     const entry = jobs(
       { key: "typecheck", command: "x" },
       { key: "e2e", command: "y", shards: 2, needs: ["typecheck"] },
@@ -205,7 +205,7 @@ describe("job matrix run", () => {
     expect(failed.outcome).toEqual(Outcome.failure("jobs: typecheck, e2e-1, e2e-2"));
   });
 
-  it("FD-GATE-038 succeeds only if every job succeeded or skipped and one succeeded", () => {
+  it("[FD-GATE-038] succeeds only if every job succeeded or skipped and one succeeded", () => {
     const states = new Map<string, JobState>([
       ["a", { _tag: "Done", outcome: Outcome.success() }],
       ["b", { _tag: "Done", outcome: Outcome.skipped("nothing-to-lint") }],
@@ -213,14 +213,14 @@ describe("job matrix run", () => {
     expect(aggregate(["a", "b"], states)).toEqual(Outcome.success());
   });
 
-  it("FD-GATE-039 skips when every job skipped", () => {
+  it("[FD-GATE-039] skips when every job skipped", () => {
     const states = new Map<string, JobState>([
       ["a", { _tag: "Done", outcome: Outcome.skipped("nothing-to-lint") }],
     ]);
     expect(aggregate(["a"], states)).toEqual(Outcome.skipped("every-job-skipped"));
   });
 
-  it("FD-GATE-040 lists the first 25 failed or not-started keys in expansion order", () => {
+  it("[FD-GATE-040] lists the first 25 failed or not-started keys in expansion order", () => {
     const order = Array.from({ length: 30 }, (_, i) => `k${i}`);
     const states = new Map<string, JobState>(
       order.map((k) => [k, { _tag: "Done", outcome: Outcome.failure("exit: 1") }]),
@@ -230,13 +230,13 @@ describe("job matrix run", () => {
     );
   });
 
-  it("FD-GATE-041 counts a job with no verdict as infra: no verdict", async () => {
+  it("[FD-GATE-041] counts a job with no verdict as infra: no verdict", async () => {
     const none: ChildScript = () => ({ verdict: { _tag: "NoVerdict" } });
     const { outcome } = await runWith(none, jobs({ key: "a", command: "x" }));
     expect(outcome).toEqual(Outcome.failure("jobs: a"));
   });
 
-  it("FD-GATE-004 has no field that maps a failed job or shard to success", async () => {
+  it("[FD-GATE-004] has no field that maps a failed job or shard to success", async () => {
     const entry = {
       jobs: [{ key: "e2e", command: "x", shards: 4 }],
       failFast: false,
@@ -246,7 +246,7 @@ describe("job matrix run", () => {
     expect(outcome).toEqual(Outcome.failure("jobs: e2e-3"));
   });
 
-  it("FD-GATE-042 cancels every placed or running job when the parent is cancelled", async () => {
+  it("[FD-GATE-042] cancels every placed or running job when the parent is cancelled", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const hang: ChildScript = () => ({
@@ -269,14 +269,14 @@ describe("job matrix run", () => {
     expect(result.cancelled.sort()).toEqual(["s-1", "s-2"]);
   });
 
-  it("FD-GATE-043 starts no further job after a failure under failFast", async () => {
+  it("[FD-GATE-043] starts no further job after a failure under failFast", async () => {
     const entry = { jobs: [{ key: "s", command: "x", shards: 6 }], window: 1, failFast: true };
     const { children, outcome } = await runWith(failing(["s-2"]), entry);
     expect(children.started.map((s) => s.key)).toEqual(["s-1", "s-2"]);
     expect(outcome).toEqual(Outcome.failure("jobs: s-2, s-3, s-4, s-5, s-6"));
   });
 
-  it("FD-GATE-044 starts no further job after a budget, capacity or halt failure", async () => {
+  it("[FD-GATE-044] starts no further job after a budget, capacity or halt failure", async () => {
     for (const reason of [
       "budget: required reserve exhausted",
       "capacity: queue full",
@@ -288,13 +288,13 @@ describe("job matrix run", () => {
     }
   });
 
-  it("FD-GATE-045 runs the parent with no GateExec in its context", async () => {
-    // `runWith` provides only MatrixChildren, GateIntents and GithubRead; a sandbox call would fail to resolve.
+  it("[FD-GATE-045] runs the parent with no GateExec in its context", async () => {
+    // `runWith` provides only MatrixChildren, Intents and GithubRead; a sandbox call would fail to resolve.
     const { outcome } = await runWith(ok, { command: "x" });
     expect(outcome).toEqual(Outcome.success());
   });
 
-  it("FD-GATE-046 names each job check flare-dispatch/<run>:<job key> under checkPerJob", async () => {
+  it("[FD-GATE-046] names each job check flare-dispatch/<run>:<job key> under checkPerJob", async () => {
     const { children } = await runWith(ok, {
       ...jobs({ key: "a", command: "x" }),
       checkPerJob: true,
@@ -304,7 +304,7 @@ describe("job matrix run", () => {
     expect(without.children.started[0]!.checkName).toBeUndefined();
   });
 
-  it("FD-GATE-047 concludes each open job check with its outcome, or failure when it has none", () => {
+  it("[FD-GATE-047] concludes each open job check with its outcome, or failure when it has none", () => {
     const states = new Map<string, JobState>([
       ["a", { _tag: "Done", outcome: Outcome.success() }],
       ["b", { _tag: "NotStarted", reason: "needs: a" }],
@@ -329,7 +329,7 @@ describe("job matrix run", () => {
     ]);
   });
 
-  it("FD-GATE-052 runs a heavy job at class interactive on a default-branch push", async () => {
+  it("[FD-GATE-052] runs a heavy job at class interactive on a default-branch push", async () => {
     const { children } = await runWith(
       ok,
       jobs({ key: "unit", command: "x" }, { key: "soak", command: "y", heavy: true }),
@@ -341,7 +341,7 @@ describe("job matrix run", () => {
     ]);
   });
 
-  it("FD-GATE-053 runs a warm job at batch in the protected tier, with no check, superseded by the next head", () => {
+  it("[FD-GATE-053] runs a warm job at batch in the protected tier, with no check, superseded by the next head", () => {
     expect(
       warmRequest(
         { key: "warm", command: "pnpm build" },
@@ -374,7 +374,7 @@ describe("discovered matrices", () => {
       }),
     );
 
-  it("FD-GATE-048 runs discovery on the head and the base commit with a 600 s job timeout", async () => {
+  it("[FD-GATE-048] runs discovery on the head and the base commit with a 600 s job timeout", async () => {
     const { children } = await discoverRun(() => ({
       _tag: "Exited",
       code: 0,
@@ -392,7 +392,7 @@ describe("discovered matrices", () => {
     ]);
   });
 
-  it("FD-GATE-049 takes the union of the head's and the base's jobs", async () => {
+  it("[FD-GATE-049] takes the union of the head's and the base's jobs", async () => {
     const { children } = await discoverRun((r) => ({
       _tag: "Exited",
       code: 0,
@@ -407,7 +407,7 @@ describe("discovered matrices", () => {
     ]);
   });
 
-  it("FD-GATE-050 records discover: exit <code> and starts no job", async () => {
+  it("[FD-GATE-050] records discover: exit <code> and starts no job", async () => {
     const { outcome, children } = await discoverRun((r) =>
       r.key === "discover-base"
         ? { _tag: "Exited", code: 2, output: "" }
@@ -417,7 +417,7 @@ describe("discovered matrices", () => {
     expect(children.started).toEqual([]);
   });
 
-  it("FD-GATE-051 refuses an oversized, malformed or too-long discovery output", async () => {
+  it("[FD-GATE-051] refuses an oversized, malformed or too-long discovery output", async () => {
     const outputs = [
       "x".repeat(4097),
       "{}",
@@ -467,33 +467,33 @@ describe("release matrices", () => {
       }),
     );
 
-  it("FD-GATE-054 verifies the tag's commit is on the default branch before any job", async () => {
+  it("[FD-GATE-054] verifies the tag's commit is on the default branch before any job", async () => {
     const { github, outcome } = await release({});
     expect(github.reads[0]).toBe(`reachable ${SHA} main`);
     expect(outcome).toEqual(Outcome.success());
   });
 
-  it("FD-GATE-055 refuses a tag not on the default branch and starts no job", async () => {
+  it("[FD-GATE-055] refuses a tag not on the default branch and starts no job", async () => {
     const { outcome, children, intents } = await release({ reachable: false });
     expect(outcome).toEqual(Outcome.failure("release: tag not on default branch"));
     expect(children.started).toEqual([]);
     expect(intents.emitted).toEqual([]);
   });
 
-  it("FD-GATE-056 and FD-GATE-057 emit release.draft before the first job and release.publish after every success", async () => {
+  it("[FD-GATE-056] and [FD-GATE-057] emit release.draft before the first job and release.publish after every success", async () => {
     const { intents } = await release({});
     expect(intents.emitted.map((i) => i.kind)).toEqual(["release.draft", "release.publish"]);
     const failed = await release({ script: failing(["build"]) });
     expect(failed.intents.emitted.map((i) => i.kind)).toEqual(["release.draft"]);
   });
 
-  it("FD-GATE-058 records release: tag moved when the tag points elsewhere before publish", async () => {
+  it("[FD-GATE-058] records release: tag moved when the tag points elsewhere before publish", async () => {
     const { outcome, intents } = await release({ tag: OTHER_SHA });
     expect(outcome).toEqual(Outcome.failure("release: tag moved"));
     expect(intents.emitted.map((i) => i.kind)).toEqual(["release.draft"]);
   });
 
-  it("FD-GATE-059 runs every job of a dry-run tag and emits no release intent", async () => {
+  it("[FD-GATE-059] runs every job of a dry-run tag and emits no release intent", async () => {
     const { outcome, intents, children } = await release({ ref: "refs/tags/dry-run/v1.2.3" });
     expect(outcome).toEqual(Outcome.success());
     expect(children.started.map((s) => s.key)).toEqual(["build"]);
@@ -501,7 +501,7 @@ describe("release matrices", () => {
     expect(releaseRefOf("refs/tags/v1.2")).toEqual({ _tag: "NotRelease" });
   });
 
-  it("FD-GATE-060 restarts a release job after an infrastructure error up to retries, never after an exit", async () => {
+  it("[FD-GATE-060] restarts a release job after an infrastructure error up to retries, never after an exit", async () => {
     const infra: ChildScript = (_r, attempt) => ({
       verdict: {
         _tag: "Recorded",

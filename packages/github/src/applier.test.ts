@@ -3,7 +3,18 @@ import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { ANNOTATION_BATCH, CheckRunApplierLive } from "./applier.ts";
 import { GithubHttpError, GithubNetworkError } from "./client.ts";
-import { OUTPUT_LIMIT } from "./conclusion.ts";
+import {
+  conclusionFactsOf,
+  type ConclusionFacts,
+  type ExecutionRecordFacts,
+} from "./conclude-facts.ts";
+import {
+  checkConclusion,
+  OUTPUT_LIMIT,
+  PARENT_CLOSED,
+  verdictOf,
+  type Verdict,
+} from "./conclusion.ts";
 import { fakeGithub, fakeLayers, row, type FakeGithub } from "./fake.test-support.ts";
 
 const ref = {
@@ -41,7 +52,7 @@ const opened = async () => {
 };
 
 describe("check.open", () => {
-  it("FD-GH-005 FD-GH-009 creates the check run queued on the head SHA with external_id = execution id", async () => {
+  it("[FD-GH-005] [FD-GH-009] creates the check run queued on the head SHA with external_id = execution id", async () => {
     const gh = fakeGithub();
     expect(await apply(gh, row("check.open", ref))).toEqual({
       _tag: "applied",
@@ -50,7 +61,7 @@ describe("check.open", () => {
     expect(gh.runs).toMatchObject([{ name: ref.name, external_id: "exec-1", status: "queued" }]);
   });
 
-  it("FD-GH-010 MAMEKO-OUT-024 lookup adopts the check run an earlier attempt created", async () => {
+  it("[FD-GH-010] MAMEKO-OUT-024 lookup adopts the check run an earlier attempt created", async () => {
     const gh = await opened();
     expect(await lookup(gh, row("check.open", ref))).toEqual({
       _tag: "found",
@@ -58,7 +69,7 @@ describe("check.open", () => {
     });
   });
 
-  it("FD-GH-010 a repeated apply finds the existing check run instead of creating a second", async () => {
+  it("[FD-GH-010] a repeated apply finds the existing check run instead of creating a second", async () => {
     const gh = await opened();
     expect(await apply(gh, row("check.open", ref))).toEqual({
       _tag: "applied",
@@ -68,7 +79,7 @@ describe("check.open", () => {
     expect(gh.calls).toEqual(["list"]);
   });
 
-  it("FD-GH-010 every apply searches by external_id before it creates", async () => {
+  it("[FD-GH-010] every apply searches by external_id before it creates", async () => {
     const gh = fakeGithub();
     await apply(gh, row("check.open", ref));
     expect(gh.calls).toEqual(["list", "create"]);
@@ -119,7 +130,7 @@ describe("check.start and check.progress", () => {
   const start = { ...ref, epoch: 2, executor_kind: "device", attempt: 1 };
   const progress = { ...ref, class: "interactive", bucket: "2–5", deadline_at: 0 } as const;
 
-  it("FD-GH-011 check.start sets in_progress and names the executor kind and the epoch", async () => {
+  it("[FD-GH-011] check.start sets in_progress and names the executor kind and the epoch", async () => {
     const gh = await opened();
     expect(await apply(gh, row("check.start", start))).toEqual({
       _tag: "applied",
@@ -138,7 +149,7 @@ describe("check.start and check.progress", () => {
     });
   });
 
-  it("FD-GH-012 check.progress states the class, the queue-position bucket and the deadline", async () => {
+  it("[FD-GH-012] check.progress states the class, the queue-position bucket and the deadline", async () => {
     const gh = await opened();
     await apply(gh, row("check.progress", progress));
     expect(gh.runs[0]?.output.title).toBe("Queued: position 2–5");
@@ -169,7 +180,7 @@ describe("check.conclude", () => {
   const conclude = (verdict: unknown, attempt = 1, extra: object = {}) =>
     row("check.conclude", { ...ref, verdict, attempt, details: { ...details, ...extra } });
 
-  it("FD-GH-014 FD-GH-023 concludes with the conclusion and the reason in the title", async () => {
+  it("[FD-GH-014] [FD-GH-023] concludes with the conclusion and the reason in the title", async () => {
     const gh = await opened();
     await apply(
       gh,
@@ -186,7 +197,7 @@ describe("check.conclude", () => {
     });
   });
 
-  it("FD-GH-052 creates the check run completed when no check.open was applied", async () => {
+  it("[FD-GH-052] creates the check run completed when no check.open was applied", async () => {
     const gh = fakeGithub();
     expect((await apply(gh, conclude({ _tag: "cancelled", cause: "pr-closed" })))._tag).toBe(
       "applied",
@@ -196,13 +207,13 @@ describe("check.conclude", () => {
     ]);
   });
 
-  it("FD-GH-008 appends the attempt to the title only after the first attempt", async () => {
+  it("[FD-GH-008] appends the attempt to the title only after the first attempt", async () => {
     const gh = await opened();
     await apply(gh, conclude({ _tag: "success" }, 3));
     expect(gh.runs[0]?.output.title).toBe("success (attempt 3)");
   });
 
-  it("FD-GH-015 FD-GH-016 the summary leads with the failing step, then class, executor, queue age, cost and reason", async () => {
+  it("[FD-GH-015] [FD-GH-016] the summary leads with the failing step, then class, executor, queue age, cost and reason", async () => {
     const gh = await opened();
     await apply(
       gh,
@@ -222,7 +233,7 @@ describe("check.conclude", () => {
     expect(lines.at(-1)).toBe("run notes");
   });
 
-  it("FD-GH-017 cuts a long summary to 65535 characters ending in a log-viewer link", async () => {
+  it("[FD-GH-017] cuts a long summary to 65535 characters ending in a log-viewer link", async () => {
     const gh = await opened();
     await apply(gh, conclude({ _tag: "success" }, 1, { markdown: "x".repeat(70_000) }));
     const summary = gh.runs[0]?.output.summary ?? "";
@@ -237,6 +248,229 @@ describe("check.conclude", () => {
       _tag: "found",
       externalRef: "1000",
     });
+  });
+});
+
+describe("check.conclude from mameko's outcome row", () => {
+  const LOG = "https://fd.example.com/v1/executions/exec-1/logs?t=token";
+  const facts = (overrides: Partial<ConclusionFacts> = {}): ConclusionFacts => ({
+    name: ref.name,
+    headSha: ref.head_sha,
+    attempt: 1,
+    detailsUrl: LOG,
+    details,
+    recorded: null,
+    ...overrides,
+  });
+  const withFacts = (overrides: Partial<ConclusionFacts> = {}, id = "exec-1") => {
+    const gh = fakeGithub();
+    gh.facts.set(id, facts(overrides));
+    return gh;
+  };
+  /** The row mameko's terminal write inserts: intent key `outcome`, payload `{ outcome }`. */
+  const outcomeRow = (outcome: unknown, overrides: Partial<IntentRow> = {}) =>
+    row("check.conclude", { outcome }, { intentKey: "outcome", ...overrides });
+
+  it("[FD-GH-014] concludes each outcome with the conclusion checkConclusion returns for verdictOf(outcome)", async () => {
+    const outcomes = [
+      { _tag: "Success", epoch: 1 },
+      { _tag: "Failure", reason: "lint: 3 errors", epoch: 1 },
+      { _tag: "Failure", reason: "capacity: no executor", epoch: null },
+      { _tag: "Cancelled", cause: "superseded" },
+      { _tag: "Skipped", detail: "draft-pr", epoch: 1 },
+      { _tag: "Deferred" },
+      { _tag: "Expired" },
+    ] as const;
+    for (const outcome of outcomes) {
+      const gh = withFacts({ recorded: verdictOf(outcome) });
+      expect(await apply(gh, outcomeRow(outcome))).toEqual({
+        _tag: "applied",
+        externalRef: "1000",
+      });
+      const expected = checkConclusion(verdictOf(outcome));
+      expect(gh.runs).toMatchObject([
+        {
+          name: ref.name,
+          external_id: "exec-1",
+          status: "completed",
+          conclusion: expected.conclusion,
+          output: { title: expected.title },
+        },
+      ]);
+    }
+  });
+
+  it("[FD-GH-014] a lookup of the outcome row finds the conclusion already on the check run", async () => {
+    const gh = withFacts();
+    const r = outcomeRow({ _tag: "Failure", reason: "lint: 3 errors" });
+    expect(await lookup(gh, r)).toEqual({ _tag: "absent" });
+    await apply(gh, r);
+    expect(await lookup(gh, r)).toEqual({ _tag: "found", externalRef: "1000" });
+  });
+
+  it("[FD-GH-014] an outcome row of an execution with no record is refused; an unreadable record is retried", async () => {
+    const r = outcomeRow({ _tag: "Success" });
+    expect(await apply(fakeGithub(), r)).toEqual({
+      _tag: "refused",
+      reason: "conclude: no record of the execution",
+    });
+    const down = withFacts();
+    down.factsDown = true;
+    expect(await apply(down, r)).toEqual({ _tag: "retryable", reason: "records: D1 unavailable" });
+    expect(await lookup(down, r)).toEqual({
+      _tag: "undetermined",
+      reason: "records: D1 unavailable",
+    });
+    expect(down.calls).toEqual([]);
+  });
+
+  it("[FD-GH-008] every attempt concludes under the family's one name; only a later attempt's title names it", async () => {
+    const gh = fakeGithub();
+    gh.facts.set("exec-1", facts({ attempt: 1 }));
+    gh.facts.set("exec-2", facts({ attempt: 2 }));
+    await apply(gh, outcomeRow({ _tag: "Failure", reason: "lint: 3 errors" }));
+    await apply(gh, outcomeRow({ _tag: "Success" }, { executionId: "exec-2" }));
+    expect(gh.runs.map((r) => [r.name, r.external_id, r.output.title])).toEqual([
+      [ref.name, "exec-1", "lint: 3 errors"],
+      [ref.name, "exec-2", "success (attempt 2)"],
+    ]);
+  });
+
+  it("[FD-GH-013] sets the details URL to the execution's tokened log link when it creates or concludes the check run", async () => {
+    const created = withFacts();
+    await apply(created, outcomeRow({ _tag: "Success" }));
+    expect(created.detailsUrls.get(1000)).toBe(LOG);
+
+    const updated = withFacts();
+    await apply(updated, row("check.open", { name: ref.name, head_sha: ref.head_sha }));
+    expect(updated.detailsUrls.get(1000)).toBeUndefined();
+    await apply(updated, outcomeRow({ _tag: "Success" }));
+    expect(updated.detailsUrls.get(1000)).toBe(LOG);
+  });
+
+  it("[FD-GH-015] the summary states the execution's class, executor, placement, queue age, costs and reason", async () => {
+    const record: ExecutionRecordFacts = {
+      name: ref.name,
+      headSha: ref.head_sha,
+      attempt: 1,
+      className: "required",
+      status: "failure",
+      reason: "lint: 3 errors",
+      enqueuedAt: 1_000,
+      finishedAt: 90_000,
+      placement: {
+        admittedAt: 1_000,
+        claimLatencyMs: 4_000,
+        leasedKind: "cloudflare",
+        acceptedKind: "cloudflare",
+        cloudWon: true,
+      },
+      reservation: { holdMicroUsd: 20_000, state: "settled", meteredMicroUsd: 12_000 },
+    };
+    const gh = fakeGithub();
+    gh.facts.set("exec-1", conclusionFactsOf(record, LOG));
+    await apply(gh, outcomeRow({ _tag: "Failure", reason: "lint: 3 errors" }));
+    const lines = gh.runs[0]?.output.summary?.split("\n") ?? [];
+    expect(lines).toEqual([
+      "- Class: required",
+      "- Executor: cloudflare (cloud entry won)",
+      "- Queue age: 4 s",
+      "- Cost: reserved 0.020000 USD, settled 0.012000 USD",
+      "- Reason: lint: 3 errors",
+    ]);
+  });
+
+  it("[FD-GH-015] an execution concluded before any lease states no executor and its whole wait", async () => {
+    const base: ExecutionRecordFacts = {
+      name: ref.name,
+      headSha: ref.head_sha,
+      attempt: 1,
+      className: "batch",
+      status: "deferred",
+      reason: null,
+      enqueuedAt: 1_000,
+      finishedAt: 61_000,
+      placement: null,
+      reservation: null,
+    };
+    expect(conclusionFactsOf(base, undefined).details).toMatchObject({
+      executor_kind: null,
+      placement_reason: "not placed",
+      queue_age_ms: 60_000,
+      reserved_micro_usd: 0,
+      settled_micro_usd: 0,
+    });
+    const queued = {
+      ...base,
+      placement: {
+        admittedAt: 11_000,
+        claimLatencyMs: null,
+        leasedKind: null,
+        acceptedKind: null,
+        cloudWon: null,
+      },
+      reservation: { holdMicroUsd: 5_000, state: "held", meteredMicroUsd: null },
+    };
+    expect(conclusionFactsOf(queued, undefined).details).toMatchObject({
+      placement_reason: "no lease granted",
+      queue_age_ms: 50_000,
+      reserved_micro_usd: 5_000,
+      settled_micro_usd: 0,
+    });
+  });
+
+  it("[FD-GH-031] a neutral conclusion over an execution that records another outcome pages neutral-invariant", async () => {
+    const skip = { _tag: "Skipped", detail: "draft-pr", epoch: 1 } as const;
+    const holds = withFacts({ recorded: verdictOf(skip) });
+    await apply(holds, outcomeRow(skip));
+    expect(holds.runs[0]?.conclusion).toBe("neutral");
+    expect(holds.alarms).toEqual([]);
+
+    const broken = withFacts({
+      recorded: { _tag: "failure", category: "capacity", reason: "capacity: model unavailable" },
+    });
+    await apply(broken, outcomeRow(skip));
+    expect(broken.runs[0]?.conclusion).toBe("neutral");
+    expect(broken.alarms.map((a) => [a.name, a.severity, a.dedupeKey])).toEqual([
+      ["neutral-invariant", "page", "neutral-invariant:exec-1"],
+    ]);
+  });
+
+  it("[FD-GH-020] a child's cp:check:conclude row concludes with its verdict under the execution's own name", async () => {
+    const failed: Verdict = { _tag: "failure", category: "infra", reason: "lint: 3 errors" };
+    for (const verdict of [{ _tag: "success" } as const, failed, PARENT_CLOSED]) {
+      const gh = withFacts({ name: "flare-dispatch/offload-test:j1" });
+      const r = row("check.conclude", { verdict }, { intentKey: "cp:check:conclude" });
+      expect(await apply(gh, r)).toEqual({ _tag: "applied", externalRef: "1000" });
+      const expected = checkConclusion(verdict);
+      expect(gh.runs).toMatchObject([
+        {
+          name: "flare-dispatch/offload-test:j1",
+          external_id: "exec-1",
+          status: "completed",
+          conclusion: expected.conclusion,
+          output: { title: expected.title },
+        },
+      ]);
+    }
+  });
+
+  it("[FD-GH-020] the parent-ended cascade's outcome row concludes parent closed, not cancelled; another cancel stays cancelled", async () => {
+    const cascade = withFacts({ recorded: { _tag: "cancelled", cause: "parent-ended" } });
+    await apply(cascade, outcomeRow({ _tag: "Cancelled", cause: "parent-ended" }));
+    expect(cascade.runs).toMatchObject([
+      {
+        status: "completed",
+        conclusion: "failure",
+        output: { title: "parent closed before this part settled" },
+      },
+    ]);
+
+    const superseded = withFacts();
+    await apply(superseded, outcomeRow({ _tag: "Cancelled", cause: "superseded" }));
+    expect(superseded.runs).toMatchObject([
+      { conclusion: "cancelled", output: { title: "superseded" } },
+    ]);
   });
 });
 
@@ -262,14 +496,14 @@ describe("check.summary and check.annotations", () => {
     expect(gh.runs[0]?.output).toEqual({ title: "Review", summary: "looks fine" });
   });
 
-  it("FD-GH-018 sends annotations in batches of at most 50", async () => {
+  it("[FD-GH-018] sends annotations in batches of at most 50", async () => {
     const gh = await opened();
     await apply(gh, annotations(120));
     expect(gh.calls.filter((c) => c === "update")).toHaveLength(Math.ceil(120 / ANNOTATION_BATCH));
     expect(gh.annotations.get(1000)).toHaveLength(120);
   });
 
-  it("FD-GH-018 a repeat reads annotations back and sends only the missing ones", async () => {
+  it("[FD-GH-018] a repeat reads annotations back and sends only the missing ones", async () => {
     const gh = await opened();
     // list, read-back, two batches, then the third batch loses its answer.
     gh.failures.push(
@@ -293,7 +527,7 @@ describe("answers", () => {
   const http = (status: number, rateLimited = false) =>
     new GithubHttpError({ status, message: "m", rateLimited });
 
-  it("FD-GH-045 MAMEKO-OUT-017 404 and 422 are refused", async () => {
+  it("[FD-GH-045] MAMEKO-OUT-017 404 and 422 are refused", async () => {
     for (const status of [404, 422]) {
       const gh = fakeGithub();
       gh.failures.push(null, http(status));
@@ -301,7 +535,7 @@ describe("answers", () => {
     }
   });
 
-  it("FD-GH-046 MAMEKO-OUT-018 5xx, 429 and a secondary-rate-limit 403 are retryable; a plain 403 is refused", async () => {
+  it("[FD-GH-046] MAMEKO-OUT-018 5xx, 429 and a secondary-rate-limit 403 are retryable; a plain 403 is refused", async () => {
     for (const e of [http(500), http(503), http(429, true), http(403, true)]) {
       const gh = fakeGithub();
       gh.failures.push(null, e);
@@ -321,14 +555,14 @@ describe("answers", () => {
     expect((await apply(unsent, open))._tag).toBe("retryable");
   });
 
-  it("FD-GH-047 a 401 mints a new token and retries once", async () => {
+  it("[FD-GH-047] a 401 mints a new token and retries once", async () => {
     const gh = fakeGithub();
     gh.failures.push(http(401));
     expect((await apply(gh, open))._tag).toBe("applied");
     expect(gh.tokenRefreshes).toBe(1);
   });
 
-  it("FD-GH-048 a second 401 is refused installation: unauthorized and raises installation-lost", async () => {
+  it("[FD-GH-048] a second 401 is refused installation: unauthorized and raises installation-lost", async () => {
     const gh = fakeGithub();
     gh.failures.push(http(401), null, http(401));
     expect(await apply(gh, open)).toEqual({
@@ -338,7 +572,7 @@ describe("answers", () => {
     expect(gh.alarms.map((a) => [a.name, a.severity])).toEqual([["installation-lost", "page"]]);
   });
 
-  it("FD-GH-004 no installation for the repository is refused installation: not found with a page", async () => {
+  it("[FD-GH-004] no installation for the repository is refused installation: not found with a page", async () => {
     const gh = fakeGithub();
     expect(await apply(gh, row("check.open", ref, { scopeId: "acme/other" }))).toEqual({
       _tag: "refused",

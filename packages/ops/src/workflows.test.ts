@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { ACCESS_BYPASS, accessApplications, bypassed } from "./access-application.ts";
@@ -19,6 +19,72 @@ const deploy = workflow("v2-deploy.yml");
 const ci = workflow("v2-ci.yml");
 const nightly = workflow("v2-nightly.yml");
 const stepIndex = (job: Job, match: (s: Step) => boolean) => (job.steps ?? []).findIndex(match);
+
+/** A GitHub Actions path filter or a vitest glob as a regular expression over a repo-relative path. */
+const GLOB_TOKENS: Record<string, string> = {
+  "**/": "(?:.*/)?",
+  "**": ".*",
+  "*": "[^/]*",
+  "?": "[^/]",
+};
+const globRegExp = (glob: string) =>
+  new RegExp(
+    `^${glob
+      .split(/(\*\*\/|\*\*|\*|\?)/)
+      .map((part) => GLOB_TOKENS[part] ?? part.replace(/[.+^${}()|[\]\\]/g, "\\$&"))
+      .join("")}$`,
+  );
+const matchesAny = (globs: readonly string[], path: string) =>
+  globs.some((g) => globRegExp(g).test(path));
+
+type PackageJson = {
+  name: string;
+  exports?: Record<string, string>;
+  scripts?: Record<string, string>;
+};
+const readJson = (path: string) =>
+  JSON.parse(readFileSync(join(ROOT, path), "utf8")) as PackageJson;
+const workspacePackages = new Map(
+  readdirSync(join(ROOT, "packages"))
+    .filter((d) => existsSync(join(ROOT, "packages", d, "package.json")))
+    .map((d) => [readJson(`packages/${d}/package.json`).name, `packages/${d}`] as const),
+);
+
+/**
+ * Every repo file the dispatch action runs: its `action.yml`, the lockfile its install step reads, and the transitive
+ * closure of `main.ts` over relative and workspace-package imports, with each reached package's `package.json`.
+ */
+const dispatchActionFiles = () => {
+  const files = new Set(["packages/fd/action/action.yml", "pnpm-lock.yaml"]);
+  const queue = ["packages/fd/src/action/main.ts"];
+  const resolve = (from: string, spec: string): string | undefined => {
+    if (spec.startsWith(".")) return relative(ROOT, join(ROOT, dirname(from), spec));
+    const pkg = [...workspacePackages.keys()].find((n) => spec === n || spec.startsWith(`${n}/`));
+    if (pkg === undefined) return undefined;
+    const dir = workspacePackages.get(pkg)!;
+    files.add(`${dir}/package.json`);
+    const target = readJson(`${dir}/package.json`).exports?.[`.${spec.slice(pkg.length)}`];
+    if (target === undefined) throw new Error(`${spec} is not an export of ${pkg}`);
+    return join(dir, target);
+  };
+  while (queue.length > 0) {
+    const file = queue.shift()!;
+    if (files.has(file)) continue;
+    files.add(file);
+    const source = readFileSync(join(ROOT, file), "utf8");
+    for (const [, spec] of source.matchAll(/\b(?:from|import)\s*\(?\s*"([^"]+)"/g)) {
+      const target = resolve(file, spec!);
+      if (target !== undefined) queue.push(target);
+    }
+  }
+  return [...files].sort();
+};
+const vitestInclude = async (dir: string) =>
+  (
+    (await import(join(ROOT, dir, "vitest.config.ts"))) as {
+      default: { test: { include: string[] } };
+    }
+  ).default.test.include;
 
 describe("deploy workflow", () => {
   it("[FD-OPS-008] reads the overlay from one repository secret and fails before its first deploy step without it", () => {
@@ -60,15 +126,34 @@ describe("deploy workflow", () => {
 
 describe("merge gate and nightly", () => {
   it("[FD-OPS-026] [FD-OPS-027] [FD-VER-023] CI runs a job per merge-gate check and a not-required fallback over all of them", () => {
-    // The e2e-local cloud path needs the workerd stack and a fixture server, which no package ships yet.
-    for (const check of MERGE_GATE_CHECKS.filter((c) => c !== "e2e-local"))
-      expect(Object.keys(ci.jobs)).toContain(check);
+    for (const check of MERGE_GATE_CHECKS) expect(Object.keys(ci.jobs)).toContain(check);
     expect(ci.on).toHaveProperty("pull_request");
     const fallback = ci.jobs["fallback-ci"]!;
     expect(new Set(fallback.needs)).toEqual(
       new Set(Object.keys(ci.jobs).filter((j) => j !== "fallback-ci" && j !== "phase-gate")),
     );
     expect(MERGE_GATE_CHECKS as readonly string[]).not.toContain("fallback-ci");
+  });
+
+  it("[FD-VER-028] [FD-VER-029] the phase-gate job fetches the control plane's records into the file the gate reads", () => {
+    const job = ci.jobs["phase-gate"]!;
+    const fetchAt = stepIndex(job, (s) => (s.run ?? "").includes("--fetch"));
+    const gateAt = stepIndex(job, (s) => s.name === "phase-gate");
+    expect(fetchAt).toBeGreaterThanOrEqual(0);
+    expect(fetchAt).toBeLessThan(gateAt);
+    const fetchStep = job.steps![fetchAt]!;
+    expect(fetchStep.run).toContain(
+      'phase-gate.ts --base "$BASE" --fetch --records .tmp/phase-gate-records.json',
+    );
+    expect(Object.keys(fetchStep.env ?? {}).sort()).toEqual([
+      "BASE",
+      "FD_ACCESS_CLIENT_ID",
+      "FD_ACCESS_CLIENT_SECRET",
+      "FD_OPERATOR_OVERLAY",
+    ]);
+    // The overlay is the one the deploy reads, so the records come from the control plane it targets.
+    expect(fetchStep.env!["FD_OPERATOR_OVERLAY"]).toBe("${{ secrets.FD_OPERATOR_OVERLAY }}");
+    expect(job.steps![gateAt]!.run).toContain("--records .tmp/phase-gate-records.json");
   });
 
   it("[FD-OPS-031] CI renders every spec diagram and builds the documentation site", () => {
@@ -92,9 +177,102 @@ describe("merge gate and nightly", () => {
     expect(ci.jobs["replay"]!.steps!.at(-1)!.run).toContain("harness.ts replay");
   });
 
+  it("the e2e-local job runs every suite under the control plane's test/e2e-local on every pull request", async () => {
+    const job = ci.jobs["e2e-local"]!;
+    expect(job.if).toBeUndefined();
+    expect(job.steps!.at(-1)!.run).toContain(
+      "pnpm --filter @fractalboxdev/flare-dispatch-control-plane run test:e2e-local",
+    );
+    const app = readJson("apps/control-plane/package.json");
+    expect(app.scripts?.["test:e2e-local"]).toBe("vitest run --config vitest.e2e.config.ts");
+    const e2e = (
+      (await import(join(ROOT, "apps/control-plane/vitest.e2e.config.ts"))) as {
+        default: { test: { include: string[] } };
+      }
+    ).default.test.include;
+    expect(matchesAny(e2e, "test/e2e-local/api.test.ts")).toBe(true);
+    // `pnpm test` leaves the stack to this job.
+    const unit = (
+      (await import(join(ROOT, "apps/control-plane/vitest.config.ts"))) as {
+        default: { test: { exclude: string[] } };
+      }
+    ).default.test.exclude;
+    expect(matchesAny(unit, "test/e2e-local/api.test.ts")).toBe(true);
+  });
+
   it("[FD-VER-032] the conf job runs mameko's suite on the composed control plane", () => {
     expect(ci.jobs["conf"]!.steps!.at(-1)!.run).toBe(
       "pnpm --filter @fractalboxdev/flare-dispatch-conformance test",
+    );
+  });
+});
+
+describe("dispatch action and upgrade gate", () => {
+  const fdAction = workflow("fd-action.yml");
+
+  it("[FD-IFC-062] runs the dispatch action's test suite on every pull request that changes a file the action runs", async () => {
+    expect(Object.keys(fdAction.on)).toEqual(["pull_request"]);
+    const trigger = fdAction.on["pull_request"] as Record<string, unknown>;
+    expect(Object.keys(trigger)).toEqual(["paths"]);
+    const paths = trigger["paths"] as string[];
+
+    const files = dispatchActionFiles();
+    expect(files).toEqual(
+      expect.arrayContaining([
+        "packages/fd/src/action/run.ts",
+        "packages/fd/src/client.ts",
+        "packages/api/src/declaration.ts",
+        "packages/api/package.json",
+      ]),
+    );
+    expect(files.filter((f) => !matchesAny(paths, f))).toEqual([]);
+    expect(matchesAny(paths, "packages/fd/src/action/run.test.ts")).toBe(true);
+    expect(matchesAny(paths, ".github/workflows/fd-action.yml")).toBe(true);
+
+    const job = fdAction.jobs["test"]!;
+    expect(job.if).toBeUndefined();
+    expect(job.steps!.at(-1)!.run).toBe("pnpm --filter @fractalboxdev/flare-dispatch-fd test");
+    expect(workspacePackages.get("@fractalboxdev/flare-dispatch-fd")).toBe("packages/fd");
+    expect(readJson("packages/fd/package.json").scripts?.["test"]).toBe("vitest run");
+    expect(matchesAny(await vitestInclude("packages/fd"), "src/action/run.test.ts")).toBe(true);
+  });
+
+  it("[FD-IFC-082] every pull request, an effect version change among them, must pass the HTTP API, fd-<subcommand> and MCP suites over the real effect modules", async () => {
+    expect(ci.on["pull_request"] ?? {}).toEqual({});
+    const unit = ci.jobs["unit"]!;
+    expect(unit.if).toBeUndefined();
+    expect(unit.steps!.at(-1)!.run).toBe("pnpm test");
+    expect(MERGE_GATE_CHECKS as readonly string[]).toContain("unit");
+    expect(readJson("package.json").scripts?.["test"]).toMatch(/^vitest run\b/);
+
+    const projects = ((await import(join(ROOT, "vitest.workspace.ts"))) as { default: string[] })
+      .default;
+    const suites = {
+      "packages/api": ["src/router.test.ts", "src/worker.test.ts", "src/mcp/server.test.ts"],
+      "packages/fd": ["src/commands.test.ts", "src/mcp-shim.test.ts"],
+    };
+    for (const [dir, tests] of Object.entries(suites)) {
+      expect(matchesAny(projects, dir)).toBe(true);
+      const include = await vitestInclude(dir);
+      for (const test of tests) {
+        expect(existsSync(join(ROOT, dir, test))).toBe(true);
+        expect(matchesAny(include, test)).toBe(true);
+      }
+    }
+
+    // Each surface is built on the unstable module it names, and no suite replaces an effect module with a mock.
+    const imports = (path: string) => readFileSync(join(ROOT, path), "utf8");
+    expect(imports("packages/api/src/declaration.ts")).toContain('from "effect/http-api"');
+    expect(imports("packages/fd/src/commands.ts")).toContain('from "effect/cli"');
+    expect(imports("packages/api/src/mcp/server.ts")).toContain('from "effect/ai"');
+    const testFiles = Object.keys(suites).flatMap((dir) =>
+      (readdirSync(join(ROOT, dir, "src"), { recursive: true }) as string[])
+        .filter((f) => f.endsWith(".test.ts"))
+        .map((f) => join(dir, "src", f)),
+    );
+    expect(testFiles.length).toBeGreaterThan(5);
+    expect(testFiles.filter((f) => /vi\.(?:do)?[mM]ock\(\s*["']effect/.test(imports(f)))).toEqual(
+      [],
     );
   });
 });
@@ -107,6 +285,7 @@ describe("Access configuration", () => {
       "executor connect",
       "health",
       "well-known",
+      "log aggregate",
       "log",
       "artifact",
       "compile-cache",
@@ -119,6 +298,7 @@ describe("Access configuration", () => {
       "/v1/executors/connect",
       "/health",
       "/.well-known/openid-configuration",
+      "/v1/executions/e1/logs",
       "/v1/executions/e1/logs/run.log",
       "/v1/artifacts/a1",
       "/v1/compile-cache/obj/abc",
@@ -142,7 +322,10 @@ describe("Access configuration", () => {
     const apps = accessApplications("dispatch.example.com", ["ops@acme.com"]);
     expect(apps[0]).toMatchObject({
       domain: "dispatch.example.com",
-      policies: [{ decision: "allow" }],
+      policies: [
+        { decision: "allow", include: [{ email: { email: "ops@acme.com" } }] },
+        { decision: "non_identity", include: [{ any_valid_service_token: {} }] },
+      ],
     });
     expect(apps.slice(1).every((a) => a.policies[0]!.decision === "bypass")).toBe(true);
     expect(apps.slice(1).map((a) => a.domain)).toContain("dispatch.example.com/v1/webhooks/github");

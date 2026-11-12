@@ -1,15 +1,24 @@
 // FlareDispatch's Durable Object classes: mameko's, with the configuration each reads derived from the profile.
 import { ExecutionInputsMissing } from "@fractalboxdev/flare-dispatch-api";
 import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
-import { IntakeStore, d1IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
+import {
+  IntakeStore,
+  d1IntakeStore,
+  enqueueUnits,
+  runQueuedUnit,
+  type TickUnit,
+} from "@fractalboxdev/flare-dispatch-intake";
 import {
   ExecutionEngine as MamekoExecutionEngine,
   ExecutorChannel as MamekoExecutorChannel,
   type ClaimedLease,
 } from "@fractalboxdev/mameko-host-cloudflare";
-import { Effect, Match } from "effect";
+import { DurableObject } from "cloudflare:workers";
+import { Context, Effect, Match } from "effect";
+import { guardLease } from "./agentic.ts";
+import { isolateServices } from "./composition.ts";
 import { leaseCache } from "./cache.ts";
-import { imageDigestOf } from "./lease.ts";
+import { imageDigestOf, requestLeaseFields } from "./lease.ts";
 import {
   channelConfig,
   deployment,
@@ -39,45 +48,50 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
     super(ctx, { ...env, MAMEKO_CHANNEL_CONFIG: channelConfig(profileOf(env)) });
   }
 
-  /** The inputs and deadline intake recorded for a won claim. */
+  /**
+   * The inputs and request context intake recorded for a won claim, the run registry's run and workflow versions
+   * (FD-PROF-063), and the `deadline_at` admission wrote on the execution row (MAMEKO-EXEC-002), which a gate run's
+   * input carries as its `deadlineAt` (FD-GATE-007). A payload that carries a write credential fails the grant
+   * (FD-AGT-008).
+   */
   protected override leaseFields(executionId: string): Promise<ClaimedLease> {
     const env = this.env;
     return Effect.runPromise(
       Effect.gen(function* () {
         const record = yield* (yield* IntakeStore).get(executionId);
         if (record === null) return yield* new ExecutionInputsMissing({ executionId });
-        const { inputs, deadlineAtMs } = record;
         const { results } = yield* Effect.promise(() =>
           env.DB.prepare(
-            `select e.run, e.scope_id, x.kind from executions e
+            `select e.run, e.scope_id, e.deadline_at, x.kind from executions e
              left join placements p on p.execution_id = e.id
              left join executors x on x.executor_id = p.executor_id where e.id = ?`,
           )
             .bind(executionId)
             .all(),
         );
-        const row = results[0] as { run: string; scope_id: string; kind: string | null };
+        const row = results[0] as {
+          run: string;
+          scope_id: string;
+          deadline_at: number;
+          kind: string | null;
+        };
         const entry = Match.value(lookupRun(deployment(env), row.run)).pipe(
           Match.tag("Available", ({ entry }) => entry),
           Match.orElse(() => null),
         );
         const run = entry?.spec ?? null;
-        return {
+        return yield* guardLease(env, {
           run: row.run,
           run_digest: yield* Effect.promise(() => sha256(`${row.run}@${run?.version ?? ""}`)),
-          run_version: run?.version ?? "",
-          workflow_version: 1,
-          request_context: null,
+          ...requestLeaseFields(entry, record, row),
           image_digest: yield* imageDigestOf(entry, row.kind ?? "device", env.GATE_IMAGE_DIGEST),
-          scope_id: row.scope_id,
-          inputs,
-          deadline_at: deadlineAtMs,
+          deadline_at: row.deadline_at,
           server_now: Date.now(),
           progress_timeout_ms: PROGRESS_TIMEOUT_MS,
           credentials: {},
-          ...(yield* Effect.promise(() => leaseCache(env, record))),
+          ...(yield* Effect.promise(() => leaseCache(env, record, row.deadline_at))),
           nonce: crypto.randomUUID(),
-        } satisfies ClaimedLease;
+        } satisfies ClaimedLease);
       }).pipe(Effect.provide(d1IntakeStore(env.DB))),
     );
   }
@@ -86,6 +100,29 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
 export class ExecutionEngine extends MamekoExecutionEngine<EngineEnv> {
   constructor(ctx: DurableObjectState, env: ControlPlaneEnv) {
     super(ctx, { ...env, MAMEKO_EXECUTION_CONFIG: executionConfig(profileOf(env)) });
+  }
+}
+
+/**
+ * One per GitHub App installation: the queue of the installation's tick units (FD-INT-067). The tick enqueues; each
+ * alarm runs one unit within its own subrequest and D1-query allowance and queues the unit that continues it.
+ */
+export class IntakeUnits extends DurableObject<ControlPlaneEnv> {
+  enqueue(units: readonly TickUnit[]): Promise<number> {
+    return Effect.runPromise(enqueueUnits(this.ctx.storage, units, Date.now()));
+  }
+
+  override async alarm(): Promise<void> {
+    const services = await isolateServices(this.env);
+    // Only a deploy with the GitHub App enqueues units, and its services carry the installation quota the sweep reads.
+    const ran = await Effect.runPromise(
+      runQueuedUnit(this.ctx.storage, Date.now()).pipe(
+        Effect.provide(
+          services as Context.Context<Effect.Services<ReturnType<typeof runQueuedUnit>>>,
+        ),
+      ),
+    );
+    if (ran !== null) console.log(JSON.stringify({ intakeUnit: ran }));
   }
 }
 

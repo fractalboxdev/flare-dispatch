@@ -4,10 +4,16 @@
 // specs/github-output.md § Merge queue, FD-GH-066).
 import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { Clock, Effect, Option, Schema } from "effect";
-import { IntakeConfig, intakeError } from "./config.ts";
+import {
+  Admission,
+  IntakeConfig,
+  intakeError,
+  type IntakeError,
+  type IntakeUnavailable,
+} from "./config.ts";
 import { commitOf, isForkPr, WebhookFields, type WebhookEvent } from "./event.ts";
 import { json, parseJson, readBody } from "./http.ts";
-import { ExecutionCanceller, InstallationEviction } from "./ports.ts";
+import { InstallationEviction } from "./ports.ts";
 import { PROTECTION_EVENTS, ProtectionSnapshots } from "./protection.ts";
 import { rerunCheckRun, rerunCheckSuite } from "./rerun.ts";
 import { checkName } from "./runs.ts";
@@ -45,20 +51,33 @@ const answer = (o: TriggerOutcome) =>
 const branchOf = (ref: string) =>
   ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
 
+/** A cancel the store could not record answers 503, so GitHub redelivers the event. */
+const cancelUnavailable =
+  (what: string) =>
+  <A>(cancel: Effect.Effect<A, IntakeUnavailable | IntakeError>) =>
+    cancel.pipe(
+      Effect.catchTag("IntakeUnavailable", (e) =>
+        Effect.fail(intakeError(503, "intake_unavailable", `${what} failed: ${e.cause}`)),
+      ),
+    );
+
 /**
  * `merge_group` `checks_requested`: the base branch's required gating runs open their check runs on the group's head
- * (FD-GH-075). `destroyed`: every non-terminal execution on the head ends `cancelled(merge-group-destroyed)`
- * (FD-GH-076); the mapping concludes its check run `cancelled`.
+ * (FD-GH-075). `destroyed`: every non-terminal execution on the head ends `cancelled(merge-group-destroyed)` through
+ * mameko's cancel of one execution (FD-GH-076, MAMEKO-ADM-065); the mapping concludes its check run `cancelled`.
  */
 const mergeGroup = (event: WebhookEvent, fields: WebhookFields, repo: string, sha: string) =>
   Effect.gen(function* () {
     if (event.action === "destroyed") {
-      const store = yield* IntakeStore;
-      const canceller = yield* ExecutionCanceller;
-      const live = (yield* store.atCommit(repo, sha)).filter(
+      const admission = yield* Admission;
+      const live = (yield* (yield* IntakeStore).atCommit(repo, sha)).filter(
         (r) => r.status !== null && !TERMINAL_STATUSES.has(r.status),
       );
-      yield* Effect.forEach(live, (r) => canceller.cancel(r.executionId, "merge-group-destroyed"));
+      yield* Effect.forEach(live, (r) =>
+        admission
+          .cancel(r.executionId, "merge-group-destroyed")
+          .pipe(cancelUnavailable("execution cancel")),
+      );
       return nothing;
     }
     if (event.action !== "checks_requested") return nothing;
@@ -73,6 +92,38 @@ const mergeGroup = (event: WebhookEvent, fields: WebhookFields, repo: string, sh
       keep: (run, entry) => run.gating && required.has(checkName(run.name, entry.label ?? null)),
     });
   });
+
+/**
+ * `pull_request` `closed`: intake records its close time and the lifecycle event's `updated_at`, so replayed or older
+ * deliveries cannot replace a newer reopen (FD-CACHE-064). Every supersession group of the pull request,
+ * `<owner>/<repo>:<number>:*`, is cancelled with cause `pr-closed` through mameko's group cancel (FD-PROF-030,
+ * MAMEKO-ADM-064). A closed pull request submits no run.
+ */
+const pullRequestClosed = (
+  repo: string,
+  number: number,
+  closedAt: string | null | undefined,
+  updatedAt: string | undefined,
+  deliveryId: string,
+) =>
+  Effect.gen(function* () {
+    const admission = yield* Admission;
+    const store = yield* IntakeStore;
+    const closed = timestampOf(closedAt);
+    const updated = timestampOf(updatedAt);
+    const at = closed ?? updated ?? (yield* Clock.currentTimeMillis);
+    yield* store.pullRequestClosed(repo, number, at, { updatedAt: updated ?? at, deliveryId });
+    const groups = yield* store.liveSupersessionGroups(repo, `${repo}:${number}:`);
+    const cancelled = yield* Effect.forEach(groups, (key) =>
+      admission.cancelGroup(key, "pr-closed").pipe(cancelUnavailable("group cancel")),
+    );
+    return json({ executions: [], cancelled: cancelled.flat() }, 202);
+  });
+
+const timestampOf = (value: string | null | undefined): number | undefined => {
+  const parsed = value === null || value === undefined ? NaN : Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
 
 /** A signed, parsed delivery, routed by event. */
 const route = (event: WebhookEvent, fields: WebhookFields) =>
@@ -109,6 +160,30 @@ const route = (event: WebhookEvent, fields: WebhookFields) =>
           : rerunCheckSuite(fields, repo),
       );
     }
+    if (
+      event.event === "pull_request" &&
+      event.action === "closed" &&
+      fields.pull_request !== undefined
+    )
+      return yield* pullRequestClosed(
+        repo,
+        fields.pull_request.number,
+        fields.pull_request.closed_at,
+        fields.pull_request.updated_at,
+        event.deliveryId,
+      );
+    // Retain the reopened event's time and identity, so an older close cannot expire its cache again (FD-CACHE-064).
+    if (
+      event.event === "pull_request" &&
+      event.action === "reopened" &&
+      fields.pull_request !== undefined
+    )
+      yield* (yield* IntakeStore).pullRequestReopened(
+        repo,
+        fields.pull_request.number,
+        timestampOf(fields.pull_request.updated_at) ?? (yield* Clock.currentTimeMillis),
+        event.deliveryId,
+      );
     const sha = commitOf(fields);
     if (Option.isNone(sha)) {
       yield* shed(repo, null, "intake: no commit");

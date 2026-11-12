@@ -1,6 +1,6 @@
 # ADR-0014: Model routing by confidentiality mode, task tier and data location
 
-Status: Superseded by mameko [ADR-0014](https://github.com/fractalboxdev/mameko/blob/b204f44b71a88e7fbd6bc3e72dd57054871e821c/specs/adr/0014-model-routing.md) · 2026-10-24
+Status: Superseded by mameko [ADR-0014](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/adr/0014-model-routing.md) · 2026-10-24
 
 ## Context
 

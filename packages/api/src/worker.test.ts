@@ -81,13 +81,13 @@ const checkInputs = {
 };
 
 describe("the router on workerd", () => {
-  it("FD-IFC-010: a gated route needs an Access identity on workerd too", async () => {
+  it("[FD-IFC-010]: a gated route needs an Access identity on workerd too", async () => {
     const response = await mf.dispatchFetch("http://x/v1/executions");
     expect(response.status).toBe(401);
     expect(((await response.json()) as { error: string }).error).toBe("unauthenticated");
   });
 
-  it("FD-IFC-024, FD-IFC-035, FD-IFC-036, FD-IFC-038: an Actions dispatch is admitted once, and the record reads back", async () => {
+  it("[FD-IFC-024], [FD-IFC-035], [FD-IFC-036], [FD-IFC-038]: an Actions dispatch is admitted once, and the record reads back", async () => {
     const jwt = await actions.sign(actionsClaims("acme/widgets", { sha: SHA }));
     const dispatch = () =>
       mf.dispatchFetch("http://x/v1/dispatch/check", {
@@ -124,7 +124,7 @@ describe("the router on workerd", () => {
     expect(page.executions.map((e) => e.execution_id)).toContain(admitted["execution_id"]);
   });
 
-  it("FD-IFC-029: inputs that fail the run's schema answer 400 invalid_inputs", async () => {
+  it("[FD-IFC-029]: inputs that fail the run's schema answer 400 invalid_inputs", async () => {
     const response = await mf.dispatchFetch(
       "http://x/v1/dispatch/check",
       await as(DISPATCHER, {
@@ -140,7 +140,7 @@ describe("the router on workerd", () => {
     expect(((await response.json()) as { error: string }).error).toBe("invalid_inputs");
   });
 
-  it("FD-IFC-028: a run outside the catalog answers 404 run_not_found", async () => {
+  it("[FD-IFC-028]: a run outside the catalog answers 404 run_not_found", async () => {
     const response = await mf.dispatchFetch(
       "http://x/v1/dispatch/no-such-run",
       await as(DISPATCHER, {
@@ -153,7 +153,7 @@ describe("the router on workerd", () => {
     expect(((await response.json()) as { error: string }).error).toBe("run_not_found");
   });
 
-  it("FD-IFC-086, FD-IFC-087: registration writes through registerDevice, and a refused key answers registration_refused", async () => {
+  it("[FD-IFC-086], [FD-IFC-087]: registration writes through registerDevice, and a refused key answers registration_refused", async () => {
     const keys = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
       "sign",
       "verify",
@@ -190,7 +190,7 @@ describe("the router on workerd", () => {
     expect(body.message).toContain("key-store");
   });
 
-  it("FD-IFC-051: with no OIDC key the well-known routes answer 503 not_configured", async () => {
+  it("[FD-IFC-051]: with no OIDC key the well-known routes answer 503 not_configured", async () => {
     expect((await mf.dispatchFetch("http://x/.well-known/jwks.json")).status).toBe(503);
   });
 });

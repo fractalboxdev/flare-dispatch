@@ -1,11 +1,12 @@
 // The minute tick: the Worker's one cron trigger (FD-INT-050). Each tick records its time, starts the liveness
-// monitor, drains the outbox once, and every 15 min runs the GitHub probes; 5 min after a canary push it reads the
-// canary's check. Each step runs on its own, so one failing step leaves the others running.
+// monitor, drains the outbox once, once a day reads the kill lines (FD-VER-030), and every 15 min runs the GitHub
+// probes; 5 min after a canary push it reads the canary's check. Each step runs on its own, so one failing step leaves the others running.
 import type { Profile } from "@fractalboxdev/flare-dispatch-profile";
 import { actuatorBindings, drainOnce } from "@fractalboxdev/mameko-coordinator";
 import { d1OutboxStore, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import type { ActuatorRateLimit, Actuators, AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Cause, Effect, Layer } from "effect";
+import { KILL_LINE_INTERVAL_MS, killLineMonitor } from "./kill-lines.ts";
 import { lastTick, recordTick, runOpsMigrations } from "./liveness.ts";
 import {
   CANARY_DEADLINE_MS,
@@ -152,6 +153,22 @@ export const minuteTick = (env: TickEnv, deps: TickDeps, now: number) =>
     );
 
     for (const unit of deps.units?.(now) ?? []) steps.push(yield* run(unit.step, unit.effect));
+
+    // The daily kill-line read. A failed read, or a `kill-line` notification whose delivery failed, records no time, so
+    // the next tick reads again and resends it (MAMEKO-OPS-026).
+    const killLinesRead = yield* readKey(db, "kill-lines-read");
+    if (killLinesRead === null || now - killLinesRead >= KILL_LINE_INTERVAL_MS)
+      steps.push(
+        yield* run(
+          "kill-lines",
+          Effect.gen(function* () {
+            const report = yield* killLineMonitor(db, now);
+            if (!report.raised.some((r) => r.result === "failed"))
+              yield* writeKey(db, "kill-lines-read", now);
+            return report;
+          }),
+        ),
+      );
 
     if (isProbeMinute(now)) {
       steps.push(

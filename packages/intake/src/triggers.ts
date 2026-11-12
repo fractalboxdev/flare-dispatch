@@ -14,7 +14,7 @@ import {
 import { ManifestSource, type ManifestEntry, type RepoManifest } from "./manifest.ts";
 import { ManifestReporter } from "./ports.ts";
 import { isUnavailable, ProtectionSnapshots } from "./protection.ts";
-import type { IntakeRun } from "./runs.ts";
+import type { EntryView, IntakeRun } from "./runs.ts";
 import { shed, submission, submit, type Admitted, type Submission } from "./submit.ts";
 
 /** Where the manifest is read: a branch's head, or one commit (FD-INT-016). */
@@ -134,9 +134,11 @@ export const entriesFor = (manifest: RepoManifest, trigger: string, repo: string
     });
   });
 
-export const viewOf = (entry: ManifestEntry) => ({
+/** One entry as its run's request decoder sees it, with the manifest's `skipAuthors`. */
+export const viewOf = (entry: ManifestEntry, manifest: RepoManifest): EntryView => ({
   label: entry.label ?? null,
   params: entry.params ?? {},
+  ...(manifest.skipAuthors === undefined ? {} : { skipAuthors: manifest.skipAuthors }),
 });
 
 export interface RepositoryEvent {
@@ -150,8 +152,11 @@ export interface RepositoryEvent {
   readonly sha: string;
 }
 
-/** A webhook (or the sweep standing in for one) through the manifest to admission. */
-export const triggerWebhook = (e: RepositoryEvent) =>
+/**
+ * The submissions a webhook (or the sweep standing in for one) makes, one per manifest entry that answers it, in
+ * manifest order; none when the manifest is absent, unreadable or invalid.
+ */
+export const webhookSubmissions = (e: RepositoryEvent) =>
   Effect.gen(function* () {
     const github = yield* GithubRead;
     const defaultBranch = yield* github.defaultBranch(e.repo);
@@ -162,17 +167,17 @@ export const triggerWebhook = (e: RepositoryEvent) =>
       Match.exhaustive,
     );
     const manifest = yield* readManifest(e.repo, manifestSha);
-    if (Option.isNone(manifest)) return nothing;
+    if (Option.isNone(manifest)) return [];
     const entries = yield* entriesFor(manifest.value, e.event.event, e.repo);
     const ref = refOf(e.event.event, e.fields, defaultBranch);
     const answering = entries.flatMap(({ entry, run }) => {
       if (e.keep !== undefined && !e.keep(run, entry)) return [];
-      return Option.match(run.trigger(e.event, viewOf(entry)), {
+      return Option.match(run.trigger(e.event, viewOf(entry, manifest.value), { defaultBranch }), {
         onNone: () => [],
         onSome: (inputs) => [{ entry, run, inputs }],
       });
     });
-    if (answering.length === 0) return nothing;
+    if (answering.length === 0) return [];
     // A push's protection decides whether it is a protected trigger and a release trigger. Off the default branch an
     // unreadable answer submits nothing rather than record the push as unprotected; on the default branch, which is a
     // protected trigger regardless, it leaves the protection unknown.
@@ -195,7 +200,7 @@ export const triggerWebhook = (e: RepositoryEvent) =>
       refProtection === true,
     );
     const targetBranch = targetBranchOf(e.event.event, e.fields);
-    const subs = answering.map(({ entry, run, inputs }) =>
+    return answering.map(({ entry, run, inputs }) =>
       submission({
         run,
         trigger: e.trigger,
@@ -212,13 +217,19 @@ export const triggerWebhook = (e: RepositoryEvent) =>
         refProtection,
       }),
     );
-    return yield* submitEach(subs);
   }).pipe(
     // A repository read that fails before the manifest is read is the same refusal as an unreadable manifest.
     Effect.catchTags({
-      GithubHttpError: () => Effect.as(shed(e.repo, null, "manifest: unreadable"), nothing),
-      GithubNetworkError: () => Effect.as(shed(e.repo, null, "manifest: unreadable"), nothing),
-      GithubUncredentialed: () => Effect.as(shed(e.repo, null, "manifest: unreadable"), nothing),
-      GithubUnexpected: () => Effect.as(shed(e.repo, null, "manifest: unreadable"), nothing),
+      GithubHttpError: () => unreadable(e.repo),
+      GithubNetworkError: () => unreadable(e.repo),
+      GithubUncredentialed: () => unreadable(e.repo),
+      GithubUnexpected: () => unreadable(e.repo),
     }),
   );
+
+const unreadable = (repo: string) =>
+  Effect.as(shed(repo, null, "manifest: unreadable"), [] as readonly Submission[]);
+
+/** A webhook (or the sweep standing in for one) through the manifest to admission. */
+export const triggerWebhook = (e: RepositoryEvent) =>
+  Effect.flatMap(webhookSubmissions(e), submitEach);

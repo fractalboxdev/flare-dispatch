@@ -46,7 +46,7 @@ beforeEach(() => {
 const PACKAGE = join(import.meta.dirname, "..");
 
 describe("fd-<subcommand> executables", () => {
-  it("FD-IFC-084: every command mameko's <cli> leaves to fd is an executable fd-<subcommand> mapped to its command", () => {
+  it("[FD-IFC-084]: every command mameko's <cli> leaves to fd is an executable fd-<subcommand> mapped to its command", () => {
     const pkg = JSON.parse(readFileSync(join(PACKAGE, "package.json"), "utf8")) as {
       bin: Record<string, string>;
     };
@@ -81,7 +81,7 @@ describe("fd-<subcommand> executables", () => {
 });
 
 describe("output and exit codes", () => {
-  it("FD-IFC-064: --json writes exactly one JSON document matching the response, and diagnostics to stderr", async () => {
+  it("[FD-IFC-064]: --json writes exactly one JSON document matching the response, and diagnostics to stderr", async () => {
     const run = await runFd(h, "status", ["01JOK", "--json"], { store: await signedIn(h, MEMBER) });
     expect(run.exit).toBe(0);
     expect(run.stdout).toHaveLength(1);
@@ -97,7 +97,7 @@ describe("output and exit codes", () => {
     expect(JSON.parse(failed.stdout[0]!)).toMatchObject({ error: "execution_not_found" });
   });
 
-  it("FD-IFC-065: verdict exits 0 success, 1 failure, 3 cancelled, 4 skipped and 6 before a verdict", async () => {
+  it("[FD-IFC-065]: verdict exits 0 success, 1 failure, 3 cancelled, 4 skipped and 6 before a verdict", async () => {
     const store = await signedIn(h, MEMBER);
     const cases = [
       ["01JOK", 0],
@@ -110,14 +110,14 @@ describe("output and exit codes", () => {
       expect((await runFd(h, "verdict", [id], { store })).exit).toBe(code);
   });
 
-  it("FD-IFC-065: verdict --wait exits 6 when the timeout passes first", async () => {
+  it("[FD-IFC-065]: verdict --wait exits 6 when the timeout passes first", async () => {
     const run = await runFd(h, "verdict", ["01JRUN", "--wait", "--timeout", "1"], {
       store: await signedIn(h, MEMBER),
     });
     expect(run.exit).toBe(6);
   });
 
-  it("FD-IFC-065: a usage error exits 2, and a refused identity exits 5", async () => {
+  it("[FD-IFC-065]: a usage error exits 2, and a refused identity exits 5", async () => {
     expect((await runFd(h, "status", [], { store: await signedIn(h, MEMBER) })).exit).toBe(2);
     expect(
       (
@@ -130,7 +130,7 @@ describe("output and exit codes", () => {
 });
 
 describe("credentials", () => {
-  it("FD-IFC-068: with no token, or an expired one, a command exits 5 naming fd login", async () => {
+  it("[FD-IFC-068]: with no token, or an expired one, a command exits 5 naming fd login", async () => {
     const none = await runFd(h, "status", ["01JOK"]);
     expect(none.exit).toBe(5);
     expect(none.stderr.join("\n")).toContain("fd login");
@@ -141,7 +141,7 @@ describe("credentials", () => {
     expect(expired.stderr.join("\n")).toContain("fd login");
   });
 
-  it("FD-IFC-067: fd login keeps the token in the credential store only, and prints it nowhere", async () => {
+  it("[FD-IFC-067]: fd login keeps the token in the credential store only, and prints it nowhere", async () => {
     const store = new Map<string, string>();
     const token = "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjk5OTk5OTk5OTl9.c2ln";
     const run = await runFd(h, "login", [], {
@@ -155,7 +155,7 @@ describe("credentials", () => {
 });
 
 describe("commands and routes", () => {
-  it("FD-IFC-084, FD-IFC-002: dispatch calls POST /v1/dispatch/:run through the derived client", async () => {
+  it("[FD-IFC-084], [FD-IFC-002]: dispatch calls POST /v1/dispatch/:run through the derived client", async () => {
     const run = await runFd(
       h,
       "dispatch",
@@ -172,7 +172,7 @@ describe("commands and routes", () => {
     });
   });
 
-  it("FD-IFC-066: dispatch treats every 4xx as final", async () => {
+  it("[FD-IFC-066]: dispatch treats every 4xx as final", async () => {
     const before = h.doubles.calls.submissions.length;
     h.doubles.intake = () => Effect.fail(apiError("run_not_found", "no run named nope"));
     const run = await runFd(h, "dispatch", ["nope", "--repo", "acme/widgets"], {
@@ -182,7 +182,7 @@ describe("commands and routes", () => {
     expect(h.doubles.calls.submissions.length).toBe(before + 1);
   });
 
-  it("FD-IFC-084: ls, failure, cancel and ops each call their one route", async () => {
+  it("[FD-IFC-084]: ls, failure, cancel and ops each call their one route", async () => {
     const member = await signedIn(h, MEMBER);
     const page = await runFd(h, "ls", ["--status", "done", "--limit", "2", "--json"], {
       store: member,
@@ -219,7 +219,7 @@ describe("commands and routes", () => {
     });
   });
 
-  it("FD-IFC-070: deploy and doctor hand the overlay to the operability service and exit by its report", async () => {
+  it("[FD-IFC-070]: deploy and doctor hand the overlay to the operability service and exit by its report", async () => {
     const seen: string[] = [];
     const operability = Layer.succeed(Operability)({
       deploy: ({ overlay, dryRun }) =>
@@ -244,7 +244,7 @@ describe("commands and routes", () => {
     expect((await runFd(h, "doctor", ["--overlay", "{}"])).exit).toBe(1);
   });
 
-  it("FD-IFC-069: rehearse, queue and lease exit 5 scheduler_unreachable when the socket is absent", async () => {
+  it("[FD-IFC-069]: rehearse, queue and lease exit 5 scheduler_unreachable when the socket is absent", async () => {
     for (const name of ["rehearse", "queue", "lease"] as const) {
       const args = name === "rehearse" ? ["check"] : [];
       const none = await runFd(h, name, args);

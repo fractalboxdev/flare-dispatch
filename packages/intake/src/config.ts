@@ -1,19 +1,23 @@
 // What intake is configured with and the ports it calls: mameko's admission
 // function, class resolution and the error every refusal becomes.
 import {
+  checkOpenPayload,
   classNamed,
   type ConfidentialityMode,
   type Profile,
 } from "@fractalboxdev/flare-dispatch-profile";
-import type { Resolution } from "@fractalboxdev/mameko-coordinator";
-import type {
-  D1AdmitInput,
-  D1AdmitResult,
-  D1Like,
-  IntakeUnavailable,
-} from "@fractalboxdev/mameko-host-cloudflare/d1";
-import { admitExecution } from "@fractalboxdev/mameko-host-cloudflare/d1";
-import { Context, Effect, Layer, Schema } from "effect";
+import {
+  admit,
+  composedGroupCancel,
+  type AdmitAnswer,
+  type ConstraintParams,
+  type ExecutionPayload,
+  type RequestFacts,
+  type Resolution,
+} from "@fractalboxdev/mameko-coordinator";
+import { d1ExecutionStore, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { AlarmPort, type CancelTarget } from "@fractalboxdev/mameko-ports";
+import { Clock, Context, Effect, Layer, Schema } from "effect";
 import type { Caller, RecordedTrigger } from "./event.ts";
 import type { IntakeRun, RunCatalog } from "./runs.ts";
 
@@ -43,39 +47,301 @@ export interface IntakeSettings {
   readonly webhookSecret: string | undefined;
   /** `intake.webhookEvents`; undefined admits every supported event (FD-INT-027). */
   readonly webhookEvents: readonly string[] | undefined;
-  /** `dispatch.oidcAudience`; unset refuses every Actions token. */
-  readonly oidcAudience: string | undefined;
-  /** Access identities that may dispatch (FD-IFC-027). */
-  readonly dispatchers: readonly string[];
   /** The operator policy: whether a repository may run a run at all (FD-INT-015). */
   readonly allows: (repo: string, run: string) => boolean;
   /**
-   * A repository's confidentiality mode, which the placement's isolation reads (MAMEKO-LEASE-083). No policy rule sets
+   * A repository's confidentiality mode, which the placement's isolation reads (MAMEKO-LEASE-084). No policy rule sets
    * one yet, so a deployment answers `unclassified`, mameko's fail-closed default, for every repository it does not
    * know to be `non-confidential`.
    */
   readonly confidentiality: (repo: string) => ConfidentialityMode;
+  /**
+   * The path of the first field of a request's inputs that holds a write credential the control plane never sends to
+   * an executor, or null when none does. A request with a hit is refused before admission (FD-AGT-008).
+   */
+  readonly writeCredentialIn: (inputs: unknown) => string | null;
 }
 
 export class IntakeConfig extends Context.Service<IntakeConfig, IntakeSettings>()(
   "@fractalboxdev/flare-dispatch-intake/IntakeConfig",
 ) {}
 
-/** mameko's admission transaction, and what follows a queued admission. */
+/**
+ * One request as intake hands it to mameko's `admit`: the id intake writes its record under, the class and labels
+ * intake's class resolution returned, the dedup key, the placement facts and the run's limits. It is plain data, so a
+ * request held for its cooldown window is admitted later from the stored value under the same id (MAMEKO-ADM-105).
+ */
+export interface IntakeAdmitInput {
+  readonly executionId: string;
+  readonly scopeId: string;
+  readonly run: string;
+  readonly className: string;
+  /** The labels class resolution returned; `untrusted-input` and `local-only` are the only ones (FD-PROF-018). */
+  readonly labels: readonly string[];
+  readonly enqueuedAtMs: number;
+  readonly dedup: {
+    /** The SHA-256 of `canonical`, as `dedupKey` computes it and admission stores it (MAMEKO-ADM-034). */
+    readonly sha256: string;
+    readonly canonical: string;
+    /** The SHA-256 of the dispatch body's canonical JSON, as admission stores it beside the key (MAMEKO-ADM-094). */
+    readonly requestDigest: string | null;
+    /** The dispatch body the digest covers; admission hashes its canonical JSON itself, so it gets the body, not the digest. */
+    readonly digestBody: unknown;
+    readonly onMismatch: "duplicate" | "conflict";
+  };
+  /** The request's facts and constraint parameters under its class, from the profile's placement. */
+  readonly placement: {
+    readonly facts: Omit<RequestFacts, "labels" | "deviceLocalInput">;
+    readonly params: ConstraintParams;
+  };
+  readonly maxDurationSec: number;
+  readonly grants: { readonly setup: readonly string[]; readonly agent: readonly string[] };
+  /**
+   * The supersession group the request joins, from the profile's `supersessionKey` binding; null or absent joins none
+   * (MAMEKO-ADM-061, FD-PROF-027).
+   */
+  readonly supersessionKey?: string | null;
+  /** The serial group the request joins, for a run that declares `serialize`; null or absent joins none (MAMEKO-ADM-068). */
+  readonly serialKey?: string | null;
+  /**
+   * The check run the execution owns, as the `checkOpenPayload` binding reads it: `flare-dispatch/<run>[:<checkLabel>]`
+   * on the request's head SHA (FD-GH-005, FD-GH-006). Null or absent for a run that owns no check.
+   */
+  readonly check?: { readonly name: string; readonly headSha: string } | null;
+}
+
+/** Admission did not answer: the store transaction failed, and nothing was written. */
+export class IntakeUnavailable extends Schema.TaggedError<IntakeUnavailable>()(
+  "IntakeUnavailable",
+  {
+    cause: Schema.String,
+  },
+) {}
+
+/**
+ * The `ExecutionEngine` start that follows admission's commit failed. The execution stays queued with no recorded engine
+ * start, and the admission sweep starts it (MAMEKO-ADM-030).
+ */
+export class ExecutionStartFailed extends Schema.TaggedError<ExecutionStartFailed>()(
+  "ExecutionStartFailed",
+  {
+    executionId: Schema.String,
+    className: Schema.String,
+    cause: Schema.String,
+  },
+) {}
+
+/** mameko's admission function, and what follows a queued admission. */
 export class Admission extends Context.Service<
   Admission,
   {
-    readonly admit: (input: D1AdmitInput) => Effect.Effect<D1AdmitResult, IntakeUnavailable>;
+    readonly admit: (
+      input: IntakeAdmitInput,
+    ) => Effect.Effect<AdmitAnswer, IntakeUnavailable | ExecutionStartFailed>;
     /** Runs after a request is queued, for the caller to wake standing claims. */
     readonly queued: (className: string) => Effect.Effect<void>;
+    /**
+     * Cancels every live member of one supersession group with `cause`, and answers their ids (MAMEKO-ADM-064). A cause
+     * outside the profile's closed set is `misconfigured`.
+     */
+    readonly cancelGroup: (
+      supersessionKey: string,
+      cause: string,
+    ) => Effect.Effect<readonly string[], IntakeUnavailable | IntakeError>;
+    /**
+     * Cancels one execution, queued or claimed, with `cause`, and answers whether it was live; a terminal execution is
+     * left unchanged (MAMEKO-ADM-065). A cause outside the profile's closed set is `misconfigured`.
+     */
+    readonly cancel: (
+      executionId: string,
+      cause: string,
+    ) => Effect.Effect<boolean, IntakeUnavailable | IntakeError>;
   }
 >()("@fractalboxdev/flare-dispatch-intake/Admission") {}
 
-/** Admission on the deployment's D1, with the Worker's wake-up after each queued request. */
-export const d1Admission = (
-  db: D1Like,
-  queued: (className: string) => Effect.Effect<void> = () => Effect.void,
-) => Layer.succeed(Admission, { admit: (input) => admitExecution(db, input), queued });
+/** What the Worker supplies to admission beside the database. */
+export interface AdmissionPorts {
+  /** Wakes the standing claims of the class's device executors after a queued admission. */
+  readonly queued?: (className: string) => Effect.Effect<void>;
+  /** Starts an admitted execution's `Execution` workflow in its `ExecutionEngine` object (MAMEKO-ADM-029). */
+  readonly startExecution?: (
+    payload: ExecutionPayload,
+  ) => Effect.Effect<void, ExecutionStartFailed>;
+  readonly alarms?: Layer.Layer<AlarmPort>;
+  /**
+   * Records the cancel of an execution's workflow and its lease, for a member a supersession, a group cancel or a
+   * per-execution cancel ended (MAMEKO-ADM-062, MAMEKO-ADM-066); absent, the member's workflow ends at its deadline.
+   */
+  readonly cancelExecution?: (executionId: string, cause: string) => Effect.Effect<void>;
+  /**
+   * Whether an operator has quarantined the repository (MAMEKO-ADM-037). The operator operations are not served yet,
+   * so no repository is quarantined while this is absent.
+   */
+  readonly quarantined?: (scopeId: string) => Effect.Effect<boolean>;
+  /**
+   * The profile's `delivery.limit_key` binding for the request's repository, the installation that serves it
+   * (FD-GH-056); every row admission inserts carries it. Absent, a row's limit key is its scope (MAMEKO-OUT-057).
+   */
+  readonly limitKey?: (scopeId: string) => Effect.Effect<string>;
+}
+
+/** Without an alarm sink an admission alarm is logged and delivered nowhere; admission does not decide on delivery. */
+const loggedAlarms = Layer.succeed(AlarmPort, {
+  deliver: (alarm) => Effect.logWarning("admission alarm with no alarm sink", alarm),
+});
+
+/** The payload bindings of the kinds admission generates, by the binding name the profile's intent kind declares. */
+const admittedPayloads: Readonly<Record<string, (input: IntakeAdmitInput) => unknown>> = {
+  checkOpenPayload: (input) =>
+    checkOpenPayload({ check: input.check ?? null, labels: input.labels }),
+};
+
+/**
+ * The rows admission inserts with the execution: each kind whose `on` is `admitted` gets the payload its `payload`
+ * binding returns for this request, and a kind whose binding returns none, or names no binding served here, gets no row
+ * (MAMEKO-OUT-050). `check.open` is the one such kind, so admission opens the check run of exactly the executions that
+ * own one (FD-GH-005, FD-PROF-043).
+ */
+const admittedIntents = (profile: Profile, input: IntakeAdmitInput) => ({
+  kinds: profile.intent_kinds,
+  payload: (kind: string) => {
+    const binding = profile.intent_kinds[kind]?.payload;
+    const build =
+      binding !== undefined && Object.hasOwn(admittedPayloads, binding)
+        ? admittedPayloads[binding]
+        : undefined;
+    return build === undefined ? null : build(input);
+  },
+});
+
+/**
+ * Every request goes through mameko's one admission function (MAMEKO-ADM-023). Intake has already resolved the class,
+ * so the class-resolution binding answers that class and its labels. The profile declares no capability labels per
+ * executor kind, so each kind is taken to advertise the request's own labels, and placement is decided by the
+ * constraint fold alone, as `eligibleKinds` decides it.
+ */
+export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts = {}) => {
+  /** mameko's application cancel of a group or of one execution, under the profile's closed set of causes. */
+  const cancelTarget = (target: CancelTarget, cause: string) =>
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      composedGroupCancel({
+        profile,
+        target,
+        cause,
+        now,
+        cancelExecution: ports.cancelExecution ?? (() => Effect.void),
+      }),
+    ).pipe(
+      Effect.provide(d1ExecutionStore(db)),
+      Effect.catchTags({
+        CancelCauseUndeclared: (e) =>
+          Effect.fail(
+            intakeError(503, "misconfigured", `the profile declares no cancel cause ${e.cause}`),
+          ),
+        ExecutionIntakeUnavailable: (e) =>
+          Effect.fail(new IntakeUnavailable({ cause: String(e.cause) })),
+      }),
+    );
+  return Layer.succeed(Admission, {
+    queued: ports.queued ?? (() => Effect.void),
+    cancelGroup: (supersessionKey, cause) =>
+      cancelTarget({ supersessionKey, groupKind: "supersession" }, cause),
+    cancel: (executionId, cause) =>
+      Effect.map(cancelTarget({ executionId }, cause), (members) => members.length > 0),
+    admit: (input) =>
+      Effect.gen(function* () {
+        const quarantined =
+          ports.quarantined === undefined ? false : yield* ports.quarantined(input.scopeId);
+        const cls = classNamed(profile, input.className);
+        const bounds =
+          cls?.bounds === undefined
+            ? { global: 0, perScope: 0 }
+            : {
+                global: cls.bounds.global,
+                perScope:
+                  "per_scope" in cls.bounds ? cls.bounds.per_scope : cls.bounds.per_run_scope,
+              };
+        const runLabels = input.placement.facts.runLabels;
+        const limitKey =
+          ports.limitKey === undefined ? undefined : yield* ports.limitKey(input.scopeId);
+        return yield* admit<IntakeAdmitInput>({
+          request: input,
+          executionId: input.executionId,
+          scopeId: input.scopeId,
+          run: input.run,
+          now: input.enqueuedAtMs,
+          random: Math.random,
+          quarantined,
+          inputs: {},
+          resolution: {
+            binding: (r) => ({ class: r.className, labels: r.labels, alarm: null }),
+            catalogue: profile.classes as never,
+            allowedLabels: input.labels,
+          },
+          parent: null,
+          recipes: [
+            {
+              name: "intake",
+              run: (r) => r.dedup.canonical,
+              ...(input.dedup.requestDigest === null
+                ? {}
+                : { digest: (r: IntakeAdmitInput) => r.dedup.digestBody }),
+              onMismatch: input.dedup.onMismatch,
+            },
+          ],
+          placement: () => input.placement,
+          pools: profile.pools.map((pool) => ({
+            name: pool.name,
+            classes: pool.classes.filter((c) => c.max > 0).map((c) => c.class),
+            ...(pool.reserved_for === undefined ? {} : { reserved_for: pool.reserved_for }),
+            ...(pool.runner === undefined ? {} : { runner: pool.runner }),
+          })),
+          advertised: Object.fromEntries(
+            input.placement.params.kinds.map((kind) => [kind, runLabels]),
+          ),
+          limits: { maxDurationSec: input.maxDurationSec },
+          schedule: null,
+          defaults: { queueAgeSec: 3_600, bounds },
+          estimatedCostMicroUsd: 0,
+          // Admission can conclude an execution itself, or supersede/coalesce an older one. Keep the outcome
+          // binding beside every checked execution so those transactions also conclude its GitHub check.
+          outcomeIntent:
+            checkOpenPayload({ check: input.check ?? null, labels: input.labels }) === null
+              ? null
+              : {
+                  kind: profile.outcome_mapping.surface_kind,
+                  effectClass:
+                    profile.intent_kinds[profile.outcome_mapping.surface_kind]?.effect_class ??
+                    "adoptable",
+                },
+          // mameko's start port is infallible: a failed start ends admission after its commit and before it records the
+          // engine start, and comes back out below as the typed failure.
+          startExecution:
+            ports.startExecution === undefined
+              ? () => Effect.void
+              : (payload) => Effect.orDie(ports.startExecution!(payload)),
+          grants: input.grants,
+          intents: {
+            ...admittedIntents(profile, input),
+            ...(limitKey === undefined ? {} : { limitKey: () => limitKey }),
+          },
+          supersessionKey: input.supersessionKey ?? null,
+          serialKey: input.serialKey ?? null,
+          ...(ports.cancelExecution === undefined
+            ? {}
+            : { cancelExecution: ports.cancelExecution }),
+        }).pipe(
+          Effect.provide(Layer.merge(d1ExecutionStore(db), ports.alarms ?? loggedAlarms)),
+          Effect.catch((cause) =>
+            Effect.fail(new IntakeUnavailable({ cause: String(cause._tag ?? cause) })),
+          ),
+          Effect.catchDefect((defect) =>
+            defect instanceof ExecutionStartFailed ? Effect.fail(defect) : Effect.die(defect),
+          ),
+        );
+      }),
+  });
+};
 
 /** The request class resolution sees (specs/profile.md § Class resolution). */
 export interface ClassRequest {

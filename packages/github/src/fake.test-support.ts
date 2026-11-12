@@ -3,6 +3,7 @@
 import { AlarmPort, type Alarm, type IntentRow } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { InstallationDirectory } from "./applier.ts";
+import { ConcludeFacts, ConcludeFactsUnavailable, type ConclusionFacts } from "./conclude-facts.ts";
 import {
   GithubClient,
   GithubHttpError,
@@ -28,6 +29,12 @@ export interface FakeGithub {
   /** Errors answered after the next write takes effect: GitHub did the work and the answer failed. */
   readonly lostAnswers: GithubError[];
   readonly alarms: Alarm[];
+  /** The control plane's records of each execution, by execution id. */
+  readonly facts: Map<string, ConclusionFacts>;
+  /** Whether reading those records fails. */
+  factsDown: boolean;
+  /** The details URL each create or update sent, by check-run id. */
+  readonly detailsUrls: Map<number, string>;
   tokenRefreshes: number;
 }
 
@@ -38,6 +45,9 @@ export const fakeGithub = (): FakeGithub => ({
   failures: [],
   lostAnswers: [],
   alarms: [],
+  facts: new Map(),
+  factsDown: false,
+  detailsUrls: new Map(),
   tokenRefreshes: 0,
 });
 
@@ -50,7 +60,8 @@ const merge = (run: CheckRun, body: CheckRunBody): CheckRun => ({
     : { output: { title: body.output.title, summary: body.output.summary } }),
 });
 
-export const fakeLayers = (
+/** The fake GitHub, its installation directory and its alarm sink, for an applier given its own `ConcludeFacts`. */
+export const fakeGithubLayers = (
   gh: FakeGithub,
   installations: Record<string, number> = { "acme/app": 7 },
 ) => {
@@ -78,6 +89,7 @@ export const fakeLayers = (
           body,
         );
         gh.runs.push(run);
+        if (body.details_url !== undefined) gh.detailsUrls.set(run.id, body.details_url);
         return run;
       }),
     updateCheckRun: ({ checkRunId, body }) =>
@@ -85,6 +97,7 @@ export const fakeLayers = (
         const i = gh.runs.findIndex((r) => r.id === checkRunId);
         const next = merge(gh.runs[i]!, body);
         gh.runs[i] = next;
+        if (body.details_url !== undefined) gh.detailsUrls.set(checkRunId, body.details_url);
         if (body.output?.annotations !== undefined)
           gh.annotations.set(checkRunId, [
             ...(gh.annotations.get(checkRunId) ?? []),
@@ -108,6 +121,21 @@ export const fakeLayers = (
   });
   return Layer.mergeAll(client, directory, alarms);
 };
+
+/** Every port the check-run applier reads, the control plane's records those the fake holds. */
+export const fakeLayers = (
+  gh: FakeGithub,
+  installations: Record<string, number> = { "acme/app": 7 },
+) => Layer.merge(fakeGithubLayers(gh, installations), fakeConcludeFacts(gh));
+
+/** The control plane's records the fake holds in `gh.facts`. */
+export const fakeConcludeFacts = (gh: Pick<FakeGithub, "facts" | "factsDown">) =>
+  Layer.succeed(ConcludeFacts, {
+    of: (executionId) =>
+      gh.factsDown
+        ? Effect.fail(new ConcludeFactsUnavailable({ message: "D1 unavailable" }))
+        : Effect.succeed(gh.facts.get(executionId) ?? null),
+  });
 
 /** One repository as the fake reads see it. */
 export interface FakeRepo {
@@ -142,24 +170,30 @@ export interface FakeReads {
   readonly calls: string[];
   /** A failure each named read takes, keyed `<read> <repo>`, until removed. */
   readonly failures: Map<string, GithubReadError>;
+  /** How long, in milliseconds of the clock, each named read waits before it answers, keyed as `failures`. */
+  readonly delays: Map<string, number>;
 }
 
 export const fakeReads = (
   repos: Record<string, FakeRepo> = {},
   installations: Record<string, number> = {},
-): FakeReads => ({ repos, installations, calls: [], failures: new Map() });
+): FakeReads => ({ repos, installations, calls: [], failures: new Map(), delays: new Map() });
 
 /** `GithubRead` over the fake's tables; a repository without an installation fails `GithubUncredentialed`. */
 export const fakeReadLayer = (state: FakeReads) => {
   const read = <A>(name: string, repo: string, f: (r: FakeRepo) => A) =>
     Effect.suspend((): Effect.Effect<A, GithubReadError> => {
       state.calls.push(`${name} ${repo}`);
-      const failure = state.failures.get(`${name} ${repo}`);
-      if (failure !== undefined) return Effect.fail(failure);
-      const r = state.repos[repo];
-      if (state.installations[repo] === undefined || r === undefined)
-        return Effect.fail(new GithubUncredentialed({ repo }));
-      return Effect.succeed(f(r));
+      const answer = Effect.suspend((): Effect.Effect<A, GithubReadError> => {
+        const failure = state.failures.get(`${name} ${repo}`);
+        if (failure !== undefined) return Effect.fail(failure);
+        const r = state.repos[repo];
+        if (state.installations[repo] === undefined || r === undefined)
+          return Effect.fail(new GithubUncredentialed({ repo }));
+        return Effect.succeed(f(r));
+      });
+      const delay = state.delays.get(`${name} ${repo}`);
+      return delay === undefined ? answer : Effect.andThen(Effect.sleep(delay), answer);
     });
   return Layer.succeed(GithubRead, {
     installation: (repo) => read("installation", repo, () => state.installations[repo]!),

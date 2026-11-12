@@ -15,6 +15,9 @@ import {
   type LoadedBlob,
 } from "./applier.ts";
 import { BASE_SHA, fakeGitLayer, fakeRepo, type FakeRepo } from "./fake-git.test-support.ts";
+import { writebackRecordsLayer } from "./records.ts";
+import { artifactPath, memoryBucket, recordsDb } from "./records.test-support.ts";
+import { DEFAULT_MAX_BYTES, stagedBlobName } from "../staged-write/manifest.ts";
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const enc = (text: string) => new TextEncoder().encode(text);
@@ -101,7 +104,7 @@ const WRITES = [
 ];
 
 describe("pr.propose", () => {
-  it("FD-AGT-034 the binding returns the manifest of a success result with a staged write, and none otherwise", () => {
+  it("[FD-AGT-034] the binding returns the manifest of a success result with a staged write, and none otherwise", () => {
     const base = { executionId: "x1", run: "spec-drift-pr", repo: { owner: "o", name: "r" } };
     expect(prProposePayload({ ...base, outcome: "success", stagedWrite: manifest() })).toEqual({
       _tag: "payload",
@@ -113,7 +116,7 @@ describe("pr.propose", () => {
     });
   });
 
-  it("FD-AGT-035 FD-AGT-013 FD-GH-083 commits each blob byte for byte on the base commit and opens a draft pull request", async () => {
+  it("[FD-AGT-035] [FD-AGT-013] [FD-GH-083] commits each blob byte for byte on the base commit and opens a draft pull request", async () => {
     const repo = fakeRepo();
     const answer = await apply(repo, manifest());
     expect(answer).toEqual({ _tag: "applied", externalRef: "https://github.com/o/r/pull/1" });
@@ -133,7 +136,66 @@ describe("pr.propose", () => {
     });
   });
 
-  it("FD-GH-083 reuses the open pull request whose head is the manifest's branch", async () => {
+  it("[FD-AGT-013] commits the blobs read back from the artifact store byte for byte, and refuses a swapped one", async () => {
+    const db = recordsDb();
+    db.exec(
+      "insert into placements values ('x1', 'accepted', 1, 'e1', 1); insert into executors values ('e1', 'cloudflare')",
+    );
+    const bucket = memoryBucket();
+    const binary = Uint8Array.from([0, 255, 10, 13, 128, 7]);
+    const crlf = enc("# A\r\nno newline at end");
+    for (const bytes of [binary, crlf])
+      bucket.objects.set(artifactPath("x1", 1, stagedBlobName(sha256(bytes))), bytes);
+    const live = writebackRecordsLayer({
+      db,
+      artifacts: bucket,
+      artifactPath,
+      issuedCredentials: () => Effect.succeed([]),
+    });
+    const m = manifest({
+      entries: [
+        { path: "specs/a.md", mode: "100644", digest: sha256(crlf) },
+        { path: "specs/logo.bin", mode: "100644", digest: sha256(binary) },
+      ],
+    });
+    const repo = fakeRepo();
+    expect((await apply(repo, m, live))._tag).toBe("applied");
+    expect([...repo.blobs.values()]).toEqual([crlf, binary]);
+
+    bucket.objects.set(artifactPath("x1", 1, stagedBlobName(sha256(binary))), enc("swapped"));
+    const swapped = fakeRepo();
+    const refused = await apply(swapped, m, live);
+    expect(refused).toMatchObject({ _tag: "refused" });
+    expect((refused as { reason: string }).reason).toMatch(/^writeback: digest-mismatch/);
+    expect(swapped.calls.filter((c) => WRITES.includes(c))).toEqual([]);
+  });
+
+  it("[FD-AGT-026] refuses a staged blob larger than maxBytes as too-large without reading its bytes", async () => {
+    const db = recordsDb();
+    db.exec(
+      "insert into placements values ('x1', 'accepted', 1, 'e1', 1); insert into executors values ('e1', 'cloudflare')",
+    );
+    const bucket = memoryBucket();
+    const big = new Uint8Array(DEFAULT_MAX_BYTES + 1);
+    bucket.objects.set(artifactPath("x1", 1, stagedBlobName(sha256(big))), big);
+    const live = writebackRecordsLayer({
+      db,
+      artifacts: bucket,
+      artifactPath,
+      issuedCredentials: () => Effect.succeed([]),
+    });
+    const m = manifest({
+      entries: [{ path: "specs/big.bin", mode: "100644", digest: sha256(big) }],
+    });
+    const repo = fakeRepo();
+    const refused = await apply(repo, m, live);
+    expect(refused).toMatchObject({ _tag: "refused" });
+    expect((refused as { reason: string }).reason).toMatch(/^writeback: too-large/);
+    expect(bucket.reads).toEqual([]);
+    expect(repo.calls.filter((c) => WRITES.includes(c))).toEqual([]);
+  });
+
+  it("[FD-GH-083] reuses the open pull request whose head is the manifest's branch", async () => {
     const repo = fakeRepo();
     await apply(repo, manifest());
     const second = await apply(
@@ -145,7 +207,46 @@ describe("pr.propose", () => {
     expect(repo.pulls[0]?.title).toBe("Again");
   });
 
-  it("FD-AGT-016 FD-AGT-018 a rejected manifest is refused with every reason before any GitHub call", async () => {
+  it("[FD-AGT-041] sanitizes a model-authored title and body before it opens or updates the pull request", async () => {
+    const hostile = {
+      title: "Ping @octocat <b>now</b>",
+      body: "cc @org/team <img src=x>\nSee [docs](specs/a.md)\n```\nopen",
+      draft: true,
+      labels: [],
+    };
+    const repo = fakeRepo();
+    await apply(repo, manifest({ pr: hostile }));
+    expect(repo.pulls[0]).toMatchObject({
+      title: "Ping `@octocat` now",
+      body: "cc `@org/team` \nSee `[docs](specs/a.md)`\n```\nopen\n```",
+    });
+    await apply(repo, manifest({ pr: { ...hostile, title: "Again @octocat", body: "<i>@x</i>" } }));
+    expect(repo.pulls).toHaveLength(1);
+    expect(repo.pulls[0]).toMatchObject({ title: "Again `@octocat`", body: "`@x`" });
+  });
+
+  it("passes the title and body of a run with no model call through unchanged", async () => {
+    const plain = {
+      writebackFor: (run: string) =>
+        run === "spec-drift-pr" ? { writeback, declaresModel: false } : undefined,
+      appLogin: "flare-dispatch[bot]",
+    };
+    const repo = fakeRepo();
+    const pr = {
+      title: "Bump <x>",
+      body: "See [run](https://ci.example/1)",
+      draft: true,
+      labels: [],
+    };
+    await Effect.runPromise(
+      applyPrPropose(plain)(row(manifest({ pr }))).pipe(
+        Effect.provide(Layer.merge(fakeGitLayer(repo), recordsLayer({ modelCalls: false }))),
+      ),
+    );
+    expect(repo.pulls[0]).toMatchObject({ title: pr.title, body: pr.body });
+  });
+
+  it("[FD-AGT-016] [FD-AGT-018] a rejected manifest is refused with every reason before any GitHub call", async () => {
     const repo = fakeRepo();
     const bad = manifest({
       branch: "main",
@@ -165,7 +266,7 @@ describe("pr.propose", () => {
     expect(repo.calls).toEqual([]);
   });
 
-  it("FD-AGT-032 a URL host present in the file at the base commit is read back before any write and accepted", async () => {
+  it("[FD-AGT-032] a URL host present in the file at the base commit is read back before any write and accepted", async () => {
     const repo = fakeRepo();
     repo.files.set("specs/a.md", enc("see https://kept.example/x\n"));
     const text = "see https://kept.example/x\nmore https://kept.example/y\n";
@@ -179,7 +280,7 @@ describe("pr.propose", () => {
     expect((refused as { reason: string }).reason).toMatch(/^writeback: url-not-allowed/);
   });
 
-  it("FD-GH-084 refuses a branch holding a commit whose author is not the App, and leaves it unchanged", async () => {
+  it("[FD-GH-084] refuses a branch holding a commit whose author is not the App, and leaves it unchanged", async () => {
     const repo = fakeRepo();
     repo.commits.set("h".repeat(40), {
       sha: "h".repeat(40),
@@ -197,7 +298,7 @@ describe("pr.propose", () => {
     expect(repo.calls.filter((c) => WRITES.includes(c))).toEqual([]);
   });
 
-  it("FD-GH-082 refuses a protected branch under the prefix", async () => {
+  it("[FD-GH-082] refuses a protected branch under the prefix", async () => {
     const repo = fakeRepo();
     repo.protectedBranches.add("flare-dispatch/spec-drift");
     expect(await apply(repo, manifest())).toEqual({
@@ -207,12 +308,12 @@ describe("pr.propose", () => {
     expect(repo.calls.filter((c) => WRITES.includes(c))).toEqual([]);
   });
 
-  it("FD-AGT-042 a failed record read answers retryable, never an empty staged write", async () => {
+  it("[FD-AGT-042] a failed record read answers retryable, never an empty staged write", async () => {
     const answer = await apply(fakeRepo(), manifest(), recordsLayer({ fail: true }));
     expect(answer).toEqual({ _tag: "retryable", reason: "writeback: read artifacts" });
   });
 
-  it("FD-AGT-038 a refusal leaves only the row's answer: the applier has no outcome to change", async () => {
+  it("[FD-AGT-038] a refusal leaves only the row's answer: the applier has no outcome to change", async () => {
     const answer = await apply(fakeRepo(), manifest({ branch: "feature/x" }));
     expect(Object.keys(answer).sort()).toEqual(["_tag", "reason"]);
   });
@@ -249,7 +350,7 @@ describe("pr.close", () => {
       applyPrClose(config)(closeRow(branch)).pipe(Effect.provide(fakeGitLayer(repo))),
     );
 
-  it("FD-GH-087 FD-AGT-070 closes the App's pull request, and refuses one carrying a human commit", async () => {
+  it("[FD-GH-087] [FD-AGT-070] closes the App's pull request, and refuses one carrying a human commit", async () => {
     const repo = fakeRepo();
     await apply(repo, manifest());
     expect((await close(repo, "flare-dispatch/spec-drift"))._tag).toBe("applied");

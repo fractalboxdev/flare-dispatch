@@ -1,27 +1,33 @@
 // The services one isolate builds once and every request and tick reads: the GitHub services, intake's Layers and the
 // application ports mameko's validation counts (MAMEKO-HOST-046). A cache or token held here outlives one request.
-import { catalogRuns } from "@fractalboxdev/flare-dispatch-intake";
+import { FollowOnSubmitter } from "@fractalboxdev/flare-dispatch-github";
+import { catalogRuns, followOnSubmitterLayer } from "@fractalboxdev/flare-dispatch-intake";
 import {
   d1Admission,
   d1IntakeStore,
   d1ShedRecorder,
-  ExecutionCanceller,
+  ExecutionStartFailed,
+  HeldCheckReporter,
   InstallationEviction,
   IntakeConfig,
   intakeLayer,
   ManifestReporter,
   manifestSourceLayer,
-  oidcVerifierLayer,
   profileClassResolver,
   protectionSnapshotsLayer,
+  type AdmissionPorts,
   type IntakeSettings,
 } from "@fractalboxdev/flare-dispatch-intake";
 import { alarmPortFromEnv } from "@fractalboxdev/flare-dispatch-ops";
+import { type Actuator, Actuators, actuatorRegistry } from "@fractalboxdev/mameko-ports";
 import {
   ConfigurationSourceLive,
   GateDecisionSourceLive,
 } from "@fractalboxdev/flare-dispatch-profile";
+import type { ExecutionPayload } from "@fractalboxdev/mameko-coordinator";
 import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
+import { d1Sql } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { cancelledLease } from "@fractalboxdev/mameko-store-sqlite";
 import { Context, Effect, Layer, Scope } from "effect";
 import { deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { devRepositoryOf } from "./dev-repository.ts";
@@ -30,9 +36,10 @@ import {
   gitDataWithoutApp,
   localPorts,
   writebackApplier,
-  writebackRecordsDeferred,
+  writebackRecords,
+  writeCredentialIn,
 } from "./agentic.ts";
-import { appLoginOf, appOptionsOf, appServices, boundFetch, readsWithoutApp } from "./github.ts";
+import { appLoginOf, appOptionsOf, appServices, readsWithoutApp } from "./github.ts";
 
 const listOf = (value: unknown): readonly string[] => {
   if (Array.isArray(value)) return value.map(String);
@@ -56,32 +63,78 @@ export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
     appId: Number(env.GITHUB_APP_ID ?? 0),
     webhookSecret: env.WEBHOOK_SECRET === "" ? undefined : env.WEBHOOK_SECRET,
     webhookEvents: events.length === 0 ? undefined : events,
-    oidcAudience: env.DISPATCH_OIDC_AUDIENCE === "" ? undefined : env.DISPATCH_OIDC_AUDIENCE,
-    dispatchers: listOf(raw["DISPATCHERS"]).map((d) => d.trim().toLowerCase()),
     allows: () => true,
     // No policy rule classifies a repository yet; a development deployment's captured repository carries its own mode.
     confidentiality: (repo) =>
       (dev !== undefined && dev.repository === repo ? dev.confidentiality : undefined) ??
       "unclassified",
+    writeCredentialIn: writeCredentialIn(env),
   };
 };
 
-/** A queued admission wakes the standing claims of the class's device executors (MAMEKO-ARCH-037). */
+/**
+ * A queued admission wakes the standing claims of the class's device executors (MAMEKO-ARCH-037). The execution is
+ * already admitted, so a wake that fails, such as a grant the channel refuses, is logged and the request still answers
+ * with the execution it admitted.
+ */
 const wake = (env: ControlPlaneEnv) => (className: string) =>
-  Effect.promise(() =>
+  Effect.tryPromise(() =>
     wakeStandingClaims(env.DB, env.CHANNEL, { className, eligibleKinds: ["device"] }),
+  ).pipe(
+    Effect.asVoid,
+    Effect.catchCause((cause) =>
+      Effect.logWarning("standing claim wake failed after admission", { className, cause }),
+    ),
   );
 
 /**
- * mameko offers no cancel of an admitted execution, so a superseded merge group's execution runs to its end; the cancel
- * is a logged no-op, and nothing downstream decides on it.
+ * The `ExecutionEngine` start of an admitted execution whose class does not defer its workflow (MAMEKO-ADM-029). A
+ * rejected start is `ExecutionStartFailed`: the execution stays queued, and the admission sweep starts it.
  */
-const cancellerDeferred = Layer.succeed(ExecutionCanceller, {
-  cancel: (executionId, cause) =>
-    Effect.logWarning("execution cancel needs mameko's cancel of an admitted execution", {
-      executionId,
-      cause,
-    }),
+export const startExecutionOf =
+  (env: Pick<ControlPlaneEnv, "EXECUTION">) =>
+  (payload: ExecutionPayload): Effect.Effect<void, ExecutionStartFailed> =>
+    Effect.tryPromise({
+      try: () => env.EXECUTION.get(env.EXECUTION.idFromName(payload.executionId)).start(payload),
+      catch: (cause) =>
+        new ExecutionStartFailed({
+          executionId: payload.executionId,
+          className: payload.className,
+          cause: String(cause),
+        }),
+    }).pipe(Effect.asVoid);
+
+/**
+ * The cancel of an execution a supersession, a group cancel or a per-execution cancel recorded `cancelled`: its
+ * `ExecutionEngine` records the cancel, which ends its wait for a lease or a result (MAMEKO-ADM-062), and a leased
+ * execution's executor gets `exec.cancel` over its channel (MAMEKO-ADM-066).
+ */
+export const cancelExecutionOf =
+  (env: Pick<ControlPlaneEnv, "DB" | "EXECUTION" | "CHANNEL">) =>
+  (executionId: string, cause: string): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        env.EXECUTION.get(env.EXECUTION.idFromName(executionId)).cancel(executionId, cause),
+      );
+      const lease = yield* cancelledLease(executionId, cause).pipe(
+        Effect.provide(d1Sql(env.DB)),
+        Effect.orDie,
+      );
+      if (lease !== null)
+        yield* Effect.promise(() =>
+          env.CHANNEL.get(env.CHANNEL.idFromName(lease.executorId)).cancelLease(lease.frame),
+        );
+    });
+
+/**
+ * What admission needs of the Worker: the wake-up after a queued admission, the workflow start, the cancel of a
+ * superseded or cancelled execution's workflow and lease, and the alarm sink.
+ */
+const admissionPorts = (env: ControlPlaneEnv, alarms: AdmissionPorts["alarms"]) => ({
+  queued: wake(env),
+  startExecution: startExecutionOf(env),
+  cancelExecution: cancelExecutionOf(env),
+  alarms,
 });
 
 /** Without the App no check run can be written; the shed row already records the invalid manifest (FD-INT-018). */
@@ -94,47 +147,74 @@ const manifestReporterWithoutApp = Layer.succeed(ManifestReporter, {
     }),
 });
 
+/**
+ * Without the App no check run can be written; the held request's record and hold already show it waits for its
+ * cooldown window (FD-INT-057).
+ */
+const heldCheckReporterWithoutApp = Layer.succeed(HeldCheckReporter, {
+  queued: (check) =>
+    Effect.logWarning("held check run not posted: no GitHub App", {
+      executionId: check.executionId,
+    }),
+  dropped: () => Effect.void,
+});
+
 /** Without the App no installation state is cached, so there is nothing to evict. */
 const evictionWithoutApp = Layer.succeed(InstallationEviction, {
   installation: () => Effect.void,
   repositories: () => Effect.void,
 });
 
+/**
+ * The drainer's actuators with intake's follow-on submitter in reach: a `dispatch.followOn` row's applier submits its
+ * request to admission, keyed `<execution_id>/<intent_key>`, so a repeated apply starts no second execution
+ * (FD-GH-088). The submitter reads intake's services, which the GitHub services underneath build first.
+ */
+export const followOnActuators = Layer.effect(
+  Actuators,
+  Effect.gen(function* () {
+    const base = yield* Actuators;
+    const submitter = yield* FollowOnSubmitter;
+    const provide = Effect.provideService(FollowOnSubmitter, submitter);
+    const wrap = ({ apply, lookup, reconcile }: Actuator): Actuator => ({
+      apply: (row) => provide(apply(row)),
+      ...(lookup === undefined ? {} : { lookup: (row) => provide(lookup(row)) }),
+      ...(reconcile === undefined ? {} : { reconcile: (row) => provide(reconcile(row)) }),
+    });
+    return actuatorRegistry(
+      Object.fromEntries(base.names().map((name) => [name, wrap(base.get(name)!)])),
+    );
+  }),
+).pipe(Layer.provide(followOnSubmitterLayer));
+
 const isolateLayer = (env: ControlPlaneEnv) => {
   const settings = intakeSettings(env);
   const alarms = alarmPortFromEnv(env);
   const app = appOptionsOf(env);
-  const common = Layer.mergeAll(
-    cancellerDeferred,
-    alarms,
-    ConfigurationSourceLive,
-    GateDecisionSourceLive,
-  );
+  const common = Layer.mergeAll(alarms, ConfigurationSourceLive, GateDecisionSourceLive);
   if (app !== undefined) {
     const github = appServices(env, app, alarms);
     // The agentic appliers for `pr.propose` and `pr.close` over the GitHub package's applier; it wins the tag.
-    const support = Layer.mergeAll(gitData, writebackRecordsDeferred).pipe(
-      Layer.provideMerge(github),
-    );
+    const support = Layer.mergeAll(gitData, writebackRecords(env)).pipe(Layer.provideMerge(github));
     const applier = writebackApplier(appLoginOf(env)).pipe(Layer.provideMerge(support));
-    return Layer.mergeAll(
+    const services = Layer.mergeAll(
       profileClassResolver.pipe(
-        Layer.provideMerge(
-          intakeLayer({ db: env.DB, settings, fetch: boundFetch, queued: wake(env) }),
-        ),
+        Layer.provideMerge(intakeLayer({ db: env.DB, settings, ...admissionPorts(env, alarms) })),
       ),
       localPorts(env),
     ).pipe(Layer.provideMerge(applier), Layer.provideMerge(common));
+    // The follow-on wrapper wins the `Actuators` tag over the agentic appliers underneath.
+    return followOnActuators.pipe(Layer.provideMerge(services));
   }
   return Layer.mergeAll(
     Layer.succeed(IntakeConfig, settings),
-    d1Admission(env.DB, wake(env)),
+    d1Admission(env.DB, settings.profile, admissionPorts(env, alarms)),
     d1IntakeStore(env.DB),
     d1ShedRecorder(env.DB),
     manifestSourceLayer,
     manifestReporterWithoutApp,
+    heldCheckReporterWithoutApp,
     evictionWithoutApp,
-    oidcVerifierLayer(boundFetch),
     profileClassResolver.pipe(
       Layer.provideMerge(protectionSnapshotsLayer),
       Layer.provide(Layer.succeed(IntakeConfig, settings)),

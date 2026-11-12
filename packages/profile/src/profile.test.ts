@@ -1,3 +1,5 @@
+import { BUILT_IN_REASON_KINDS } from "@fractalboxdev/mameko-coordinator";
+import { DEFAULT_APPROVAL_FLOOR, missingFloorPatterns } from "@fractalboxdev/mameko-egress";
 import { reclaimPolicyFor } from "@fractalboxdev/mameko-kernel";
 import {
   APPLICATION_PORTS,
@@ -146,7 +148,7 @@ describe("load", () => {
     ]);
   });
 
-  it("MAMEKO-LEASE-092 the profile declares provenance, the acceptance check's reason kind, in category policy", () => {
+  it("MAMEKO-LEASE-093 the profile declares provenance, the acceptance check's reason kind, in category policy", () => {
     expect(profile.reason_kinds).toEqual({ provenance: "policy" });
     expect(acceptanceReasonKinds).toEqual(["provenance"]);
   });
@@ -243,6 +245,7 @@ describe("load", () => {
           ceiling: null,
           inputs: [{ reachability: "device-local" }],
           requires: [],
+          constraints: [],
         },
       ],
     };
@@ -421,11 +424,11 @@ describe("class catalogue", () => {
     expect(cls("interactive").terminal_outcome).toEqual({ outcome: "failure", reason: "budget" });
   });
 
-  it("MAMEKO-ADM-059 batch ends deferred", () => {
+  it("MAMEKO-ADM-058 batch ends deferred", () => {
     expect(cls("batch").terminal_outcome).toBe("deferred");
   });
 
-  it("MAMEKO-ADM-073 only interactive and batch are sheddable", () => {
+  it("MAMEKO-ADM-077 only interactive and batch are sheddable", () => {
     expect(profile.classes.filter((c) => c.sheddable === true).map((c) => c.name)).toEqual([
       "interactive",
       "batch",
@@ -457,6 +460,45 @@ describe("class catalogue", () => {
   });
 });
 
+describe("isolation and signing", () => {
+  const DEPLOYMENTS = ["production", "development"] as const;
+  const PHASES = [0, 1, 2, 3, 4] as const;
+  const builds = DEPLOYMENTS.flatMap((d) => PHASES.map((p) => buildProfile(d, p)));
+  const floorOf = (p: Profile) =>
+    p.approval_floor.map(({ program, subcommands }) => [program, ...subcommands].join(" "));
+
+  it("[FD-PROF-049] the approval floor is mameko's default list plus wrangler d1 and gh release", () => {
+    for (const p of builds) {
+      const floor = floorOf(p);
+      expect(missingFloorPatterns(floor)).toEqual([]);
+      expect([...floor].sort()).toEqual(
+        [...DEFAULT_APPROVAL_FLOOR, "wrangler d1", "gh release"].sort(),
+      );
+    }
+  });
+
+  it("[FD-PROF-050] setup grants registries and git with declared methods elsewhere; agent grants the model gateway and git with read-only elsewhere", () => {
+    for (const p of builds)
+      expect(p.egress_profiles).toEqual({
+        setup: { grants: ["package-registries", "git-remote"], other_hosts: "declared-methods" },
+        agent: { grants: ["model-gateway", "git-remote"], other_hosts: "read-only" },
+      });
+  });
+
+  it("[FD-PROF-051] the signing purposes are statement and cache-entry and no other", () => {
+    for (const p of builds) expect(p.signing_purposes).toEqual(["statement", "cache-entry"]);
+  });
+
+  it("[FD-PROF-053] provenance is a declared reason kind in category policy, so an acceptance rejection is a policy failure", () => {
+    expect("provenance" in BUILT_IN_REASON_KINDS).toBe(false);
+    for (const p of builds) expect(p.reason_kinds).toEqual({ provenance: "policy" });
+    expect(phase4.reason_kinds).toEqual({ provenance: "policy" });
+    expect(acceptanceReasonKinds).toContain("provenance");
+    const undeclared = mutate(({ reason_kinds: _, ...d }) => d);
+    expect(rejections(undeclared).map((r) => r.path)).toEqual(["reason_kinds.provenance"]);
+  });
+});
+
 describe("delayed cloud claim", () => {
   const at = (name: string, request: Partial<PlacementRequest>, predictedMiss = false) =>
     cloudEligibleAt({
@@ -467,11 +509,11 @@ describe("delayed cloud claim", () => {
       staleAt: 99_000,
     });
 
-  it("MAMEKO-LEASE-019 release joins the cloud queue at admission", () => {
+  it("MAMEKO-LEASE-020 release joins the cloud queue at admission", () => {
     expect(at("release", {})).toBe(1_000);
   });
 
-  it("MAMEKO-LEASE-021 batch joins the cloud queue at stale_at", () => {
+  it("MAMEKO-LEASE-022 batch joins the cloud queue at stale_at", () => {
     expect(at("batch", {})).toBe(99_000);
   });
 
@@ -483,12 +525,12 @@ describe("delayed cloud claim", () => {
     expect(at("required", {})).toBe(61_000);
   });
 
-  it("MAMEKO-LEASE-022 a predicted miss opens the cloud entry at admission", () => {
+  it("MAMEKO-LEASE-023 a predicted miss opens the cloud entry at admission", () => {
     expect(at("required", {}, true)).toBe(1_000);
     expect(at("interactive", {}, true)).toBe(1_000);
   });
 
-  it("MAMEKO-LEASE-023 no cloud kind left means no cloud entry", () => {
+  it("MAMEKO-LEASE-024 no cloud kind left means no cloud entry", () => {
     expect(at("required", { confidentiality: "confidential-compute" })).toBeNull();
     expect(at("batch", { declaresClass: false })).toBeNull();
   });
@@ -642,13 +684,6 @@ describe("check-run lifecycle kinds", () => {
       coalesce_key: "executionProgressKey",
       delivery_tier: "progress",
     });
-    const doc = mutate((d) => {
-      const { coalesce_key: _, ...progress } = d.intent_kinds["check.progress"]!;
-      return { ...d, intent_kinds: { ...d.intent_kinds, "check.progress": progress } };
-    });
-    expect(rejections(doc).map((r) => r.path)).toEqual([
-      "intent_kinds.check.progress.coalesce_key",
-    ]);
   });
 
   it("MAMEKO-OUT-044, MAMEKO-OUT-059, MAMEKO-OUT-060 check kinds apply in insertion order; start and progress void after the outcome", () => {
@@ -758,7 +793,8 @@ describe("deployments", () => {
       {
         item: "registration",
         path: "registration.key_stores",
-        reason: "hardware key store under attestation: none; list only software or set attestation: verifier",
+        reason:
+          "hardware key store under attestation: none; list only software or set attestation: verifier",
       },
       {
         item: "registration",

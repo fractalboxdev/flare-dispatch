@@ -20,6 +20,7 @@ export {
   type SpendConfig,
 } from "./document.ts";
 export {
+  checkOpenPayload,
   CLASS_ORDER,
   commitRecipe,
   dedupRecipes,
@@ -36,6 +37,8 @@ export {
   SUPERSEDING_RUNS,
   supersessionKey,
   type Caller,
+  type CheckOpenPayload,
+  type CheckOpenRequest,
   type ClassName,
   type ClassRequest,
   type Resolved,
@@ -58,6 +61,7 @@ export {
   drawsReserve,
   eligibleKinds,
   isolationOf,
+  placementInputs,
   lifecycleKey,
   staleAt,
   type EligibleSet,
@@ -78,6 +82,7 @@ export {
   missingPorts,
   portUses,
   profileLoader,
+  reservesOf,
   validateProfile,
   type ValidationContext,
 } from "./validate.ts";

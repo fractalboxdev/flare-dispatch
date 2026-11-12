@@ -1,15 +1,20 @@
 import { createHash, createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ModelCallFailed } from "@fractalboxdev/mameko-gateway";
+import {
+  ModelCallFailed,
+  ModelRequestInvalid,
+  sendHostedCall,
+} from "@fractalboxdev/mameko-gateway";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   bedrockRoute,
   checkRegistry,
-  entryPrice,
   FD_ROUTE_KINDS,
   failureKind,
+  sendFdHostedCall,
   workersAiRoute,
   type RegistryEntry,
 } from "./routes.ts";
@@ -45,7 +50,7 @@ describe("provider registry", () => {
     upstreamModel: "@cf/x",
   };
 
-  it("FD-MDL-020 registers workers-ai and bedrock only; validation accepts those and mameko's built-in kinds", () => {
+  it("[FD-MDL-020] registers workers-ai and bedrock only; validation accepts those and mameko's built-in kinds", () => {
     expect(FD_ROUTE_KINDS).toEqual(["workers-ai", "bedrock"]);
     const of = (routeKind: string): RegistryEntry => ({
       ...workersAi,
@@ -70,7 +75,7 @@ describe("provider registry", () => {
     ]);
   });
 
-  it("FD-MDL-022 the deploy check fails a workers-ai entry with no per-token rate derived from its Neurons price", () => {
+  it("[FD-MDL-022] the deploy check fails a workers-ai entry with no per-token rate derived from its Neurons price", () => {
     const { neuronsPerMTok: _n, ...noNeurons } = workersAi;
     const { inputPriceMicroUsdPerMTok: _i, ...noRate } = workersAi;
     expect(checkRegistry([noNeurons])[0]?.reason).toMatch(/no per-token rate/);
@@ -80,23 +85,70 @@ describe("provider registry", () => {
     );
   });
 
-  it("FD-MDL-021 never prices a workers-ai entry at the fallback rate", () => {
-    const fallback = { input: 75_000_000, output: 75_000_000 };
-    expect(entryPrice(workersAi, fallback)).toEqual({
-      _tag: "priced",
-      input: 26_668 * 11,
-      output: 204_805 * 11,
+  it("[FD-MDL-021] the gateway never prices a workers-ai entry at the fallback rate", async () => {
+    const reserved: number[] = [];
+    const settled: number[] = [];
+    const sent: string[] = [];
+    const allowance = {
+      reserve: (call: { readonly maxMicroUsd: number }) =>
+        Effect.sync(() => {
+          reserved.push(call.maxMicroUsd);
+          return "reserved" as const;
+        }),
+      settle: (call: { readonly microUsd: number }) =>
+        Effect.sync(() => {
+          settled.push(call.microUsd);
+        }),
+      used: () => Effect.succeed({ settledMicroUsd: 0, openMicroUsd: 0 }),
+    };
+    const route = {
+      send: (e: { readonly id: string }) =>
+        Effect.sync(() => {
+          sent.push(e.id);
+          return { body: {}, usage: { inputTokens: 1_000, outputTokens: 100 }, cacheHit: null };
+        }),
+    };
+    const call = (e: RegistryEntry) => ({
+      allowance,
+      route,
+      entry: { ...e, providerPath: "" },
+      tier: "transform" as const,
+      request,
+      executionId: "x1",
+      allowanceMicroUsd: 1_000_000_000,
+      epoch: 1,
+      callId: `c-${e.id}`,
+      fallbackPriceUsdPerMTok: 75,
     });
+    const bytes = request.messages.reduce(
+      (n, m) => n + new TextEncoder().encode(m.content).length,
+      0,
+    );
+    const maximum = (input: number, output: number) =>
+      Math.ceil((bytes * input + 512 * output) / 1_000_000);
+
+    await Effect.runPromise(sendFdHostedCall(call(workersAi)));
+    expect(reserved).toEqual([maximum(26_668 * 11, 204_805 * 11)]);
+    expect(settled).toEqual([Math.ceil((1_000 * 26_668 * 11 + 100 * 204_805 * 11) / 1_000_000)]);
+
     const {
       inputPriceMicroUsdPerMTok: _i,
       outputPriceMicroUsdPerMTok: _o,
       ...unpriced
     } = workersAi;
-    expect(entryPrice(unpriced, fallback)).toEqual({ _tag: "unpriced", entry: "wa" });
-    expect(entryPrice({ ...unpriced, routeKind: "bedrock" }, fallback)).toEqual({
-      _tag: "priced",
-      ...fallback,
-    });
+    reserved.length = 0;
+    sent.length = 0;
+    const refused = await Effect.runPromise(Effect.flip(sendFdHostedCall(call(unpriced))));
+    expect(refused).toBeInstanceOf(ModelRequestInvalid);
+    expect(reserved).toEqual([]);
+    expect(sent).toEqual([]);
+    // mameko's call on its own prices the same entry at the fallback rate.
+    await Effect.runPromise(sendHostedCall(call(unpriced)));
+    expect(reserved).toEqual([maximum(75_000_000, 75_000_000)]);
+
+    reserved.length = 0;
+    await Effect.runPromise(sendFdHostedCall(call({ ...unpriced, routeKind: "bedrock" })));
+    expect(reserved).toEqual([maximum(75_000_000, 75_000_000)]);
   });
 });
 
@@ -141,7 +193,7 @@ const referenceSignature = (secret: string, date: string, region: string, string
 };
 
 describe("bedrock route", () => {
-  it("FD-MDL-024 signs InvokeModel with SigV4 in the control plane and sends the Anthropic body", async () => {
+  it("[FD-MDL-024] signs InvokeModel with SigV4 in the control plane and sends the Anthropic body", async () => {
     const sent: { url: string; init: RequestInit }[] = [];
     const credentials = {
       accessKeyId: "AKIDEXAMPLE",
@@ -207,11 +259,41 @@ describe("bedrock route", () => {
     );
   });
 
-  it("FD-MDL-024 the executor entry carries no bedrock route or signer", () => {
-    const executorEntry = readFileSync(
-      fileURLToPath(new URL("../executor.ts", import.meta.url)),
-      "utf8",
-    );
-    expect(executorEntry).not.toMatch(/routes|sigv4|bedrock/i);
+  it("[FD-MDL-024] no module the executor entry imports reaches the bedrock route or its signer", () => {
+    const routes = fileURLToPath(new URL("./routes.ts", import.meta.url));
+    const sigv4 = fileURLToPath(new URL("./sigv4.ts", import.meta.url));
+    const executor = reachable(fileURLToPath(new URL("../executor.ts", import.meta.url)));
+    expect(executor.files.has(routes)).toBe(false);
+    expect(executor.files.has(sigv4)).toBe(false);
+    expect(executor.files.size).toBeGreaterThan(10);
+    expect([...executor.packages].filter((p) => p.startsWith(AGENTIC_PACKAGE))).toEqual([]);
+    // The control-plane entry reaches both, so the walk follows the imports that would carry them.
+    const index = reachable(fileURLToPath(new URL("../index.ts", import.meta.url)));
+    expect(index.files.has(routes)).toBe(true);
+    expect(index.files.has(sigv4)).toBe(true);
   });
 });
+
+const AGENTIC_PACKAGE = "@fractalboxdev/flare-dispatch-agentic";
+
+/** The specifiers of a module's static imports and re-exports, type-only ones included, and its literal dynamic imports. */
+const IMPORT_SPECIFIER =
+  /(?:^|[\s;])(?:import|export)\b[^"'`;]*?\bfrom\s*["']([^"']+)["']|(?:^|[\s;])import\s*["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/g;
+
+/** Every source file a module reaches through relative imports, and every package specifier on the way. */
+const reachable = (entry: string) => {
+  const files = new Set<string>();
+  const packages = new Set<string>();
+  const visit = (file: string): void => {
+    if (files.has(file)) return;
+    files.add(file);
+    for (const m of readFileSync(file, "utf8").matchAll(IMPORT_SPECIFIER)) {
+      const specifier = m[1] ?? m[2] ?? m[3];
+      if (specifier === undefined) continue;
+      if (specifier.startsWith(".")) visit(resolve(dirname(file), specifier));
+      else packages.add(specifier);
+    }
+  };
+  visit(entry);
+  return { files, packages };
+};

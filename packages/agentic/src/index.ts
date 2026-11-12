@@ -5,6 +5,7 @@ export * from "./declaration.ts";
 export * from "./boundary.ts";
 export * from "./writeback/git-data.ts";
 export * from "./writeback/applier.ts";
+export * from "./writeback/records.ts";
 export * from "./model/routes.ts";
 export * from "./model/sigv4.ts";
 export * from "./local/store.ts";

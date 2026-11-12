@@ -11,8 +11,11 @@ import {
   parseFormalTable,
   parseMoved,
   parseRequirements,
+  pinChecks,
+  pinnedCommit,
   proseLines,
   provedChecks,
+  repinMameko,
   specTags,
   type SpecTagsInput,
 } from "./spec-tags.ts";
@@ -172,6 +175,12 @@ describe("spec-tags", () => {
     expect(harnessTagOf("packages/ops/src/tick.test.ts")).toBe("V-UNIT");
     expect(harnessTagOf("test/sim/fleet.test.ts")).toBe("V-SIM");
     expect(harnessTagOf("formal/FdFormal/Cache.lean")).toBe("V-PROOF");
+    expect(harnessTagOf("packages/ops/test/deploy/pipeline.test.ts")).toBe("V-DEPLOY");
+    expect(
+      harnessEntries("packages/ops/test/deploy/pipeline.test.ts", 'it("[FD-OPS-010] x", () => {})'),
+    ).toEqual([
+      { id: "FD-OPS-010", tag: "V-DEPLOY", file: "packages/ops/test/deploy/pipeline.test.ts" },
+    ]);
     expect(
       harnessEntries("packages/x/src/a.test.ts", 'it("[FD-OPS-053] x FD-OPS-054", () => {})'),
     ).toEqual([{ id: "FD-OPS-053", tag: "V-UNIT", file: "packages/x/src/a.test.ts" }]);
@@ -235,6 +244,27 @@ describe("spec-tags", () => {
         `${t}\n[x](https://github.com/fractalboxdev/mameko/blob/aade0a5bf87e4c975b859b9d627a38e11951525b/specs/hosts.md)\n`,
     );
     expect(specTags(i).filter((f) => f.check === "FD-VER-036")).toHaveLength(1);
+  });
+
+  it("the mameko re-pin names one commit in the README pin and every mameko link, so neither pin check finds anything", () => {
+    const commit = "c".repeat(40);
+    const specs = new Map(
+      [...input.specs].map(([file, text]) => [
+        file,
+        repinMameko(
+          `${text}\n[x](https://github.com/fractalboxdev/mameko/tree/aade0a5bf87e4c975b859b9d627a38e11951525b/specs/)\n`,
+          commit,
+        ),
+      ]),
+    );
+    expect(pinnedCommit(specs.get("README.md")!)).toBe(commit);
+    expect(pinChecks(specs, commit)).toEqual([]);
+    expect([...specs.values()].join("\n")).toContain(
+      `github.com/fractalboxdev/mameko/tree/${commit}/specs/`,
+    );
+    expect(repinMameko("https://github.com/fractalboxdev/other/blob/abc123/x.md", commit)).toBe(
+      "https://github.com/fractalboxdev/other/blob/abc123/x.md",
+    );
   });
 
   it("[FD-VER-037] a new ID at or below its area's highest used number fails", () => {

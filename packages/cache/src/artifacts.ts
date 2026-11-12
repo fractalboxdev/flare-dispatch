@@ -5,7 +5,6 @@ import type { ExecutorKind } from "@fractalboxdev/mameko-kernel";
 import { Context, Effect, Schema } from "effect";
 import { random128 } from "./crypto.ts";
 import { CacheClock, CacheLeases, DEFAULT_BYTE_BOUNDS, type ByteBounds } from "./lease.ts";
-import { signCapability, verifyCapability } from "./logs.ts";
 import { CacheBucket } from "./manifest.ts";
 import { MAX_URL_LIFETIME_MS, R2Presigner } from "./presign.ts";
 import { MiB } from "./ledger.ts";
@@ -340,13 +339,7 @@ export const recordDeviceArtifact = (
 
 // ---- Serving -----------------------------------------------------------------------
 
-export const ARTIFACT_TOKEN_LABEL = "flare-dispatch/artifact/v1";
-
-/** An artifact capability token: bound to one `artifact_id`, at most 7 days (FD-CACHE-077). */
-export const signArtifactToken = (secret: string, artifactId: string, expiresAt: number, nowMs: number) =>
-  signCapability(secret, ARTIFACT_TOKEN_LABEL, artifactId, expiresAt, nowMs);
-
-interface ArtifactRow {
+export interface ArtifactRow {
   readonly artifact_id: string;
   readonly execution_id: string;
   readonly epoch: number;
@@ -364,84 +357,118 @@ interface ArtifactRow {
   readonly expires_at: number;
 }
 
-export interface ArtifactRouteDeps {
+/** What serving an artifact reads, once the caller has been identified. */
+export interface ArtifactServeDeps {
   readonly db: D1Database;
   readonly bucket: Pick<R2Bucket, "get">;
-  readonly secret: string;
   readonly now: () => number;
   readonly terminal: (executionId: string) => Promise<boolean>;
-  /** A viewer identity with read access to `repo`, when the request carries one. */
-  readonly viewerMayRead?: (request: Request, repo: string) => Promise<boolean>;
 }
 
-const notFound = () => new Response("not found", { status: 404 });
-const ARTIFACT_ROUTE = /^\/v1\/artifacts\/([0-9a-f]{32})(?:\/(.+))?$/;
-const LIST_ROUTE = /^\/v1\/executions\/([A-Za-z0-9:_-]{3,128})\/artifacts$/;
+/** The answer of an artifact read: the body, nothing to serve, or a row whose body stays on its producing executor. */
+export type ArtifactRead =
+  | { readonly _tag: "Served"; readonly response: Response }
+  | { readonly _tag: "Missing" }
+  | { readonly _tag: "OnExecutor"; readonly artifactId: string; readonly executorId: string };
+
+const ARTIFACT_ID = /^[0-9a-f]{32}$/;
 export const ARTIFACT_PAGE_SIZE = 100;
 
-const tokenOf = (request: Request, url: URL) => {
-  const auth = request.headers.get("authorization");
-  return (auth === null ? null : /^Bearer\s+(\S+)$/i.exec(auth.trim())?.[1]) ?? url.searchParams.get("token");
+/** The row of an unexpired artifact, or `null` for an id that names none. */
+export const findArtifact = async (
+  deps: Pick<ArtifactServeDeps, "db" | "now">,
+  artifactId: string,
+): Promise<ArtifactRow | null> => {
+  if (!ARTIFACT_ID.test(artifactId)) return null;
+  const row = await deps.db
+    .prepare("select * from artifacts where artifact_id = ?")
+    .bind(artifactId)
+    .first<ArtifactRow>();
+  return row === null || row.expires_at <= deps.now() ? null : row;
 };
 
 /**
- * `GET /v1/artifacts/<artifact_id>[/<browse path>]` and `GET /v1/executions/<id>/artifacts`. A private repository's
- * artifact needs a viewer with read access or an unexpired capability token bound to the `artifact_id`; otherwise
- * `404` (FD-CACHE-076). Once the producing execution is terminal the body is served `Cache-Control: immutable`
- * (FD-CACHE-075). The listing pages at most 100 rows with a cursor and lists artifact rows only, never the files of
- * a browse expansion (FD-CACHE-078).
+ * One artifact's body or one file of its browse expansion, for a caller already identified. Once the producing
+ * execution is terminal the body is served `Cache-Control: immutable` (FD-CACHE-075).
  */
-export const handleArtifacts = async (request: Request, deps: ArtifactRouteDeps): Promise<Response | null> => {
-  const url = new URL(request.url);
-  const list = LIST_ROUTE.exec(url.pathname);
-  if (list !== null) return listArtifacts(request, url, list[1]!, deps);
-  const m = ARTIFACT_ROUTE.exec(url.pathname);
-  if (m === null) return null;
-  if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405 });
-  const row = await deps.db.prepare("select * from artifacts where artifact_id = ?").bind(m[1]).first<ArtifactRow>();
-  if (row === null || row.expires_at <= deps.now()) return notFound();
-  if (row.private === 1) {
-    const token = await verifyCapability(deps.secret, ARTIFACT_TOKEN_LABEL, row.artifact_id, tokenOf(request, url), deps.now());
-    const viewer = !token && deps.viewerMayRead !== undefined && (await deps.viewerMayRead(request, row.repo));
-    if (!token && !viewer) return notFound();
-  }
+export const serveArtifact = async (
+  request: Request,
+  row: ArtifactRow,
+  browsePath: string | undefined,
+  deps: ArtifactServeDeps,
+): Promise<ArtifactRead> => {
   if (row.r2_path === null)
-    return Response.json(
-      { artifact_id: row.artifact_id, kept_on_executor: row.producer_executor_id },
-      { status: 409 },
-    );
-  const browsePath = m[2];
-  if (browsePath !== undefined && (row.browse !== 1 || !validArtifactName(browsePath))) return notFound();
+    return { _tag: "OnExecutor", artifactId: row.artifact_id, executorId: row.producer_executor_id };
+  if (browsePath !== undefined && (row.browse !== 1 || !validArtifactName(browsePath))) return { _tag: "Missing" };
   const object = await deps.bucket.get(browsePath === undefined ? row.r2_path : `${row.r2_path}.browse/${browsePath}`);
-  if (object === null) return notFound();
+  if (object === null) return { _tag: "Missing" };
   const terminal = await deps.terminal(row.execution_id);
-  return new Response(request.method === "HEAD" ? null : object.body, {
-    headers: {
-      "content-type": browsePath === undefined ? row.content_type : (object.httpMetadata?.contentType ?? "application/octet-stream"),
-      "content-length": String(object.size),
-      "x-content-type-options": "nosniff",
-      "content-security-policy": "sandbox",
-      "cache-control": terminal ? "public, max-age=31536000, immutable" : "no-store",
-      ...(browsePath === undefined ? { etag: `"${row.sha256}"` } : {}),
-    },
-  });
+  return {
+    _tag: "Served",
+    response: new Response(request.method === "HEAD" ? null : object.body, {
+      headers: {
+        "content-type": browsePath === undefined ? row.content_type : (object.httpMetadata?.contentType ?? "application/octet-stream"),
+        "content-length": String(object.size),
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "sandbox",
+        "cache-control": terminal
+          ? `${row.private === 1 ? "private" : "public"}, max-age=31536000, immutable`
+          : "no-store",
+        ...(browsePath === undefined ? { etag: `"${row.sha256}"` } : {}),
+      },
+    }),
+  };
 };
 
-const listArtifacts = async (request: Request, url: URL, executionId: string, deps: ArtifactRouteDeps) => {
-  const limit = Math.min(ARTIFACT_PAGE_SIZE, Math.max(1, Number(url.searchParams.get("limit") ?? ARTIFACT_PAGE_SIZE) || ARTIFACT_PAGE_SIZE));
-  const cursor = url.searchParams.get("cursor") ?? "";
+/** Whether the caller may read a private repository's artifact (FD-CACHE-076). */
+export type ArtifactReader = (
+  row: Pick<ArtifactRow, "artifact_id" | "execution_id" | "repo">,
+) => Promise<boolean>;
+
+/**
+ * A public repository's artifact is visible to every caller its route admits; a private repository's only to a caller
+ * `mayRead` admits, and to every other caller it is an artifact that does not exist (FD-CACHE-076).
+ */
+export const artifactVisible = async (
+  row: Pick<ArtifactRow, "artifact_id" | "execution_id" | "repo" | "private">,
+  mayRead: ArtifactReader,
+): Promise<boolean> => row.private !== 1 || mayRead(row);
+
+/** One artifact as a listing shows it. */
+export interface ArtifactEntry {
+  readonly artifact_id: string;
+  readonly name: string;
+  readonly size: number;
+  readonly sha256: string;
+  readonly content_type: string;
+  readonly epoch: number;
+  readonly producer: { readonly executor_id: string; readonly executor_kind: string };
+  readonly expires_at: number;
+}
+
+/**
+ * One page of an execution's unexpired artifacts, at most 100 rows, with the cursor of the next page (FD-CACHE-078).
+ * A private repository's artifact is listed only where `mayRead` admits it (FD-CACHE-076).
+ */
+export const artifactPage = async (
+  deps: Pick<ArtifactServeDeps, "db" | "now">,
+  executionId: string,
+  page: { readonly limit: number; readonly cursor: string },
+  mayRead: ArtifactReader,
+): Promise<{ readonly artifacts: readonly ArtifactEntry[]; readonly cursor: string | null }> => {
+  const limit = Math.min(ARTIFACT_PAGE_SIZE, Math.max(1, Math.floor(page.limit) || ARTIFACT_PAGE_SIZE));
+  const cursor = page.cursor;
   const { results } = await deps.db
     .prepare(
-      `select artifact_id, name, size, sha256, content_type, epoch, producer_executor_id, producer_executor_kind,
-         repo, private, expires_at from artifacts where execution_id = ? and artifact_id > ? and expires_at > ?
+      `select artifact_id, execution_id, name, size, sha256, content_type, epoch, producer_executor_id,
+         producer_executor_kind, repo, private, expires_at from artifacts where execution_id = ? and artifact_id > ? and expires_at > ?
        order by artifact_id limit ?`,
     )
     .bind(executionId, cursor, deps.now(), limit + 1)
     .all<ArtifactRow>();
-  const visible = [];
+  const visible: ArtifactEntry[] = [];
   for (const row of results.slice(0, limit)) {
-    if (row.private === 1 && !(deps.viewerMayRead !== undefined && (await deps.viewerMayRead(request, row.repo))))
-      continue;
+    if (!(await artifactVisible(row, mayRead))) continue;
     visible.push({
       artifact_id: row.artifact_id,
       name: row.name,
@@ -454,7 +481,7 @@ const listArtifacts = async (request: Request, url: URL, executionId: string, de
     });
   }
   const next = results.length > limit ? results[limit - 1]!.artifact_id : null;
-  return Response.json({ artifacts: visible, cursor: next });
+  return { artifacts: visible, cursor: next };
 };
 
 /**

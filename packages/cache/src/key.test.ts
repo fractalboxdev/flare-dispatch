@@ -28,7 +28,7 @@ const fields: KeyFields = {
 const run = <A, E>(e: Effect.Effect<A, E>) => Effect.runPromise(e);
 
 describe("cache keys", () => {
-  it("FD-CACHE-001 the cache stores only the five entry kinds and refuses workspace and build-output paths", async () => {
+  it("[FD-CACHE-001] the cache stores only the five entry kinds and refuses workspace and build-output paths", async () => {
     expect(CACHE_KINDS).toEqual(["dependency", "compile", "prebuilt-binary", "download", "model-weights"]);
     expect(isCacheKind("workspace")).toBe(false);
     expect(isCacheKind("checkout")).toBe(false);
@@ -38,7 +38,7 @@ describe("cache keys", () => {
     expect(await run(assertCacheable("/home/runner/.cache/uv", sandbox))).toBe("/home/runner/.cache/uv");
   });
 
-  it("FD-CACHE-031 the key is the SHA-256 of the canonical JSON of every key field", async () => {
+  it("[FD-CACHE-031] the key is the SHA-256 of the canonical JSON of every key field", async () => {
     const key = await run(cacheKey(fields));
     expect(key).toMatch(/^[0-9a-f]{64}$/);
     const reordered = { ...fields, toolchains: { pnpm: "11.1.3", node: "22.13.0" } };
@@ -56,7 +56,7 @@ describe("cache keys", () => {
       expect(await run(cacheKey({ ...fields, [f]: "x" }))).not.toBe(key);
   });
 
-  it("FD-CACHE-032 a key with any field missing fails, so the primitive skips the read and the write", async () => {
+  it("[FD-CACHE-032] a key with any field missing fails, so the primitive skips the read and the write", async () => {
     for (const f of Object.keys(fields) as (keyof KeyFields)[]) {
       const partial: Partial<KeyFields> = { ...fields };
       delete partial[f];
@@ -67,7 +67,7 @@ describe("cache keys", () => {
     expect(Exit.isFailure(noArch)).toBe(true);
   });
 
-  it("FD-CACHE-033 installCached keys on the lockfile's SHA-256 and caches install outputs only", async () => {
+  it("[FD-CACHE-033] installCached keys on the lockfile's SHA-256 and caches install outputs only", async () => {
     const lockfile = new TextEncoder().encode("lockfileVersion: '9.0'\n");
     for (const manager of ["pnpm", "npm", "cargo", "uv"] as const) {
       const inputs = await run(installCachedInputs(manager, lockfile));
@@ -78,7 +78,7 @@ describe("cache keys", () => {
     expect(Exit.isFailure(await Effect.runPromiseExit(installCachedInputs("pnpm", undefined)))).toBe(true);
   });
 
-  it("FD-CACHE-034 the prebuilt-binary inputs are key-file, path-dependency and include! object ids plus rustc and cargo", async () => {
+  it("[FD-CACHE-034] the prebuilt-binary inputs are key-file, path-dependency and include! object ids plus rustc and cargo", async () => {
     const inputs = {
       keyFiles: { "Cargo.lock": "1".repeat(40) },
       pathDependencies: { "crates/core": "2".repeat(40) },
@@ -97,7 +97,7 @@ describe("cache keys", () => {
       expect(await prebuiltBinaryInputsDigest({ ...inputs, ...change })).not.toBe(digest);
   });
 
-  it("FD-CACHE-035 a prebuilt-binary miss or restore failure falls back to cargo run without failing", async () => {
+  it("[FD-CACHE-035] a prebuilt-binary miss or restore failure falls back to cargo run without failing", async () => {
     const cargoRun = Effect.succeed("built");
     expect(await run(restoreOrCargoRun(Effect.succeed(null), cargoRun))).toEqual({ value: "built", restored: false });
     expect(await run(restoreOrCargoRun(Effect.fail("io"), cargoRun))).toEqual({ value: "built", restored: false });
@@ -129,7 +129,7 @@ const wrap = (opts: { sccache: "ok" | "refuses" | "absent"; env?: Record<string,
 };
 
 describe("compile-cache wrapper", () => {
-  it("FD-CACHE-037 sets RUSTC_WRAPPER=sccache, CARGO_INCREMENTAL=0 and the <repo>/<rustc>/<target> prefix", () => {
+  it("[FD-CACHE-037] sets RUSTC_WRAPPER=sccache, CARGO_INCREMENTAL=0 and the <repo>/<rustc>/<target> prefix", () => {
     const r = wrap({ sccache: "ok" });
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("W=sccache I=0 P=acme/widgets/1.90.0/x86_64-unknown-linux-gnu");
@@ -138,7 +138,7 @@ describe("compile-cache wrapper", () => {
     expect(compileCacheCommand("true", "not a repo")).toBeUndefined();
   });
 
-  it("FD-CACHE-038 an unreachable endpoint or a missing sccache compiles without the cache and does not fail", () => {
+  it("[FD-CACHE-038] an unreachable endpoint or a missing sccache compiles without the cache and does not fail", () => {
     for (const sccache of ["refuses", "absent"] as const) {
       const r = wrap({ sccache });
       expect(r.status).toBe(0);
