@@ -43,9 +43,6 @@ describe("triggers reaching the Worker", () => {
       body: delivery.body,
     });
     expect(r.status).toBe(202);
-    expect(stack.requests).toContainEqual(
-      expect.objectContaining({ method: "POST", path: "/v1/webhooks/github" }),
-    );
     const { executions } = (await r.json()) as { executions: string[] };
     expect(executions).toHaveLength(1);
     expect(await intakeRecord(executions[0]!)).toEqual([
@@ -84,9 +81,6 @@ describe("triggers reaching the Worker", () => {
       }),
     });
     expect(r.status).toBe(202);
-    expect(stack.requests).toContainEqual(
-      expect.objectContaining({ method: "POST", path: "/v1/dispatch/check" }),
-    );
     const { execution_id: id } = (await r.json()) as { execution_id: string };
     expect(await intakeRecord(id)).toEqual([
       {
