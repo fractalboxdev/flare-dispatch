@@ -1,6 +1,7 @@
 // The minute tick: planning units, the scheduled runs of a minute and the missed-webhook sweep.
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
+import { catalogRuns } from "./catalog.ts";
 import { cronDrift, cronMatches, MINUTE_TICK, parseCron } from "./cron.ts";
 import {
   APP_ID,
@@ -75,7 +76,7 @@ describe("scheduled runs", () => {
     expect(quiet.outcome.executions).toEqual([]);
   });
 
-  it("[FD-INT-053] a tick fired twice for one minute creates at most one execution per run and repository", async () => {
+  it("[FD-INT-053] a tick fired twice for one minute creates at most one execution per run, label and repository", async () => {
     const h = await harness({ repos: { [REPO]: repoWithManifest(nightly) } });
     const unit: TickUnit = {
       _tag: "schedules",
@@ -105,6 +106,70 @@ describe("scheduled runs", () => {
     );
     expect(h.records().map((r) => r.not_before)).toEqual([null, null]);
     expect(h.rows("select * from intake_cooldowns")).toEqual([]);
+  });
+});
+
+describe("improve-pr schedules", () => {
+  const dimension = (name: string, measure: string) => ({
+    name,
+    measure,
+    better: "lower",
+    materialityFloor: 10,
+    verify: "pnpm test",
+  });
+  const improve = manifest([
+    {
+      recipe: "improve-pr",
+      label: "size",
+      triggers: ["cron"],
+      params: { dimension: dimension("size", "node scripts/size.js") },
+      schedules: [{ cron: "0 3 * * *" }],
+    },
+    {
+      recipe: "improve-pr",
+      label: "lint",
+      triggers: ["cron"],
+      params: { dimension: dimension("lint", "pnpm lint --count") },
+      schedules: [{ cron: "0 3 * * *", branch: "develop" }],
+    },
+  ]);
+
+  it("[FD-AGT-060] [FD-INT-052] each manifest dimension's schedule starts one improve-pr execution for that dimension, targeting the branch it pins", async () => {
+    const h = await harness({
+      settings: { catalog: catalogRuns("development") },
+      repos: { [REPO]: repoWithManifest(improve, { branches: { main: BASE, develop: HEAD } }) },
+    });
+    const unit: TickUnit = {
+      _tag: "schedules",
+      installation: 7,
+      scheduledAt: at(3, 0),
+      repoIndex: 0,
+    };
+    const result = await h.run(runTickUnit(unit));
+    expect(result.outcome.executions).toHaveLength(2);
+    expect(
+      h.records().map((r) => [r.run, r.label, r.sha, JSON.parse(r.inputs_json as string)]),
+    ).toEqual([
+      [
+        "improve-pr",
+        "size",
+        BASE,
+        { baseBranch: "main", dimension: dimension("size", "node scripts/size.js") },
+      ],
+      [
+        "improve-pr",
+        "lint",
+        HEAD,
+        { baseBranch: "develop", dimension: dimension("lint", "pnpm lint --count") },
+      ],
+    ]);
+    expect(h.rows("select canonical from dedup_keys order by canonical")).toEqual([
+      { canonical: `improve-pr:lint:${REPO}:cron:2026-11-04T03:00:00.000Z` },
+      { canonical: `improve-pr:size:${REPO}:cron:2026-11-04T03:00:00.000Z` },
+    ]);
+    const again = await h.run(runTickUnit(unit));
+    expect(again.outcome.duplicate).toBe(true);
+    expect(h.executions()).toHaveLength(2);
   });
 });
 
@@ -361,8 +426,9 @@ describe("unit budgets and the unit queue", () => {
           h.records().filter((x) => x.repo === r && x.trigger === trigger).length,
         ]),
       );
-    // A cron execution is one per (run, repository, minute); the sweep submits all 40 entries for each of 3 heads.
-    expect(count("cron")).toEqual(Object.fromEntries(names.map((r) => [r, 1])));
+    // A cron execution is one per (run, label, repository, minute), so each of the 40 labelled entries submits one;
+    // the sweep submits all 40 entries for each of 3 heads.
+    expect(count("cron")).toEqual(Object.fromEntries(names.map((r) => [r, 40])));
     expect(count("webhook")).toEqual(Object.fromEntries(names.map((r) => [r, 120])));
     // About a second alone; the suite's simulation runs beside it.
   }, 30_000);

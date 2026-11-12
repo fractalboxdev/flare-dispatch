@@ -204,7 +204,7 @@ describe("spec-tags", () => {
       specs
         .get("verification.md")!
         .replace(
-          "`StagedWrite.model_authored_protected_paths`, `StagedWrite.reject_whole_manifest` *planned*",
+          "`StagedWrite.model_authored_protected_paths` *proved*; `StagedWrite.reject_whole_manifest` *proved*",
           "`StagedWrite.reject_whole_manifest` *proved*",
         ),
     );
