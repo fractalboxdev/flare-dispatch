@@ -22,11 +22,13 @@ import {
   oidcKeyFromSecret,
   Operations,
   opsGroup,
+  provenanceGroup,
   provenancePolicies,
   provenancePolicyGroup,
   provenanceStatements,
   RequestId,
   routerGroup,
+  StatementVisibility,
   toFetchHandler,
   wellKnownGroup,
 } from "@fractalboxdev/flare-dispatch-api";
@@ -45,6 +47,7 @@ import {
   PolicyStore,
   PolicyTransparencyLog,
 } from "@fractalboxdev/flare-dispatch-cache/provenance-policy";
+import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { handleIntake, WEBHOOK_MAX_BYTES } from "@fractalboxdev/flare-dispatch-intake";
 import {
   livenessReport,
@@ -93,7 +96,10 @@ export const intakeGroup = routerGroup(
  * artifact reads pass the link surface's gate like every other route (FD-IFC-017); the fleet view, the phase gate's
  * records, the spend view and the install flow pass the operability group's gates. The MCP server at `/mcp` reads the
  * same per-request ports as the routes its tools wrap, so its `dispatch` reaches intake's admission through the
- * declared dispatch route's `Intake` port, as trigger `mcp` (FD-IFC-072, FD-IFC-074, FD-INT-062).
+ * declared dispatch route's `Intake` port, as trigger `mcp` (FD-IFC-072, FD-IFC-074, FD-INT-062). The statement
+ * lookups under `/v1/provenance/*` serve a caller without identity the statements of public repositories, and every
+ * other statement behind an Access JWT (FD-IFC-053, FD-IFC-054); the verification policy is served at its well-known
+ * path by `wellKnownGroup`.
  */
 export const router = mount(
   wellKnownGroup,
@@ -104,6 +110,7 @@ export const router = mount(
   operabilityGroup(OperabilityHandlers),
   executorsGroup,
   provenancePolicyGroup,
+  provenanceGroup,
   logsGroup(LogsHandlers),
   artifactsGroup(ArtifactsHandlers),
   mcpGroup,
@@ -182,6 +189,38 @@ const statements = (env: ControlPlaneEnv) => {
   );
 };
 
+/**
+ * Whether a repository's GitHub visibility is `public`, which opens its statements to a caller without identity
+ * (FD-IFC-053); any other visibility keeps them behind an Access JWT (FD-IFC-054). The isolate's `GithubRead` reads it
+ * once per repository and request. A read that fails answers not public, so an unreadable visibility never opens a
+ * statement.
+ */
+export const statementVisibility = Layer.effect(StatementVisibility)(
+  Effect.gen(function* () {
+    const read = yield* GithubRead;
+    const known = new Map<string, boolean>();
+    return {
+      isPublic: (repository: string) => {
+        const seen = known.get(repository);
+        if (seen !== undefined) return Effect.succeed(seen);
+        return read.visibility(repository).pipe(
+          Effect.map((visibility) => visibility === "public"),
+          Effect.catch((error) =>
+            Effect.as(
+              Effect.logWarning(
+                "repository visibility unreadable; its statements need an Access identity",
+                { repository, cause: String(error) },
+              ),
+              false,
+            ),
+          ),
+          Effect.tap((open) => Effect.sync(() => known.set(repository, open))),
+        );
+      },
+    };
+  }),
+);
+
 const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateServices>) =>
   Layer.mergeAll(
     Layer.merge(intakePort, intakeCancellation).pipe(Layer.provide(Layer.succeedContext(isolate))),
@@ -203,6 +242,7 @@ const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateS
     spendViewOf(env),
     policies(env),
     statements(env),
+    statementVisibility.pipe(Layer.provide(Layer.succeedContext(isolate))),
   );
 
 /** One request through the router, with the isolate's services and the ones its routes read. */
