@@ -411,7 +411,9 @@ export const serveArtifact = async (
         "content-length": String(object.size),
         "x-content-type-options": "nosniff",
         "content-security-policy": "sandbox",
-        "cache-control": terminal ? "public, max-age=31536000, immutable" : "no-store",
+        "cache-control": terminal
+          ? `${row.private === 1 ? "private" : "public"}, max-age=31536000, immutable`
+          : "no-store",
         ...(browsePath === undefined ? { etag: `"${row.sha256}"` } : {}),
       },
     }),

@@ -94,24 +94,36 @@ const mergeGroup = (event: WebhookEvent, fields: WebhookFields, repo: string, sh
   });
 
 /**
- * `pull_request` `closed`: intake records when the pull request closed, from its `closed_at` or else the delivery's
- * arrival, which the cache sweep counts its namespace's deletion delay from (FD-CACHE-064). Every supersession group of
- * the pull request, `<owner>/<repo>:<number>:*`, is cancelled with cause `pr-closed` through mameko's group cancel
- * (FD-PROF-030, MAMEKO-ADM-064). A closed pull request submits no run.
+ * `pull_request` `closed`: intake records its close time and the lifecycle event's `updated_at`, so replayed or older
+ * deliveries cannot replace a newer reopen (FD-CACHE-064). Every supersession group of the pull request,
+ * `<owner>/<repo>:<number>:*`, is cancelled with cause `pr-closed` through mameko's group cancel (FD-PROF-030,
+ * MAMEKO-ADM-064). A closed pull request submits no run.
  */
-const pullRequestClosed = (repo: string, number: number, closedAt: string | null | undefined) =>
+const pullRequestClosed = (
+  repo: string,
+  number: number,
+  closedAt: string | null | undefined,
+  updatedAt: string | undefined,
+  deliveryId: string,
+) =>
   Effect.gen(function* () {
     const admission = yield* Admission;
     const store = yield* IntakeStore;
-    const stated = closedAt === null || closedAt === undefined ? NaN : Date.parse(closedAt);
-    const at = Number.isFinite(stated) ? stated : yield* Clock.currentTimeMillis;
-    yield* store.pullRequestClosed(repo, number, at);
+    const closed = timestampOf(closedAt);
+    const updated = timestampOf(updatedAt);
+    const at = closed ?? updated ?? (yield* Clock.currentTimeMillis);
+    yield* store.pullRequestClosed(repo, number, at, { updatedAt: updated ?? at, deliveryId });
     const groups = yield* store.liveSupersessionGroups(repo, `${repo}:${number}:`);
     const cancelled = yield* Effect.forEach(groups, (key) =>
       admission.cancelGroup(key, "pr-closed").pipe(cancelUnavailable("group cancel")),
     );
     return json({ executions: [], cancelled: cancelled.flat() }, 202);
   });
+
+const timestampOf = (value: string | null | undefined): number | undefined => {
+  const parsed = value === null || value === undefined ? NaN : Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
 
 /** A signed, parsed delivery, routed by event. */
 const route = (event: WebhookEvent, fields: WebhookFields) =>
@@ -157,14 +169,21 @@ const route = (event: WebhookEvent, fields: WebhookFields) =>
         repo,
         fields.pull_request.number,
         fields.pull_request.closed_at,
+        fields.pull_request.updated_at,
+        event.deliveryId,
       );
-    // A reopened pull request keeps its cache namespace again (FD-CACHE-064).
+    // Retain the reopened event's time and identity, so an older close cannot expire its cache again (FD-CACHE-064).
     if (
       event.event === "pull_request" &&
       event.action === "reopened" &&
       fields.pull_request !== undefined
     )
-      yield* (yield* IntakeStore).pullRequestReopened(repo, fields.pull_request.number);
+      yield* (yield* IntakeStore).pullRequestReopened(
+        repo,
+        fields.pull_request.number,
+        timestampOf(fields.pull_request.updated_at) ?? (yield* Clock.currentTimeMillis),
+        event.deliveryId,
+      );
     const sha = commitOf(fields);
     if (Option.isNone(sha)) {
       yield* shed(repo, null, "intake: no commit");
