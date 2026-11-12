@@ -170,6 +170,7 @@ const budget: AwsBudget = {
   limitAmount: 400,
   limitUnit: "USD",
   timeUnit: "MONTHLY",
+  timePeriod: { Start: Date.UTC(2026, 0, 1) / 1000, End: Date.UTC(2087, 5, 15) / 1000 },
   costFilters: {},
 };
 const budgets = [budget];
@@ -182,6 +183,7 @@ const DENY_LAUNCH: AwsPolicyStatement = {
 const denyAction = (over: Partial<AwsBudgetAction> = {}): AwsBudgetAction => ({
   id: "act-1",
   budgetName: "fd-aws",
+  status: "STANDBY",
   notificationType: "ACTUAL",
   actionType: "APPLY_IAM_POLICY",
   approvalModel: "AUTOMATIC",
@@ -207,6 +209,7 @@ const check = (limitUsd: number, actions: AwsBudgetAction[], read = budgets) =>
     limitUsd,
     {
       account: ACCOUNT,
+      observedAt: Date.UTC(2026, 10, 1),
       budgets: read,
       actions,
       organization: {
@@ -311,7 +314,12 @@ describe("AWS budget check", () => {
   });
 
   it("[FD-EXEC-083] requires an authenticated-account launcher role and never substitutes same-named users or groups", () => {
-    const read = { account: ACCOUNT, budgets, actions: [denyAction()] };
+    const read = {
+      account: ACCOUNT,
+      observedAt: Date.UTC(2026, 10, 1),
+      budgets,
+      actions: [denyAction()],
+    };
     for (const role of [undefined, "not-an-arn", "arn:aws:iam::444455556666:role/fd-launcher"])
       expect(failed(awsBudgetCheck(400, read, role))).toBe(true);
     expect(awsBudgetCheck(400, read, `arn:aws:iam::${ACCOUNT}:role/path/fd-launcher`)).toEqual([]);
@@ -344,7 +352,12 @@ describe("AWS budget check", () => {
   });
 
   it("[FD-EXEC-083] never claims an SCP constrains the management account or an account whose membership was not read", () => {
-    const read = { account: ACCOUNT, budgets, actions: [scpAction(["r-abcd"])] };
+    const read = {
+      account: ACCOUNT,
+      observedAt: Date.UTC(2026, 10, 1),
+      budgets,
+      actions: [scpAction(["r-abcd"])],
+    };
     expect(failed(awsBudgetCheck(400, read))).toBe(true);
     expect(
       failed(
@@ -360,6 +373,7 @@ describe("AWS budget check", () => {
     const action = scpAction([ACCOUNT]);
     const read = {
       account: ACCOUNT,
+      observedAt: Date.UTC(2026, 10, 1),
       budgets,
       actions: [action],
       organization: {
@@ -390,6 +404,81 @@ describe("AWS budget check", () => {
     expect(failed(check(400, [denyAction({ thresholdType: "" })]))).toBe(true);
     for (const bad of [{ limitAmount: Number.NaN }, { limitAmount: -1 }, { timeUnit: "" }])
       expect(failed(check(400, [denyAction()], [{ ...budget, ...bad }]))).toBe(true);
+  });
+
+  it("[FD-EXEC-083] requires an active action and proves modern filter coverage without dropping unknown scope", () => {
+    expect(check(400, [denyAction({ status: "EXECUTION_SUCCESS" })])).toEqual([]);
+    for (const status of ["", "EXECUTION_FAILURE", "REVERSE_SUCCESS", "PENDING", "unknown"])
+      expect(failed(check(400, [denyAction({ status })]))).toBe(true);
+    const ecs = { Dimensions: { Key: "SERVICE", Values: ["Amazon Elastic Container Service"] } };
+    const region = { Dimensions: { Key: "REGION", Values: ["us-east-1"] } };
+    for (const filterExpression of [{}, ecs, { And: [ecs, ecs] }, { Or: [region, ecs] }])
+      expect(check(400, [denyAction()], [{ ...budget, filterExpression }])).toEqual([]);
+    for (const filterExpression of [
+      region,
+      { And: [ecs, region] },
+      { Not: ecs },
+      { Or: [region] },
+      { Or: [] },
+      { Dimensions: { ...ecs.Dimensions, MatchOptions: ["ABSENT"] } },
+      { Dimensions: { ...ecs.Dimensions, MatchOptions: ["unknown"] } },
+      { Dimensions: { Key: "SERVICE", Values: "Amazon Elastic Container Service" } },
+      { Dimensions: ecs.Dimensions, Tags: { Key: "team", Values: ["a"] } },
+      null,
+    ])
+      expect(failed(check(400, [denyAction()], [{ ...budget, filterExpression }]))).toBe(true);
+    expect(
+      failed(
+        check(
+          400,
+          [denyAction()],
+          [{ ...budget, billingViewArn: "arn:aws:billing::111122223333:billingview/restricted" }],
+        ),
+      ),
+    ).toBe(true);
+    expect(failed(check(400, [denyAction()], [{ ...budget, costFilters: { Region: [] } }]))).toBe(
+      true,
+    );
+  });
+
+  it("[FD-EXEC-083] proves the budget is active at the read time, including exact window boundaries", () => {
+    const start = Date.UTC(2026, 10, 1) / 1000;
+    const end = start + 3600;
+    const read = {
+      account: ACCOUNT,
+      observedAt: start * 1000,
+      budgets: [{ ...budget, timePeriod: { Start: start, End: end } }],
+      actions: [denyAction()],
+    };
+    const role = `arn:aws:iam::${ACCOUNT}:role/fd-launcher`;
+    expect(awsBudgetCheck(400, read, role)).toEqual([]);
+    expect(failed(awsBudgetCheck(400, { ...read, observedAt: start * 1000 - 1 }, role))).toBe(true);
+    expect(failed(awsBudgetCheck(400, { ...read, observedAt: end * 1000 }, role))).toBe(true);
+    for (const timePeriod of [
+      undefined,
+      {},
+      null,
+      { Start: start },
+      { End: end },
+      { Start: "unknown" },
+      { End: Number.NaN },
+      { Start: end, End: start },
+      { start },
+    ])
+      expect(failed(check(400, [denyAction()], [{ ...budget, timePeriod }]))).toBe(true);
+    const scpRead = {
+      ...read,
+      actions: [scpAction([ACCOUNT])],
+      organization: {
+        managementAccount: "999900001111",
+        ancestors: ["r-abcd"],
+        scpEnabled: true,
+      },
+    };
+    expect(awsBudgetCheck(400, scpRead)).toEqual([]);
+    expect(failed(awsBudgetCheck(400, scpRead, "arn:aws:iam::444455556666:role/fd-launcher"))).toBe(
+      true,
+    );
   });
 
   it("[FD-EXEC-083] fails on an action whose budget resets daily, or whose cost filters measure less than the ECS spend", () => {

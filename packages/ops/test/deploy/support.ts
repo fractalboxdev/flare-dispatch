@@ -421,12 +421,18 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
       AccountId?: string;
       MaxResults?: number;
       NextToken?: string;
+      ShowFilterExpression?: boolean;
     };
     const reject = (message: string) =>
       Response.json({ __type: "ValidationException", Message: message }, { status: 400 });
     if (request.AccountId !== AWS_ACCOUNT) return reject("AccountId is not the caller's account");
     if (request.MaxResults !== undefined && request.MaxResults > 100)
       return reject("MaxResults must be at most 100");
+    if (
+      target === "AWSBudgetServiceGateway.DescribeBudgets" &&
+      request.ShowFilterExpression !== true
+    )
+      return reject("DescribeBudgets must request ShowFilterExpression to prove scope");
     const listed =
       target === "AWSBudgetServiceGateway.DescribeBudgets"
         ? { key: "Budgets", items: state.awsBudgets }

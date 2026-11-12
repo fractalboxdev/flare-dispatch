@@ -55,7 +55,9 @@ const target = (
     requiredChecks: Effect.sync(
       () => (calls.push("ruleset"), [...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
     ),
-    awsBudgets: Effect.sync(() => (calls.push("aws"), { account: "", budgets: [], actions: [] })),
+    awsBudgets: Effect.sync(
+      () => (calls.push("aws"), { account: "", observedAt: 0, budgets: [], actions: [] }),
+    ),
     applyD1Migrations: () => Effect.sync(() => (calls.push("migrate"), ["0007_alarms"])),
     deployWorker: ({ worker: w }) =>
       Effect.sync((): Deployed => {

@@ -318,6 +318,7 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
         const page = yield* budgetsCall(target, {
           AccountId: account,
           MaxResults: BUDGETS_PAGE,
+          ...(target === "DescribeBudgets" ? { ShowFilterExpression: true } : {}),
           ...(next === undefined ? {} : { NextToken: next }),
         });
         items.push(...arr<T>(page[key]));
@@ -453,10 +454,14 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
       TimeUnit?: string;
       BudgetLimit?: { Amount?: string; Unit?: string };
       CostFilters?: Record<string, unknown>;
+      FilterExpression?: unknown;
+      BillingViewArn?: unknown;
+      TimePeriod?: unknown;
     }>("DescribeBudgets", "Budgets", account);
     const actions = yield* budgetsPages<{
       ActionId?: string;
       BudgetName?: string;
+      Status?: string;
       NotificationType?: string;
       ActionType?: string;
       ApprovalModel?: string;
@@ -497,7 +502,9 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
         const parent = parents[0];
         if (
           parents.length !== 1 ||
-          (page["NextToken"] !== undefined && page["NextToken"] !== "") ||
+          (page["NextToken"] !== undefined &&
+            page["NextToken"] !== null &&
+            page["NextToken"] !== "") ||
           typeof parent?.Id !== "string" ||
           ancestors.includes(parent.Id)
         )
@@ -551,16 +558,30 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
     return {
       account,
       ...(organization === undefined ? {} : { organization }),
-      budgets: budgets.map((b): AwsBudget => ({
-        name: b.BudgetName ?? "",
-        type: b.BudgetType ?? "",
-        limitAmount: Number(b.BudgetLimit?.Amount ?? Number.NaN),
-        limitUnit: b.BudgetLimit?.Unit ?? "",
-        timeUnit: b.TimeUnit ?? "",
-        costFilters: Object.fromEntries(
-          Object.entries(b.CostFilters ?? {}).map(([k, v]) => [k, arr<string>(v)]),
-        ),
-      })),
+      budgets: yield* Effect.try({
+        try: () =>
+          budgets.map((b): AwsBudget => ({
+            name: b.BudgetName ?? "",
+            type: b.BudgetType ?? "",
+            limitAmount: Number(b.BudgetLimit?.Amount ?? Number.NaN),
+            limitUnit: b.BudgetLimit?.Unit ?? "",
+            timeUnit: b.TimeUnit ?? "",
+            costFilters: (() => {
+              const filters = b.CostFilters ?? {};
+              if (typeof filters !== "object" || Array.isArray(filters) || b.CostFilters === null)
+                throw new Error(`budget ${b.BudgetName} has unreadable CostFilters`);
+              for (const values of Object.values(filters))
+                if (!Array.isArray(values) || values.some((v) => typeof v !== "string"))
+                  throw new Error(`budget ${b.BudgetName} has unreadable CostFilters`);
+              return filters as Record<string, string[]>;
+            })(),
+            ...(b.FilterExpression === undefined ? {} : { filterExpression: b.FilterExpression }),
+            ...(b.BillingViewArn === undefined ? {} : { billingViewArn: b.BillingViewArn }),
+            ...(b.TimePeriod === undefined ? {} : { timePeriod: b.TimePeriod }),
+          })),
+        catch: (cause) =>
+          new TargetFailed({ operation: "aws-budgets DescribeBudgets", message: String(cause) }),
+      }),
       // Only an action that applies a policy has a document to read.
       actions: yield* Effect.forEach(actions, (a) =>
         Effect.map(
@@ -570,6 +591,7 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
           (policy): AwsBudgetAction => ({
             id: a.ActionId ?? "",
             budgetName: a.BudgetName ?? "",
+            status: a.Status ?? "",
             notificationType: a.NotificationType ?? "",
             actionType: a.ActionType ?? "",
             approvalModel: a.ApprovalModel ?? "",
@@ -579,6 +601,7 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
           }),
         ),
       ),
+      observedAt: now(),
     } satisfies AwsBudgets;
   });
 

@@ -16,6 +16,7 @@ const BUDGET = {
   BudgetName: "fd-aws",
   BudgetType: "COST",
   TimeUnit: "MONTHLY",
+  TimePeriod: { Start: Date.UTC(2026, 0, 1) / 1000, End: Date.UTC(2087, 5, 15) / 1000 },
   BudgetLimit: { Amount: "500.0", Unit: "USD" },
 };
 
@@ -387,6 +388,96 @@ describe("the AWS budget check of the drift check", () => {
     expect(driftStage(await doctor(wrongType))?.detail).toContain(
       "not a verified SERVICE_CONTROL_POLICY",
     );
+  });
+
+  it("[FD-EXEC-083] reads modern filter and billing-view scope and never projects restricted scope to an unfiltered budget", async () => {
+    const ecs = {
+      Dimensions: {
+        Key: "SERVICE",
+        Values: ["Amazon Elastic Container Service"],
+        MatchOptions: ["EQUALS"],
+      },
+    };
+    const region = { Dimensions: { Key: "REGION", Values: ["us-east-1"] } };
+    for (const [scope, ok] of [
+      [{ FilterExpression: ecs }, true],
+      [{ FilterExpression: { And: [ecs, ecs] } }, true],
+      [{ FilterExpression: { Or: [region, ecs] } }, true],
+      [{ FilterExpression: region }, false],
+      [{ FilterExpression: { And: [ecs, region] } }, false],
+      [{ FilterExpression: { Not: ecs } }, false],
+      [
+        { FilterExpression: { Dimensions: { ...ecs.Dimensions, MatchOptions: ["ABSENT"] } } },
+        false,
+      ],
+      [{ FilterExpression: null }, false],
+      [{ BillingViewArn: `arn:aws:billing::${AWS_ACCOUNT}:billingview/restricted` }, false],
+    ] as const) {
+      const w = awsWorld();
+      w.state.awsBudgets = [{ ...BUDGET, ...scope }];
+      w.state.awsActions = [action("act-deny")];
+      const report = await doctor(w);
+      expect(report.ok, JSON.stringify(scope)).toBe(ok);
+      expect(w.calls.filter(isWrite)).toEqual([]);
+    }
+    for (const CostFilters of [{ Region: "us-east-1" }, { Service: [42] }, null]) {
+      const w = awsWorld();
+      w.state.awsBudgets = [{ ...BUDGET, CostFilters }];
+      w.state.awsActions = [action("act-deny")];
+      expect(driftStage(await doctor(w))?.detail).toContain("unreadable CostFilters");
+    }
+  });
+
+  it("[FD-EXEC-083] rejects reversed, failed and unknown action states, and accepts a null completed-parent token", async () => {
+    for (const Status of [
+      undefined,
+      "REVERSE_SUCCESS",
+      "EXECUTION_FAILURE",
+      "unknown",
+      "EXECUTION_SUCCESS",
+    ]) {
+      const w = awsWorld();
+      w.state.awsActions = [action("act-deny", { Status })];
+      const report = await doctor(w);
+      expect(report.ok).toBe(Status === "EXECUTION_SUCCESS");
+    }
+    const w = awsWorld();
+    w.state.awsActions = [action("act-deny")];
+    w.state.awsParents[AWS_ACCOUNT] = {
+      Parents: [{ Id: "r-abcd", Type: "ROOT" }],
+      NextToken: null,
+    };
+    expect((await doctor(w)).ok).toBe(true);
+  });
+
+  it("[FD-EXEC-083] rejects future or unreadable time windows and a known cross-account launcher even with an SCP", async () => {
+    for (const TimePeriod of [
+      undefined,
+      {},
+      { Start: Date.now() / 1000 + 86400, End: Date.now() / 1000 + 172800 },
+      { Start: "unknown" },
+      null,
+    ]) {
+      const w = awsWorld();
+      w.state.awsBudgets = [{ ...BUDGET, TimePeriod }];
+      w.state.awsActions = [action("act-deny")];
+      const report = await doctor(w);
+      expect(report.ok).toBe(false);
+      expect(driftStage(report)?.detail).toMatch(/active.*time|not active/);
+    }
+    const w = awsWorld();
+    w.state.awsActions = [action("act-deny")];
+    expect(
+      (
+        await doctor(
+          w,
+          overlayWith({
+            budgetUsd: LIMIT_USD,
+            launcherRoleArn: "arn:aws:iam::444455556666:role/fd-launcher",
+          }),
+        )
+      ).ok,
+    ).toBe(false);
   });
 
   it("[FD-EXEC-083] fails the drift stage when the deploy job carries no AWS credentials, or the overlay sets no aws.budgetUsd", async () => {
