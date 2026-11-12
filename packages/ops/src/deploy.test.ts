@@ -55,6 +55,7 @@ const target = (
     requiredChecks: Effect.sync(
       () => (calls.push("ruleset"), [...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
     ),
+    apiToken: () => Effect.succeed(null),
     awsBudgets: Effect.sync(
       () => (calls.push("aws"), { account: "", observedAt: 0, budgets: [], actions: [] }),
     ),

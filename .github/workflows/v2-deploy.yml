@@ -7,7 +7,8 @@ name: v2-deploy
 # check and raises the notify alarm `drift` when it fails (FD-OPS-025).
 #
 # CREDENTIALS. `FD_OPERATOR_OVERLAY`: the operator overlay's JSON. `CLOUDFLARE_API_TOKEN`: account-scoped, Workers
-# Scripts:Edit, Workers R2 Storage:Edit, D1:Edit, Containers:Edit, Account Settings:Read. `GITHUB_APP_PRIVATE_KEY`: the
+# Scripts:Edit, Workers R2 Storage:Edit, D1:Edit, Containers:Edit, Account Settings:Read, and Account API Tokens:Read for
+# the drift check's read of the presign token's policies (FD-CACHE-091). `GITHUB_APP_PRIVATE_KEY`: the
 # App's key, for the App registration and the ruleset reads of the drift check. `FD_AWS_ROLE_ARN`, a repository
 # variable, set where the overlay carries the `aws` kind: the AWS role the deploy and doctor jobs assume through GitHub's
 # OIDC provider, for the drift check's read of the AWS account's Budgets actions (FD-EXEC-083); it needs

@@ -40,6 +40,7 @@ import {
   APP_PERMISSIONS,
   DeployTarget,
   MERGE_GATE_CHECKS,
+  objectReadWritePolicy,
   placeholderOverlay,
   renderTemplate,
   rulesetCheck,
@@ -304,6 +305,15 @@ const deployedBy = async (argv: readonly string[]) => {
       lastRecord: () => Effect.succeed(null),
       appRegistration: Effect.succeed(APP_PERMISSIONS),
       requiredChecks: Effect.succeed([...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
+      // The presign token the overlay names: Object Read & Write on the cache and artifact buckets (FD-CACHE-091).
+      apiToken: (id) =>
+        Effect.succeed({
+          id,
+          status: "active",
+          policies: [
+            objectReadWritePolicy(values.accountId, [values.r2["CACHE"]!, values.r2["ARTIFACTS"]!]),
+          ],
+        }),
       awsBudgets: Effect.succeed({ account: "", observedAt: 0, budgets: [], actions: [] }),
       runnerWorkflow: () => Effect.succeed(null),
       applyD1Migrations: () => Effect.succeed([]),

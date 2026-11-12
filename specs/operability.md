@@ -32,6 +32,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 | `d1.<binding>` | D1 database id per binding |
 | `kv.<binding>` | KV namespace id per binding |
 | `r2.<binding>` | R2 bucket name per binding |
+| `presign.tokenId` | The id of the account R2 API token the object-store presigner signs with, which is the Access Key ID the Worker secret `R2_PRESIGN_ACCESS_KEY_ID` holds; the drift check reads the token's policies and fails unless they grant Object Read & Write on exactly the cache and artifact buckets ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-091); required where the deploy carries the dispatcher: the drift check fails without it |
 | `hostnames.<worker>` | Custom-domain hostname per Worker |
 | `access.teamDomain`, `access.aud` | Cloudflare Access team domain and application AUD |
 | `operators` | Access identities allowed on operator routes |
@@ -61,6 +62,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
   "accountId": "<account id>",
   "d1": { "CONTROL_DB": "<database id>" },
   "r2": { "CACHE": "<bucket name>", "ARTIFACTS": "<bucket name>" },
+  "presign": { "tokenId": "<R2 API token id>" },
   "hostnames": { "dispatcher": "<hostname>", "docs": "<hostname>" },
   "access": { "teamDomain": "<team domain>", "aud": "<aud tag>" },
   "operators": ["<access identity>"],

@@ -293,6 +293,8 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
     );
   // The Access applications sit on the dispatcher's hostname: only a deploy that carries the dispatcher applies them.
   const access = specs.some((s) => s.dispatcher === true) ? committedAccess : undefined;
+  // The dispatcher carries the object-store presigner, whose presign token the drift stage reads (FD-CACHE-091).
+  const presigner = specs.find((s) => s.dispatcher === true)?.worker;
   const report =
     <A>(run: Effect.Effect<A, DeployFailed, DeployTarget>, done: (a: A) => OperabilityReport) =>
     (overlayText: string) =>
@@ -323,7 +325,15 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
         ? Effect.flatMap(DeployTarget, (t) => t.raiseAlarm("drift", detail, "notify"))
         : Effect.void;
     return report(
-      fdDoctor(overlay, workers(), APP_PERMISSIONS, checks, profileFindings, access).pipe(
+      fdDoctor(
+        overlay,
+        workers(),
+        APP_PERMISSIONS,
+        checks,
+        profileFindings,
+        access,
+        presigner,
+      ).pipe(
         Effect.tap((findings) => (failed(findings) ? drift(problemsOf(findings)) : Effect.void)),
         Effect.tapError((f) =>
           f.stage === "decode"
@@ -361,6 +371,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
               ],
               profileFindings,
               access,
+              presigner,
             ),
             (r) => ({
               ok: true,
