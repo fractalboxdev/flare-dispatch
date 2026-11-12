@@ -30,7 +30,7 @@ import {
   type DeployedSettings,
   type Finding,
 } from "./drift.ts";
-import { ghaRunnerUnset, runnerWorkflowCheck } from "./gha-runner.ts";
+import { ghaRunnerUnset, runnerRepoInvalid, runnerWorkflowCheck } from "./gha-runner.ts";
 import {
   decodeOverlay,
   modelRegistryOf,
@@ -313,14 +313,14 @@ export const driftFindings = (
     if (overlay.gha !== undefined) {
       const { runnerRepo, workflow } = overlay.gha;
       if (runnerRepo === undefined || workflow === undefined) findings.push(ghaRunnerUnset);
-      else
-        findings.push(
-          ...runnerWorkflowCheck(
-            runnerRepo,
-            workflow,
-            yield* target.runnerWorkflow(runnerRepo, workflow),
-          ),
-        );
+      else {
+        const invalid = runnerRepoInvalid(runnerRepo);
+        if (invalid !== undefined) findings.push(invalid);
+        else {
+          const text = yield* target.runnerWorkflow(runnerRepo, workflow);
+          findings.push(...(yield* Effect.promise(() => runnerWorkflowCheck(runnerRepo, workflow, text))));
+        }
+      }
     }
     if (access !== null) findings.push(...accessDrift(access, yield* target.accessApplications));
     return yield* withProfileStep(findings, more(overlay));

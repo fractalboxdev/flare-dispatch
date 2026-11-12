@@ -1,9 +1,9 @@
 // The drift check's read of the GitHub Actions launcher's runner workflow (specs/executors.md § The GitHub Actions
 // launcher): for a deploy whose overlay carries the `gha` kind, the workflow file `gha.workflow` in the runner
 // repository `gha.runnerRepo` must grant each job's `GITHUB_TOKEN` no permission except `id-token: write`
-// (FD-EXEC-091). The check is a pure function of the file's text; `fd deploy` and `fd doctor` read it through
-// `DeployTarget.runnerWorkflow`.
-import { parseDocument } from "yaml";
+// (FD-EXEC-091). The check is a function of the file's text alone; `fd deploy` and `fd doctor` read it through
+// `DeployTarget.runnerWorkflow`. The YAML parser loads on the check's first call, so a bundle that imports the ops
+// root without running the drift check (the control-plane Worker) carries no parser.
 import type { Finding } from "./drift.ts";
 
 const CHECK = "gha-runner";
@@ -28,6 +28,15 @@ export const ghaRunnerUnset: Finding = fail(
   "the overlay carries the gha kind and sets no gha.runnerRepo or gha.workflow, so the runner workflow's permissions cannot be checked",
 );
 
+/**
+ * The failure of a `gha.runnerRepo` that names no `<owner>/<repo>`, or `undefined` when it does; the drift check reads
+ * nothing from a repository it cannot name.
+ */
+export const runnerRepoInvalid = (runnerRepo: string): Finding | undefined =>
+  /^[^/]+\/[^/]+$/.test(runnerRepo)
+    ? undefined
+    : fail("gha.runnerRepo", `gha.runnerRepo ${runnerRepo} names no <owner>/<repo>`);
+
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -50,13 +59,14 @@ const excessOf = (permissions: unknown): readonly string[] | undefined => {
  * `id-token: write`. A job's permissions are its own `permissions`, else the workflow's; a job with neither runs at the
  * repository's default permissions and fails. `text` is `null` when the runner repository holds no such file.
  */
-export const runnerWorkflowCheck = (
+export const runnerWorkflowCheck = async (
   runnerRepo: string,
   workflow: string,
   text: string | null,
-): readonly Finding[] => {
+): Promise<readonly Finding[]> => {
   const where = `${runnerRepo}/${runnerWorkflowPath(workflow)}`;
   if (text === null) return [fail(PATH, `${where} does not exist`)];
+  const { parseDocument } = await import("yaml");
   const document = parseDocument(text);
   if (document.errors.length > 0)
     return [fail(PATH, `${where} is not valid YAML: ${document.errors[0]!.message}`)];

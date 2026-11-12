@@ -134,4 +134,18 @@ describe("the runner workflow check of the drift check", () => {
     expect(w.calls.filter((c) => c.includes("acme/runner"))).toEqual([]);
     expect(w.calls.filter(isWrite)).toEqual([]);
   });
+
+  it("[FD-EXEC-091] fails a gha.runnerRepo that names no <owner>/<repo> before reading any repository", async () => {
+    for (const runnerRepo of ["runner", "acme/runner/extra", "/runner"]) {
+      const w = world();
+      const report = await deploy(w, overlayWith({ runnerRepo, workflow: WORKFLOW }));
+      expect(report.stages.at(-1)).toEqual({
+        stage: "drift",
+        ok: false,
+        detail: `gha.runnerRepo: gha.runnerRepo ${runnerRepo} names no <owner>/<repo>`,
+      });
+      expect(w.calls.filter((c) => c.includes(`/repos/${runnerRepo}`))).toEqual([]);
+      expect(w.calls.filter(isWrite)).toEqual([]);
+    }
+  });
 });
