@@ -6,6 +6,7 @@
 // and AWS Organizations, signed with SigV4, for the AWS account's Budgets actions and the policies they apply; the
 // overlay's alert sink for `deploy-probe-failed`; the local file system for the scan bundle envelope the overlay pins.
 import { signRequest, type AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
+import { contentObjectKey } from "@fractalboxdev/flare-dispatch-cache/namespaces";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Effect, Layer } from "effect";
@@ -88,6 +89,9 @@ export interface DeployRecord {
 export const recordKey = (scriptName: string): string => `deploys/${scriptName}/last.json`;
 
 const RECORD_BUCKET = "ARTIFACTS";
+
+/** The bucket binding whose `cas/<sha256>` objects every scan reads the scan bundle from (FD-OPS-099, FD-GATE-100). */
+const CAS_BUCKET = "CACHE";
 
 /** The page size the Access applications are listed in. */
 const ACCESS_PAGE = 100;
@@ -696,6 +700,26 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
       Effect.try({
         try: () => readLocal(resolve(c.root, path)),
         catch: (e) => new TargetFailed({ operation: `read ${path}`, message: String(e) }),
+      }),
+    writeScanBundle: (digest, bytes) =>
+      Effect.gen(function* () {
+        const cache = c.overlay.r2[CAS_BUCKET];
+        if (cache === undefined)
+          return yield* new TargetFailed({
+            operation: "scan-bundle",
+            message: "the overlay names no r2.CACHE bucket",
+          });
+        // The R2 object API answers 404 for a bucket that does not exist, which `raw` answers as null.
+        const stored = yield* c.cloudflare.raw(
+          "PUT",
+          `${account}/r2/buckets/${cache}/objects/${contentObjectKey(digest)}`,
+          bytes,
+        );
+        if (stored === null)
+          return yield* new TargetFailed({
+            operation: "scan-bundle",
+            message: `bucket ${cache} not found`,
+          });
       }),
     deployedSettings,
     apiToken,

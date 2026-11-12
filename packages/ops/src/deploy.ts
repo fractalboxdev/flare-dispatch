@@ -1,8 +1,9 @@
-// `fd deploy` and `fd doctor`: overlay decode, render, drift check, D1 migrations, Worker deploys in service-binding
+// `fd deploy` and `fd doctor`: overlay decode, render, drift check, scan bundle write, D1 migrations, Worker deploys in service-binding
 // order and the committed Access applications, post-deploy probes and the floor canary, then the record of the deploy
 // (specs/operability.md § Deploy pipeline). The stages run in that order and stop at the first that fails
 // (FD-OPS-009); the Cloudflare and GitHub reads and writes go through the `DeployTarget` port, so `fd doctor` runs the
 // same checks with no write (FD-OPS-024).
+import { contentObjectKey } from "@fractalboxdev/flare-dispatch-cache/namespaces";
 import { readOnlyScanRunsOf, RUN_CATALOG } from "@fractalboxdev/flare-dispatch-catalog";
 import { Clock, Context, Effect, Schema } from "effect";
 import {
@@ -76,6 +77,7 @@ export const STAGES = [
   "decode",
   "render",
   "drift",
+  "scan-bundle",
   "migrations",
   "deploy",
   "probes",
@@ -138,6 +140,14 @@ export class DeployTarget extends Context.Service<
      * exists (FD-OPS-094). A local read: it changes no Cloudflare state.
      */
     readonly readScanBundle: (path: string) => Effect.Effect<Uint8Array | null, TargetFailed>;
+    /**
+     * Writes the verified scan bundle envelope's bytes to `cas/<digest>` in the account's cache bucket, where every
+     * scan reads it (FD-OPS-099, FD-GATE-100).
+     */
+    readonly writeScanBundle: (
+      digest: string,
+      bytes: Uint8Array,
+    ) => Effect.Effect<void, TargetFailed>;
     /** Applies each Worker's pending D1 migrations, in order; answers the migrations applied. */
     readonly applyD1Migrations: (
       rendered: readonly RenderedWorker[],
@@ -320,22 +330,18 @@ const presignFindings = (overlay: OverlayValues, rendered: RenderedWorker) =>
     return presignTokenCheck(tokenId, token, overlay.accountId, presignBuckets(rendered.config));
   });
 
+/** The scan bundle envelope the drift check verified: the pinned digest and the bytes it read. */
+export interface VerifiedScanBundle {
+  readonly digest: string;
+  readonly bytes: Uint8Array;
+}
+
 /**
- * Every drift finding: the overlay's provider registry (FD-MDL-020, FD-MDL-022), policy sync over the overlay's
- * policy rules (FD-PROF-025), the overlay's identity lists against each other and its scoped entries against
- * `readOnlyScanRuns`, the catalogue's read-only scan runs by default (FD-OPS-090 to FD-OPS-093), the scan bundle envelope where the overlay pins one (FD-OPS-094 to FD-OPS-097), the
- * templates' invariants, the presign token of the Worker `presigner` names
- * (FD-CACHE-091), the
- * rendered configuration, no policy root key on any Worker (FD-PROV-045), the deployed Workers against the record of the
- * last deploy, the GitHub App's registration, the default branch's ruleset, the AWS account's Budgets actions where the
- * overlay carries the `aws` kind, the runner workflow's permissions and timeout where it carries the `gha` kind, and, given
- * `access`, the Access applications on the dispatcher's hostname, then the
- * profile step's findings over the decoded overlay from `more` (`withProfileStep`, the composition the pull-request
- * drift check shares). `fd deploy` passes no `access`: it checks only the hostname
- * application's AUD tag, then applies the committed applications and reports each one it changed, where `fd doctor`
- * fails on each difference.
+ * The drift check of `driftFindings`, with the scan bundle envelope it read where the overlay pins one: the bytes
+ * `fd deploy` writes to `cas/<scan.bundleDigest>` once every finding passes (FD-OPS-099), so the write carries the
+ * bytes the check verified and no second read of the file.
  */
-export const driftFindings = (
+const driftCheck = (
   overlay: OverlayValues,
   workers: readonly WorkerTemplate[],
   rendered: readonly RenderedWorker[],
@@ -353,13 +359,16 @@ export const driftFindings = (
       ...policyRulesCheck(policyRulesOf(overlay)),
       ...scopedIdentityCheck(overlay, readOnlyScanRuns),
     ];
+    let bundle: VerifiedScanBundle | null = null;
     const scan = overlay.scan;
     if (scan?.bundleDigest !== undefined) {
       // One verification time, sampled as verification starts, for every key window (FD-OPS-095).
       const at = yield* Clock.currentTimeMillis;
       const bytes =
         scan.bundleFile === undefined ? null : yield* target.readScanBundle(scan.bundleFile);
-      findings.push(...(yield* scanBundleFindings(scan, bytes, at)));
+      const bundleFindings = yield* scanBundleFindings(scan, bytes, at);
+      findings.push(...bundleFindings);
+      if (bytes !== null && !failed(bundleFindings)) bundle = { digest: scan.bundleDigest, bytes };
     }
     for (const w of workers) findings.push(...templateInvariants(w.worker, parseJsonc(w.template)));
     for (const r of rendered) {
@@ -398,8 +407,52 @@ export const driftFindings = (
       }
     }
     if (access !== null) findings.push(...accessDrift(access, yield* target.accessApplications));
-    return yield* withProfileStep(findings, more(overlay));
+    return {
+      findings: yield* withProfileStep(findings, more(overlay)),
+      bundle,
+    };
   }).pipe(Effect.mapError(stageFailed("drift")));
+
+/**
+ * Every drift finding: the overlay's provider registry (FD-MDL-020, FD-MDL-022), policy sync over the overlay's
+ * policy rules (FD-PROF-025), the overlay's identity lists against each other and its scoped entries against
+ * `readOnlyScanRuns`, the catalogue's read-only scan runs by default (FD-OPS-090 to FD-OPS-093), the scan bundle envelope where the overlay pins one (FD-OPS-094 to FD-OPS-097), the
+ * templates' invariants, the presign token of the Worker `presigner` names
+ * (FD-CACHE-091), the
+ * rendered configuration, no policy root key on any Worker (FD-PROV-045), the deployed Workers against the record of the
+ * last deploy, the GitHub App's registration, the default branch's ruleset, the AWS account's Budgets actions where the
+ * overlay carries the `aws` kind, the runner workflow's permissions and timeout where it carries the `gha` kind, and, given
+ * `access`, the Access applications on the dispatcher's hostname, then the
+ * profile step's findings over the decoded overlay from `more` (`withProfileStep`, the composition the pull-request
+ * drift check shares). `fd deploy` passes no `access`: it checks only the hostname
+ * application's AUD tag, then applies the committed applications and reports each one it changed, where `fd doctor`
+ * fails on each difference.
+ */
+export const driftFindings = (
+  overlay: OverlayValues,
+  workers: readonly WorkerTemplate[],
+  rendered: readonly RenderedWorker[],
+  manifest: AppPermissions,
+  extra?: ExtraCheck,
+  more?: ProfileStep,
+  access?: CommittedAccess | null,
+  presigner?: string | null,
+  readOnlyScanRuns?: ReadonlySet<string>,
+) =>
+  Effect.map(
+    driftCheck(
+      overlay,
+      workers,
+      rendered,
+      manifest,
+      extra,
+      more,
+      access,
+      presigner,
+      readOnlyScanRuns,
+    ),
+    (check) => check.findings,
+  );
 
 /**
  * `fd doctor`: every drift check, no Cloudflare or GitHub write (FD-OPS-024). `presigner` names the Worker that carries
@@ -470,19 +523,18 @@ export const fdDeploy = (
     const target = yield* DeployTarget;
     const { overlay, rendered } = yield* renderAll(overlayText, workers);
     const committed = access?.(overlay) ?? null;
-    const drift = [
-      ...(yield* driftFindings(
-        overlay,
-        workers,
-        rendered,
-        manifest,
-        extra,
-        more,
-        null,
-        presigner ?? null,
-        readOnlyScanRuns,
-      )),
-    ];
+    const check = yield* driftCheck(
+      overlay,
+      workers,
+      rendered,
+      manifest,
+      extra,
+      more,
+      null,
+      presigner ?? null,
+      readOnlyScanRuns,
+    );
+    const drift = [...check.findings];
     if (committed !== null)
       drift.push(
         ...accessAudCheck(
@@ -492,6 +544,16 @@ export const fdDeploy = (
       );
     if (failed(drift))
       return yield* new DeployFailed({ stage: "drift", findings: findingsOf(drift), rollback: [] });
+    // The verified envelope, at the key every scan reads it from, before any Worker serves the pin (FD-OPS-099).
+    const scanBundle: string | null =
+      check.bundle === null
+        ? null
+        : yield* target
+            .writeScanBundle(check.bundle.digest, check.bundle.bytes)
+            .pipe(
+              Effect.as(contentObjectKey(check.bundle.digest)),
+              Effect.mapError(stageFailed("scan-bundle")),
+            );
     const d1 = yield* target
       .applyD1Migrations(rendered)
       .pipe(Effect.mapError(stageFailed("migrations")));
@@ -570,6 +632,7 @@ export const fdDeploy = (
       yield* target.writeRecord(r).pipe(Effect.mapError(stageFailed("record")));
     return {
       deployed,
+      scanBundle,
       migrations: d1,
       access: accessApplied,
       canary,

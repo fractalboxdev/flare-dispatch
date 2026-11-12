@@ -86,13 +86,14 @@ describe("fd deploy over the committed templates and the placeholder overlay", (
     expect(w.runs).toEqual([]);
   });
 
-  it("[FD-OPS-009] runs decode, render, drift, migrations, deploys and probes in order, and stops at the first stage that fails", async () => {
+  it("[FD-OPS-009] runs decode, render, drift, the scan bundle write, migrations, deploys and probes in order, and stops at the first stage that fails", async () => {
     const w = world();
     const report = await deploy(w);
     expect(report.stages.map((s) => [s.stage, s.ok])).toEqual([
       ["decode", true],
       ["render", true],
       ["drift", true],
+      ["scan-bundle", true],
       ["migrations", true],
       ["deploy", true],
       ["probes", true],
@@ -121,6 +122,7 @@ describe("fd deploy over the committed templates and the placeholder overlay", (
       ["decode", true],
       ["render", true],
       ["drift", true],
+      ["scan-bundle", true],
       ["migrations", true],
       ["deploy", false],
     ]);
@@ -444,6 +446,7 @@ describe("the deploy and drift-check paths", () => {
       ["decode", true],
       ["render", true],
       ["drift", true],
+      ["scan-bundle", true],
       ["migrations", true],
       ["deploy", true],
       ["probes", true],

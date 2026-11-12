@@ -52,6 +52,7 @@ const account = (secrets: readonly string[] | null) => {
   const writes: string[] = [];
   const target = Layer.succeed(DeployTarget, {
     readScanBundle: () => Effect.succeed(null),
+    writeScanBundle: () => Effect.void,
     deployedSettings: () => Effect.succeed(secrets === null ? null : settingsWith(secrets)),
     lastRecord: () => Effect.succeed(null),
     appRegistration: Effect.succeed(APP_PERMISSIONS),
