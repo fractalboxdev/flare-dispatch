@@ -1,7 +1,8 @@
 // Egress-attached grants (specs/isolation-egress.md): a job reaches a credentialed service only through the egress
 // proxy, which adds the credential to a request for a granted host after the request leaves the job (FD-GATE-014,
 // FD-GATE-066). This module is the proxy's decision; the control plane's `ContainerProxy` export calls
-// `attachGrants` on each intercepted request, and log upload calls `redactLog`.
+// `attachGrants` on each intercepted request, log upload calls `redactLog`, and a scan log withholds a scanner's
+// matched values through `redactValues`.
 
 /** One grant: the hosts it covers and the header the proxy sets on a request to them. */
 export interface GrantRule {
@@ -124,10 +125,23 @@ const TOKEN_PATTERNS: readonly RegExp[] = [
   /(https?:\/\/)[^\s/@:]+:[^\s/@]+@/g,
 ];
 
-/** A log with every known secret value and every token shape replaced by `[redacted]`. */
+/**
+ * `text` with every occurrence of each non-empty value replaced by `[redacted]`, the longest value first so a value
+ * that contains another leaves no part of itself behind. A scan log withholds a scanner's matched values this way
+ * whatever their length (FD-GATE-098).
+ */
+export const redactValues = (text: string, values: readonly string[]): string =>
+  [...new Set(values)]
+    .filter((v) => v !== "")
+    .sort((a, b) => b.length - a.length)
+    .reduce((out, value) => out.split(value).join("[redacted]"), text);
+
+/** A log with every known secret value of 8 or more characters and every token shape replaced by `[redacted]`. */
 export const redactLog = (text: string, secrets: readonly string[] = []): string => {
-  let out = text;
-  for (const secret of secrets) if (secret.length >= 8) out = out.split(secret).join("[redacted]");
+  let out = redactValues(
+    text,
+    secrets.filter((s) => s.length >= 8),
+  );
   for (const pattern of TOKEN_PATTERNS)
     out = out.replace(pattern, (match, prefix: unknown) =>
       typeof prefix === "string" && prefix.startsWith("http")

@@ -4,7 +4,8 @@
 // `nothing-in-scope` and is not invoked (FD-GATE-088). Each exit maps through the bundle's exit map to one scan
 // result, and the results conclude the scan: `success` when every result is `clean` or `nothing-in-scope`
 // (FD-GATE-089), otherwise `failure` with a `scan-error` reason ahead of a `scan` reason (FD-GATE-090, FD-GATE-091).
-// No path concludes `skipped`.
+// No path concludes `skipped`. A scanner whose result is `finding` reports the findings its JSON report holds
+// (FD-GATE-096), and its log withholds every matched value (FD-GATE-098).
 //
 // Every subprocess runs as an argv with no shell, so no path the range names is word-split or expanded.
 import { Effect, Match } from "effect";
@@ -21,9 +22,12 @@ import {
   type ScanResult,
 } from "./scan-bundle.ts";
 import type { ScanRange } from "./scan-checkout.ts";
+import { scanFindings, scanLogBytes, StepFindings } from "./scan-findings.ts";
 
 /** A bundle exit map: each exit code, as a decimal string, to its scan result. */
 type ExitMap = Readonly<Record<string, ScanResult>>;
+
+const decoder = new TextDecoder();
 
 /** The job timeout of each scanner and baseline check (FD-GATE-108). */
 export const SCAN_TIMEOUT_SEC = 600;
@@ -63,6 +67,8 @@ export type ScanStep = ScanResultOf & {
   readonly invocation: ScanInvocation | undefined;
   /** How the subprocess ended, or `undefined` where nothing ran. */
   readonly exit: CommandExit | undefined;
+  /** The findings of a scanner whose result is `finding`, read from its report (FD-GATE-096). */
+  readonly findings?: StepFindings;
 };
 
 /** A scan's results in the order they ran, and the outcome they conclude. */
@@ -202,7 +208,12 @@ export const runScanTools = (input: ScanToolsInput): Effect.Effect<ScanReport, n
   Effect.gen(function* () {
     const exec = yield* GateExec;
     const { ctx, prepared, checkout, files } = input;
-    const run = (id: string, invocation: ScanInvocation, exitMap: ExitMap) =>
+    const run = (
+      id: string,
+      invocation: ScanInvocation,
+      exitMap: ExitMap,
+      scanner?: Scanner,
+    ) =>
       Effect.gen(function* () {
         const options: ArgvOptions = {
           argv: invocation.argv,
@@ -210,10 +221,20 @@ export const runScanTools = (input: ScanToolsInput): Effect.Effect<ScanReport, n
           env: jobEnv(ctx, id, invocation.env),
           timeoutMs: SCAN_TIMEOUT_SEC * 1000,
           ...(ctx.deadlineAt === undefined ? {} : { deadlineAt: ctx.deadlineAt }),
+          // A scanner's log withholds every matched value its report holds (FD-GATE-098).
+          ...(scanner === undefined ? {} : { logAs: scanLogBytes }),
         };
-        const { exit } = yield* exec.runArgv(options);
-        const step: ScanStep = { id, invocation, exit, ...resultOf(id, exitMap, exit) };
-        return step;
+        const { exit, output } = yield* exec.runArgv(options);
+        const result = resultOf(id, exitMap, exit);
+        const step: ScanStep = { id, invocation, exit, ...result };
+        if (scanner === undefined || result.result !== "finding") return step;
+        const findings = yield* scanFindings(scanner, decoder.decode(output), checkout.dir).pipe(
+          Effect.map((read) => StepFindings.Read({ findings: read })),
+          Effect.catchTag("ScanReportUnreadable", (e) =>
+            Effect.succeed(StepFindings.Unreadable({ detail: e.detail })),
+          ),
+        );
+        return { ...step, findings };
       });
 
     const steps: ScanStep[] = [];
@@ -223,7 +244,7 @@ export const runScanTools = (input: ScanToolsInput): Effect.Effect<ScanReport, n
       steps.push(
         invocation === undefined
           ? { id: scanner, result: "nothing-in-scope", invocation: undefined, exit: undefined }
-          : yield* run(scanner, invocation, payload.scanners[scanner].exitMap),
+          : yield* run(scanner, invocation, payload.scanners[scanner].exitMap, scanner),
       );
     }
     for (const check of payload.baselineChecks)

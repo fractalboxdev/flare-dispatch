@@ -266,6 +266,8 @@ flowchart TB
 | zizmor | 0 | 11 to 14 | 1, 2, 3 | No workflow in the range | `<path>:<start line>` |
 | OSV-Scanner | 0 | 1 | 127 | 128, or no lockfile in the range | `<lockfile path>:<package>@<version>` |
 
+Each finding's `path` is relative to the checkout, and its `startLine` is the 1-based line gitleaks or zizmor reports; OSV-Scanner names no line, so an OSV finding's `startLine` is 1. Its `level` is `failure` for gitleaks and OSV-Scanner, and follows zizmor's severity for zizmor: `High` is `failure`, `Medium` is `warning` and any other is `notice`. Findings with the same fingerprint are one finding.
+
 ### Deploy and smoke
 
 `worker-deploy` and `deploy-smoke` form one deploy graph. The deploy holds its serial group, re-reads the branch head before the command starts and reaches the Cloudflare API only through the egress proxy, which attaches the credential. A successful deploy emits a `dispatch.followOn` intent that starts `deploy-smoke` on the same commit.
