@@ -36,7 +36,7 @@ Not specified: a search endpoint, push feed or bulk export over statements, verd
 
 A statement is an in-toto Statement v1 inside a DSSE envelope with payload type `application/vnd.in-toto+json`. Its `subject` lists each output artifact by name and `sha256` digest; a statement with no output artifact, such as most gate recipes', names the commit as its one subject, `{"name": "commit", "digest": {"gitCommit": <commit SHA>}}`, since in-toto Statement v1 requires at least one subject. Build recipes use the SLSA provenance v1 predicate (`https://slsa.dev/provenance/v1`); gate recipes use the in-toto test-result predicate (`https://in-toto.io/attestation/test-result/v0.1`).
 
-Every statement carries a **lease binding**: `execution_id`, `epoch`, `nonce`, `executor_id` and `binding_kind` (`execution-lease` or `registration`). The SLSA predicate holds it at `buildDefinition.internalParameters.lease`; the test-result predicate holds it as the `configuration` resource descriptor named `lease`, beside one `configuration` descriptor for each other input and log digest the table lists. The SLSA predicate's `buildType` is `https://github.com/fractalboxdev/flare-dispatch/blob/main/specs/provenance.md#statement`. The statement builder answers the envelope with an empty signature list; the device executor signs DSSE's pre-authentication encoding of its payload.
+Every statement carries a **lease binding**: `execution_id`, `epoch`, `nonce`, `executor_id` and `binding_kind` (`execution-lease` or `registration`). The SLSA predicate holds it at `buildDefinition.internalParameters.lease`; the test-result predicate holds it as the `configuration` resource descriptor named `lease`, beside the descriptor named `builder` with the builder id and the device's code hash, and one `configuration` descriptor for each other input and log digest the table lists. The SLSA predicate's `buildType` is `https://github.com/fractalboxdev/flare-dispatch/blob/main/specs/provenance.md#statement`. The statement builder answers the envelope with an empty signature list; the device executor signs DSSE's pre-authentication encoding of its payload.
 
 | Field | Source | SLSA predicate path |
 | --- | --- | --- |
@@ -124,6 +124,8 @@ stateDiagram-v2
 | 10 | The subject digests equal the artifact digests in the result submission | `digest-mismatch` |
 | 11 | The key helper's code-signing hash equals the code hash recorded at the device's registration | `code-hash-mismatch` |
 | 12 | The model list equals the gateway metering records for that execution and epoch | `model-mismatch` |
+
+Check 1 verifies the envelope's one signature with the device key its `keyid` names; a `keyid` that names no key in the device registry fails check 2. A rejection with `bad-signature`, `revoked-key`, `wrong-executor` or `code-hash-mismatch` shows the signing executor or its key compromised, so the control plane also sets that executor's `quarantine` flag and raises the page alarm `provenance-quarantine`, keyed by the executor id (FD-PROV-027). The signing executor is the executor the device registry records for the key whose signature verified; where no signature verifies, it is the executor that submitted the result, so a signature that names another device's key quarantines the submitter and never that device. `packages/cache/src/provenance/acceptance.ts` implements the check and the reaction.
 
 ### Provenance tiers
 

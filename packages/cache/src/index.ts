@@ -20,3 +20,4 @@ export * from "./provenance/countersign.ts";
 export * from "./provenance/cloud-statement.ts";
 export * from "./provenance/merkle.ts";
 export * from "./provenance/log.ts";
+export * from "./provenance/acceptance.ts";
