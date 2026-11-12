@@ -20,6 +20,7 @@ import { memoryLogAppendStore } from "./append.test-support.ts";
 import { countersign } from "./countersign.ts";
 import {
   DSSE_PAYLOAD_TYPE,
+  type AnyDsseEnvelope,
   DsseEnvelope,
   dssePae,
   fromBase64,
@@ -33,7 +34,7 @@ import type { ProvenancePublicKey } from "./release.ts";
 import {
   REPRODUCTION_APPLIES_NO_INTENT,
   REPRODUCTION_MISMATCH,
-  REPRODUCTION_RECORD_V1,
+  REPRODUCTION_PAYLOAD_TYPE,
   reproductionGuardedActuators,
   reproductionRequestFor,
   ReproductionSubmitter,
@@ -303,19 +304,12 @@ describe("reproduction", () => {
     const record = s.store.intents.get(outcome!._tag === "Reproduced" ? outcome!.recordEnvelopeDigest : "")!;
     expect(record).toMatchObject({ executionId: RELEASE_ID, log: "private" });
     expect(LogAppendStatus.$is("Pending")(record.status)).toBe(true);
-    const envelope = JSON.parse(record.envelope) as DsseEnvelope;
+    const envelope = JSON.parse(record.envelope) as AnyDsseEnvelope;
     expect(envelope.signatures).toHaveLength(1);
     expect(await verifyDsseSignature(provenance.public, envelope, envelope.signatures[0]!)).toBe(true);
     const payload = JSON.parse(new TextDecoder().decode(fromBase64(envelope.payload)!));
-    expect(payload).toEqual({
-      _type: "https://in-toto.io/Statement/v1",
-      subject: [ARCHIVE, SBOM].map((d) => ({ digest: { sha256: d.slice("sha256:".length) } })),
-      predicateType: REPRODUCTION_RECORD_V1,
-      predicate: {
-        release: { execution_id: RELEASE_ID, envelope_digest: cloud.envelopeDigest },
-        reproduction: { execution_id: REPRO_ID, envelope_digest: repro.envelopeDigest },
-      },
-    });
+    expect(envelope.payloadType).toBe(REPRODUCTION_PAYLOAD_TYPE);
+    expect(payload).toEqual({ envelope_digests: [cloud.envelopeDigest, repro.envelopeDigest] });
 
     // A second comparison answers the same record and records no second intent.
     expect(await s.run()).toEqual(exit);

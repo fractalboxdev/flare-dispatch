@@ -15,7 +15,7 @@
 import { Context, Data, Effect, Option, Schema } from "effect";
 import { canonicalJson, sha256Hex, utf8 } from "../crypto.ts";
 import { countersignAccepted, CountersignOutcome, type StatementBinding } from "./countersign.ts";
-import type { DsseEnvelope, ProvenanceKey } from "./dsse.ts";
+import type { AnyDsseEnvelope, DsseEnvelope, ProvenanceKey } from "./dsse.ts";
 import { AppendOutcome } from "./log.ts";
 import { sha256Subjects, statementSubjects } from "./subjects.ts";
 
@@ -191,7 +191,7 @@ export class LogAppendStore extends Context.Service<
 >()("@fractalboxdev/flare-dispatch-cache/LogAppendStore") {}
 
 /** The canonical JSON of an envelope and its digest, the intent key. */
-export const envelopeEntry = async (envelope: DsseEnvelope) => {
+export const envelopeEntry = async (envelope: AnyDsseEnvelope) => {
   const json = canonicalJson(envelope);
   return { json, digest: `sha256:${await sha256Hex(utf8(json))}` };
 };
@@ -211,9 +211,9 @@ export const publicJwkOf = ({
   kid,
 });
 
-/** A statement the control plane countersigned, with what its log append needs. */
+/** An envelope the control plane signed (a countersigned statement or a reproduction record), with what its log append needs. */
 export interface CountersignedStatement {
-  readonly envelope: DsseEnvelope;
+  readonly envelope: AnyDsseEnvelope;
   readonly executionId: string;
   readonly repository: string;
   /** The public keys of the envelope's signers: the device key and the provenance key. */

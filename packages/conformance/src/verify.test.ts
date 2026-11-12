@@ -292,7 +292,9 @@ describe("reproduced tier", () => {
   });
 });
 
-describe("fd-verify executable", () => {
+// Each case spawns a Node process that strips types on load; under a loaded full-suite run six of them in sequence
+// outlast the default 5 s test timeout.
+describe("fd-verify executable", { timeout: 120_000 }, () => {
   /** Closes every network path in the child before `fd-verify` runs: `fetch`, and every socket connect. */
   const NO_NETWORK = `data:text/javascript,${encodeURIComponent(
     [

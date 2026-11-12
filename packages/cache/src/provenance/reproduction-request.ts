@@ -13,9 +13,11 @@ export const REPRODUCTION_MISMATCH = "provenance: reproduction mismatch";
 export const REPRODUCTION_UNAVAILABLE = "provenance: reproduction unavailable";
 /** The reason an outbox row of a reproduction execution is refused. */
 export const REPRODUCTION_APPLIES_NO_INTENT = "provenance: a reproduction execution applies no intent";
-/** The predicate type of a reproduction record. */
-export const REPRODUCTION_RECORD_V1 =
-  "https://github.com/fractalboxdev/flare-dispatch/blob/main/specs/provenance.md#reproduction";
+/**
+ * The DSSE payload type of a reproduction record, whose payload `{"envelope_digests": [...]}` names the release's and
+ * the reproduction's statement envelope digests (specs/provenance.md § Reproduction).
+ */
+export const REPRODUCTION_PAYLOAD_TYPE = "application/vnd.flare-dispatch.reproduction+json";
 
 /** A release rule's provenance fields: `reproduce: true` asks for a reproduction of each release. */
 export const ReleaseRule = Schema.Struct({ reproduce: Schema.optional(Schema.Boolean) });

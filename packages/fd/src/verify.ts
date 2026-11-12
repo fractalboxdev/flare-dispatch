@@ -36,10 +36,10 @@ import {
   type KeyHistoryEntry,
   type VerificationPolicy,
 } from "@fractalboxdev/flare-dispatch-cache/provenance-policy";
+import { REPRODUCTION_PAYLOAD_TYPE } from "@fractalboxdev/flare-dispatch-cache/reproduction-request";
 import { Effect, Option, Schema } from "effect";
 
-/** The DSSE payload type of a reproduction record: the provenance key's countersignature over two envelope digests. */
-export const REPRODUCTION_PAYLOAD_TYPE = "application/vnd.flare-dispatch.reproduction+json";
+export { REPRODUCTION_PAYLOAD_TYPE };
 
 /** The artifact classes a policy sets a required tier for. */
 export const ArtifactClass = Schema.Literals([

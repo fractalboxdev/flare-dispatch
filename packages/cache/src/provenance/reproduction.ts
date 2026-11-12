@@ -24,24 +24,22 @@ import { Data, Effect, Option, Schema } from "effect";
 import { utf8 } from "../crypto.ts";
 import { enqueueLogAppend, LogAppendStore, publicJwkOf } from "./append.ts";
 import {
-  DSSE_PAYLOAD_TYPE,
-  DsseEnvelope,
+  AnyDsseEnvelope,
   dssePae,
   fromBase64,
   ProvenanceKeyInvalid,
   signPae,
-  unsignedEnvelope,
   type ProvenanceKey,
 } from "./dsse.ts";
+import { toBase64 } from "./merkle.ts";
 import { loggedStatementsOf, type LoggedStatement, type ProvenancePublicKey } from "./release.ts";
 import {
   REPRODUCTION_APPLIES_NO_INTENT,
   REPRODUCTION_MISMATCH,
-  REPRODUCTION_RECORD_V1,
+  REPRODUCTION_PAYLOAD_TYPE,
   REPRODUCTION_UNAVAILABLE,
   type ReleaseExecution,
 } from "./reproduction-request.ts";
-import { STATEMENT_TYPE } from "./statement.ts";
 
 export * from "./reproduction-request.ts";
 
@@ -154,14 +152,8 @@ const reproducesInputs = (statement: LoggedStatement, release: ReleaseExecution)
   statement.definitionDigest === release.definitionDigest &&
   statement.imageDigest === release.imageDigest;
 
-const RecordClaims = Schema.Struct({
-  predicateType: Schema.Literal(REPRODUCTION_RECORD_V1),
-  predicate: Schema.Struct({
-    release: Schema.Struct({ envelope_digest: Schema.String }),
-    reproduction: Schema.Struct({ envelope_digest: Schema.String }),
-  }),
-});
-const decodeEnvelope = Schema.decodeUnknownOption(Schema.fromJsonString(DsseEnvelope));
+const RecordClaims = Schema.Struct({ envelope_digests: Schema.Array(Schema.String) });
+const decodeEnvelope = Schema.decodeUnknownOption(Schema.fromJsonString(AnyDsseEnvelope));
 const decodeRecord = Schema.decodeUnknownOption(Schema.fromJsonString(RecordClaims));
 
 /** The reproduction record already recorded under the release execution for these two statements, if any. */
@@ -170,41 +162,25 @@ const existingRecord = (releaseExecutionId: string, release: string, reproductio
     const intents = yield* (yield* LogAppendStore).forExecution(releaseExecutionId);
     for (const intent of intents) {
       const envelope = Option.getOrUndefined(decodeEnvelope(intent.envelope));
-      const payload = envelope === undefined ? undefined : fromBase64(envelope.payload);
+      if (envelope?.payloadType !== REPRODUCTION_PAYLOAD_TYPE) continue;
+      const payload = fromBase64(envelope.payload);
       if (payload === undefined) continue;
-      const record = Option.getOrUndefined(decodeRecord(new TextDecoder().decode(payload)));
-      if (
-        record?.predicate.release.envelope_digest === release &&
-        record.predicate.reproduction.envelope_digest === reproduction
-      )
+      const named = Option.getOrUndefined(decodeRecord(new TextDecoder().decode(payload)))?.envelope_digests;
+      if (named?.length === 2 && named.includes(release) && named.includes(reproduction))
         return intent.envelopeDigest;
     }
     return undefined;
   });
 
-/** The reproduction record: the release's subjects and both envelope digests, signed by the provenance key. */
-const signRecord = (
-  pair: ReproductionPair,
-  release: LoggedStatement,
-  reproduction: LoggedStatement,
-  key: ProvenanceKey,
-) =>
+/** The reproduction record: both envelope digests, release first, signed by the provenance key. */
+const signRecord = (release: LoggedStatement, reproduction: LoggedStatement, key: ProvenanceKey) =>
   Effect.tryPromise({
-    try: async (): Promise<DsseEnvelope> => {
-      const record = {
-        _type: STATEMENT_TYPE,
-        subject: [...new Set(release.subjectDigests)]
-          .sort()
-          .map((d) => ({ digest: { sha256: d.slice("sha256:".length) } })),
-        predicateType: REPRODUCTION_RECORD_V1,
-        predicate: {
-          release: { execution_id: pair.release.executionId, envelope_digest: release.envelopeDigest },
-          reproduction: { execution_id: pair.reproductionExecutionId, envelope_digest: reproduction.envelopeDigest },
-        },
-      };
-      const payload = utf8(JSON.stringify(record));
-      const signature = await signPae(key, dssePae(DSSE_PAYLOAD_TYPE, payload));
-      return { ...unsignedEnvelope(payload), signatures: [signature] };
+    try: async (): Promise<AnyDsseEnvelope> => {
+      const payload = utf8(
+        JSON.stringify({ envelope_digests: [release.envelopeDigest, reproduction.envelopeDigest] }),
+      );
+      const signature = await signPae(key, dssePae(REPRODUCTION_PAYLOAD_TYPE, payload));
+      return { payloadType: REPRODUCTION_PAYLOAD_TYPE, payload: toBase64(payload), signatures: [signature] };
     },
     catch: () => new ProvenanceKeyInvalid({ kid: key.kid, message: "the provenance key does not import" }),
   });
@@ -285,7 +261,7 @@ export const settleReproduction = (
     }
     const recorded = yield* existingRecord(releaseId, release.envelopeDigest, reproduction.envelopeDigest);
     if (recorded !== undefined) return ReproductionOutcome.Reproduced({ recordEnvelopeDigest: recorded, ...digests });
-    const envelope = yield* signRecord(pair, release, reproduction, key);
+    const envelope = yield* signRecord(release, reproduction, key);
     const intent = yield* enqueueLogAppend(
       { envelope, executionId: releaseId, repository: pair.release.repository, verifiers: [publicJwkOf(key)] },
       now,
