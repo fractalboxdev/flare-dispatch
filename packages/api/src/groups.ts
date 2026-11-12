@@ -70,10 +70,13 @@ export const wellKnownGroup = apiGroup({
   handlers: WellKnownHandlers,
 });
 
-/** Only an operator publishes a verification-policy version; the well-known route serves it to anyone. */
+/**
+ * Only an operator publishes a verification-policy version or reads the key history it carries; the well-known route
+ * serves a published version to anyone.
+ */
 export const provenancePolicyGroup = apiGroup({
   group: ProvenancePolicyGroup,
-  surfaces: { publish: operator },
+  surfaces: { publish: operator, keyHistory: operator },
   handlers: ProvenancePolicyHandlers,
 });
 

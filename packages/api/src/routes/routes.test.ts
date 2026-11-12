@@ -636,22 +636,75 @@ describe("verification policy", () => {
     expect((await h.fetch(POLICY_PATH)).status).toBe(404);
   });
 
-  it("[FD-PROV-047] refuses a policy whose key history omits the provenance key the control plane holds", async () => {
+  const keyNamed = async (kid: string) => {
     const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
       "sign",
       "verify",
     ])) as CryptoKeyPair;
     const priv = (await crypto.subtle.exportKey("jwk", pair.privateKey)) as JsonWebKey;
-    const key = parseProvenanceKey(JSON.stringify({ ...priv, kid: "prov-1" }))!;
-    holding({ provenance: key, log: undefined });
+    return parseProvenanceKey(JSON.stringify({ ...priv, kid }))!;
+  };
+
+  const keyHistory = async () => {
+    const answer = await h.fetch("/v1/provenance-policy/key-history", await h.asAccess(OPERATOR));
+    expect(answer.status).toBe(200);
+    return (await json(answer)) as { provenance_keys: unknown[]; log_keys: unknown[] };
+  };
+
+  /** A version whose key history is the one the key-history route answered. */
+  const carrying = (
+    version: string,
+    history: { provenance_keys: unknown[]; log_keys: unknown[] },
+  ) =>
+    envelope(
+      policy(version, {
+        provenance_keys: history.provenance_keys,
+        logs: [{ kind: "private", keys: history.log_keys }],
+      }),
+    );
+
+  it("[FD-PROV-047] an operator publishes on a deploy holding a provenance key and a log key from the key history the routes answer", async () => {
+    holding({ provenance: await keyNamed("prov-1"), log: await keyNamed("log-1") });
+    expect(await keyHistory()).toEqual({ provenance_keys: [], log_keys: [] });
     const omits = await publish(envelope(policy("v1")));
     expect(omits.status).toBe(400);
-    expect(String((await json(omits))["message"])).toContain("drops key prov-1");
-    const [entry] = stores.history.provenance;
-    const keeps = await publish(envelope(policy("v1", { provenance_keys: [entry] })));
-    expect(keeps.status).toBe(200);
-    expect(await json(await h.fetch(POLICY_PATH))).toEqual(
-      envelope(policy("v1", { provenance_keys: [entry] })),
+    const refusal = String((await json(omits))["message"]);
+    expect(refusal).toContain("drops key prov-1");
+    expect(refusal).toContain("drops key log-1");
+    const recorded = await keyHistory();
+    expect(recorded.provenance_keys).toHaveLength(1);
+    expect(recorded.log_keys).toHaveLength(1);
+    expect(refusal).toContain(`"kid":"prov-1"`);
+    expect(refusal).toContain(
+      `"not_before":${(recorded.provenance_keys[0] as { not_before: number }).not_before}`,
     );
+    const first = carrying("v1", recorded);
+    expect((await publish(first)).status).toBe(200);
+    expect(await json(await h.fetch(POLICY_PATH))).toEqual(first);
+
+    // The deploy rotates its provenance key: the publish that first holds it retires prov-1 at that instant.
+    holding({ provenance: await keyNamed("prov-2"), log: await keyNamed("log-1") });
+    const stale = await publish(carrying("v2", recorded));
+    expect(stale.status).toBe(400);
+    expect(String((await json(stale))["message"])).toContain("drops key prov-2");
+    const rotated = await keyHistory();
+    const [retired, active] = rotated.provenance_keys as {
+      kid: string;
+      not_before: number;
+      not_after?: number;
+    }[];
+    expect(retired?.kid).toBe("prov-1");
+    expect(active?.kid).toBe("prov-2");
+    expect(retired?.not_after).toBe(active?.not_before);
+    const second = carrying("v2", rotated);
+    expect((await publish(second)).status).toBe(200);
+    expect(await json(await h.fetch(POLICY_PATH))).toEqual(second);
+  });
+
+  it("[FD-PROV-047] only an operator reads the key history", async () => {
+    expect((await h.fetch("/v1/provenance-policy/key-history")).status).toBe(401);
+    expect(
+      (await h.fetch("/v1/provenance-policy/key-history", await h.asAccess(MEMBER))).status,
+    ).toBe(403);
   });
 });

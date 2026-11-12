@@ -1,14 +1,13 @@
 // The verification policy and the control plane's key history: publishing a policy version through the transparency
 // log before it is served, serving the current and every earlier version, the key-history checks, the provenance-key
-// rotation, the `managed-workstation` SLSA cap and the device revocation's `compromised_from`. The stores are the D1
-// stores under Miniflare; the transparency log is a recording double whose failures the suite sets.
+// rotation and the `managed-workstation` SLSA cap. The stores are the D1 stores under Miniflare; the transparency log
+// is a recording double whose failures the suite sets.
 import { Effect, Exit, Layer } from "effect";
 import type { Miniflare } from "miniflare";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { utf8 } from "../crypto.ts";
+import { canonicalJson, utf8 } from "../crypto.ts";
 import { failureOf, startMiniflare } from "../support.test-support.ts";
 import { LogAppendFailed, type LogEntry } from "./append.ts";
-import { CountersignOutcome, StatementBinding } from "./countersign.ts";
 import {
   DSSE_PAYLOAD_TYPE,
   dssePae,
@@ -18,19 +17,15 @@ import {
   type ProvenanceKey,
 } from "./dsse.ts";
 import {
-  compromisedFrom,
-  countersignInWindow,
-  d1DeviceRevocations,
   d1KeyHistoryStore,
   d1PolicyStore,
-  DeviceRevocations,
   KeyHistoryStore,
   keyUse,
   POLICY_PAYLOAD_TYPE,
   PolicyStore,
   PolicyTransparencyLog,
   publishPolicy,
-  revokeDevice,
+  recordedKeys,
   servedPolicy,
   useKey,
   type KeyHistoryEntry,
@@ -101,7 +96,6 @@ const services = () =>
   Layer.mergeAll(
     Layer.succeed(PolicyStore)(d1PolicyStore(db)),
     Layer.succeed(KeyHistoryStore)(d1KeyHistoryStore(db)),
-    Layer.succeed(DeviceRevocations)(d1DeviceRevocations(db)),
     Layer.succeed(PolicyTransparencyLog)({
       append: (json) =>
         Effect.gen(function* () {
@@ -148,11 +142,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await ok(Effect.flatMap(PolicyStore, (s) => s.current()));
-  for (const table of [
-    "provenance_policies",
-    "provenance_key_history",
-    "provenance_device_revocations",
-  ])
+  for (const table of ["provenance_policies", "provenance_key_history"])
     await db.prepare(`delete from ${table}`).run();
   log.appended.length = 0;
   log.fail = undefined;
@@ -331,42 +321,83 @@ describe("the key history", () => {
     });
   });
 
-  it("[FD-PROV-047] refuses a policy whose key history omits or misstates a key the control plane has used", async () => {
+  it("[FD-PROV-047] refuses a policy whose key history omits or misstates a key the control plane has used, naming the entry it expects", async () => {
+    // The operator signs offline, before the publish whose instant opens each held key's window.
     const keys: KeysInUse = { provenance: provA, log: logKey };
     const omits = policy({ policy_version: "omits", provenance_keys: [] });
-    expect(await fails(publishPolicy(await envelopeOf(root, omits), keys, T0))).toMatchObject({
-      reason: "key-history",
+    const refusal = await fails(publishPolicy(await envelopeOf(root, omits), keys, T0 + 7));
+    expect(refusal).toMatchObject({ reason: "key-history" });
+    const recorded = await ok(recordedKeys);
+    expect(recorded).toEqual({
+      provenance: [entryOf(provA, T0 + 7)],
+      log: [entryOf(logKey, T0 + 7)],
     });
-    const noLogKey = policy({
-      policy_version: "no-log-key",
+    for (const expected of [...recorded.provenance, ...recorded.log])
+      expect(String(refusal["message"])).toContain(`expected ${canonicalJson(expected)}`);
+    const guessed = policy({
+      policy_version: "guessed",
       provenance_keys: [entryOf(provA, T0)],
+      logs: [{ kind: "private", keys: [entryOf(logKey, T0)] }],
     });
-    expect(await fails(publishPolicy(await envelopeOf(root, noLogKey), keys, T0))).toMatchObject({
-      reason: "key-history",
-    });
+    expect(await fails(publishPolicy(await envelopeOf(root, guessed), keys, T0 + 9))).toMatchObject(
+      { reason: "key-history" },
+    );
     const complete = policy({
       policy_version: "complete",
-      provenance_keys: [entryOf(provA, T0)],
-      logs: [{ kind: "private", keys: [entryOf(logKey, T0)] }],
+      provenance_keys: [...recorded.provenance],
+      logs: [{ kind: "private", keys: [...recorded.log] }],
     });
     await ok(publishPolicy(await envelopeOf(root, complete), keys, T0 + 10));
-    // After a rotation the retired key must carry the window the control plane recorded.
-    await ok(useKey("provenance", provB, T0 + 100));
-    const stale = policy({
-      policy_version: "stale",
-      provenance_keys: [entryOf(provA, T0), entryOf(provB, T0 + 100)],
-      logs: [{ kind: "private", keys: [entryOf(logKey, T0)] }],
-    });
+    // A rotation retires the old key at the publish that first holds the new one; that publish is refused, and the
+    // next one carries the windows the control plane recorded.
     const rotated = { provenance: provB, log: logKey };
+    const stale = policy({
+      policy_version: "rotated",
+      provenance_keys: [...recorded.provenance],
+      logs: [{ kind: "private", keys: [...recorded.log] }],
+    });
     expect(
       await fails(publishPolicy(await envelopeOf(root, stale), rotated, T0 + 110)),
     ).toMatchObject({ reason: "key-history" });
+    const after = await ok(recordedKeys);
+    expect(after.provenance).toEqual([entryOf(provA, T0 + 7, T0 + 110), entryOf(provB, T0 + 110)]);
     const current = policy({
       policy_version: "rotated",
-      provenance_keys: [entryOf(provA, T0, T0 + 100), entryOf(provB, T0 + 100)],
-      logs: [{ kind: "private", keys: [entryOf(logKey, T0)] }],
+      provenance_keys: [...after.provenance],
+      logs: [{ kind: "private", keys: [...after.log] }],
     });
     await ok(publishPolicy(await envelopeOf(root, current), rotated, T0 + 120));
+  });
+
+  it("[FD-PROV-047] refuses a key history that lists a kid twice, so no verifier picks between two windows", async () => {
+    const keys: KeysInUse = { provenance: provA, log: logKey };
+    await fails(
+      publishPolicy(await envelopeOf(root, policy({ policy_version: "probe" })), keys, T0),
+    );
+    const { provenance, log: logEntries } = await ok(recordedKeys);
+    const wider = { ...provenance[0]!, not_before: 0 };
+    const twice = policy({
+      policy_version: "twice",
+      provenance_keys: [...provenance, wider],
+      logs: [{ kind: "private", keys: [...logEntries] }],
+    });
+    const refusal = await fails(publishPolicy(await envelopeOf(root, twice), keys, T0 + 1));
+    expect(refusal).toMatchObject({ reason: "key-history" });
+    expect(String(refusal["message"])).toContain(`repeats key ${provA.kid}`);
+    const logTwice = policy({
+      policy_version: "log-twice",
+      provenance_keys: [...provenance],
+      logs: [
+        { kind: "private", keys: [...logEntries] },
+        { kind: "private", keys: [...logEntries] },
+      ],
+    });
+    expect(
+      String(
+        (await fails(publishPolicy(await envelopeOf(root, logTwice), keys, T0 + 1)))["message"],
+      ),
+    ).toContain(`repeats key ${logKey.kid}`);
+    expect(log.appended).toHaveLength(0);
   });
 });
 
@@ -379,66 +410,5 @@ describe("provenance-key rotation", () => {
     expect(use.retire).toEqual(entryOf(provA, T0, T0 + 500));
     expect(use.insert).toEqual(entryOf(provB, T0 + 500));
     expect(use.retire?.not_after).toBe(use.insert?.not_before);
-  });
-
-  it("[FD-PROV-048] countersigns only with the new key from the instant of rotation", async () => {
-    const device = await keyPair("device-1");
-    const payload = utf8(JSON.stringify({ _type: "https://in-toto.io/Statement/v1", subject: [] }));
-    const envelope = {
-      ...unsignedEnvelope(payload),
-      signatures: [await signPae(device, dssePae(DSSE_PAYLOAD_TYPE, payload))],
-    };
-    const binding = StatementBinding.ExecutionLease({ executionId: "01JEXEC", epoch: 1 });
-    const before = await ok(countersignInWindow(envelope, binding, provA, T0));
-    expect(CountersignOutcome.$is("Countersigned")(before) && before.keyid).toBe(provA.kid);
-    const after = await ok(countersignInWindow(envelope, binding, provB, T0 + 1000));
-    expect(CountersignOutcome.$is("Countersigned")(after) && after.keyid).toBe(provB.kid);
-    for (const at of [T0 + 1000, T0 + 2000])
-      expect(await fails(countersignInWindow(envelope, binding, provA, at))).toMatchObject({
-        _tag: "SigningKeyRetired",
-        kid: provA.kid,
-        notAfter: T0 + 1000,
-      });
-    const history = await ok(Effect.flatMap(KeyHistoryStore, (s) => s.entries("provenance")));
-    expect(history).toEqual([entryOf(provA, T0, T0 + 1000), entryOf(provB, T0 + 1000)]);
-  });
-});
-
-describe("device revocation", () => {
-  it("[FD-PROV-051] records compromised_from as the device's last successful attestation unless the operator names an earlier time", async () => {
-    const lastAttestedAt = T0 + 5_000;
-    const base = { executorId: "mac-1", registeredAt: T0, lastAttestedAt, now: T0 + 9_000 };
-    const defaulted = await ok(revokeDevice({ ...base, keyThumbprint: "thumb-1" }));
-    expect(defaulted).toEqual({
-      keyThumbprint: "thumb-1",
-      executorId: "mac-1",
-      revokedAt: T0 + 9_000,
-      compromisedFrom: lastAttestedAt,
-    });
-    const named = await ok(revokeDevice({ ...base, keyThumbprint: "thumb-2", named: T0 + 1_000 }));
-    expect(named.compromisedFrom).toBe(T0 + 1_000);
-    expect(
-      await fails(revokeDevice({ ...base, keyThumbprint: "thumb-3", named: T0 + 6_000 })),
-    ).toMatchObject({ _tag: "CompromisedFromTooLate", latest: lastAttestedAt });
-    expect(await ok(Effect.flatMap(DeviceRevocations, (r) => r.get("thumb-3")))).toBeUndefined();
-    const stored = await ok(Effect.flatMap(DeviceRevocations, (r) => r.get("thumb-1")));
-    expect(stored?.compromisedFrom).toBe(lastAttestedAt);
-  });
-
-  it("[FD-PROV-051] a key never attested is compromised from its registration, and a later revocation keeps the earlier time", async () => {
-    expect(
-      await Effect.runPromise(
-        compromisedFrom({ keyThumbprint: "t", registeredAt: T0, lastAttestedAt: null }),
-      ),
-    ).toBe(T0);
-    const base = {
-      keyThumbprint: "thumb-4",
-      executorId: "mac-2",
-      registeredAt: T0,
-      now: T0 + 9_000,
-    };
-    await ok(revokeDevice({ ...base, lastAttestedAt: T0 + 3_000, named: T0 + 2_000 }));
-    const again = await ok(revokeDevice({ ...base, lastAttestedAt: T0 + 4_000, now: T0 + 10_000 }));
-    expect(again).toMatchObject({ compromisedFrom: T0 + 2_000, revokedAt: T0 + 9_000 });
   });
 });

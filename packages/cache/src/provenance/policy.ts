@@ -5,20 +5,19 @@
 // earlier one by its `policy_version` (FD-PROV-044).
 //
 // The control plane keeps its own record of every provenance key and log key it has used, each with its validity
-// window, and never removes an entry (FD-PROV-047). A key the control plane has not used before rotates the role: the
-// retired key's `not_after` is set to the new key's `not_before`, the instant of first use, and from that instant the
-// retired key signs nothing (FD-PROV-048). A policy version whose key history drops or changes an entry of the earlier
-// version, or omits or misstates a key the control plane has used, is refused. A policy that lets a
-// `managed-workstation` builder claim a SLSA Build level above L1 is refused at publish and at every serve
-// (FD-PROV-052). When the operator revokes a device key, the control plane records `compromised_from`: the device's last
-// successful attestation, or an earlier time the operator names (FD-PROV-051).
+// window, and never removes an entry (FD-PROV-047). A publish records each key the deploy holds; a key the control plane
+// has not recorded before rotates the role: the retired key's `not_after` is set to the new key's `not_before`, the
+// instant of that publish (FD-PROV-048). The operator reads the recorded windows from the key-history route, and every
+// key-history refusal names the entry the control plane expects. A policy version whose key history drops or changes
+// an entry of the earlier version, repeats a kid, or omits or misstates a key the control plane has used, is refused. A
+// policy that lets a `managed-workstation` builder claim a SLSA Build level above L1 is refused at publish and at every
+// serve (FD-PROV-052).
 //
 // Times are milliseconds since the Unix epoch, as log entries' integrated times are.
 import { Context, Effect, Option, Schema } from "effect";
 import { canonicalJson } from "../crypto.ts";
 import type { LogAppendFailed, LogEntry } from "./append.ts";
 import { LogKind } from "./append.ts";
-import { countersignAccepted, type StatementBinding } from "./countersign.ts";
 import { fromBase64, type ProvenanceKey } from "./dsse.ts";
 
 /** The DSSE payload type of a verification-policy envelope. */
@@ -140,12 +139,6 @@ export class SigningKeyRetired extends Schema.TaggedError<SigningKeyRetired>()(
   { role: Schema.String, kid: Schema.String, notAfter: Schema.Number },
 ) {}
 
-/** An operator-named `compromised_from` later than the device's last successful attestation (FD-PROV-051). */
-export class CompromisedFromTooLate extends Schema.TaggedError<CompromisedFromTooLate>()(
-  "CompromisedFromTooLate",
-  { keyThumbprint: Schema.String, named: Schema.Number, latest: Schema.Number },
-) {}
-
 // ---------------------------------------------------------------------------------------------------------------------
 // Checks
 
@@ -202,19 +195,32 @@ export type RecordedKeys = Readonly<Record<KeyRole, readonly KeyHistoryEntry[]>>
 const sameJwk = (a: PublicKeyJwk, b: PublicKeyJwk) =>
   a.kty === b.kty && a.crv === b.crv && a.x === b.x && a.y === b.y;
 
-/** Why `next` does not keep `kept` unchanged, or `undefined` when it does. */
+/** Why `next` does not keep `kept` unchanged, naming the entry it expects, or `undefined` when it does. */
 const entryMismatch = (
   where: string,
   kept: KeyHistoryEntry,
   next: readonly KeyHistoryEntry[],
 ): string | undefined => {
   const found = next.find((e) => e.kid === kept.kid);
-  if (found === undefined) return `${where} drops key ${kept.kid}`;
-  if (!sameJwk(found.jwk, kept.jwk)) return `${where} changes the public key of ${kept.kid}`;
-  if (found.not_before !== kept.not_before) return `${where} changes the not_before of ${kept.kid}`;
-  if (found.not_after !== kept.not_after)
-    return `${where} gives ${kept.kid} not_after ${found.not_after ?? "absent"}; its window ends at ${kept.not_after ?? "absent (active)"}`;
-  return undefined;
+  const problem =
+    found === undefined
+      ? `${where} drops key ${kept.kid}`
+      : !sameJwk(found.jwk, kept.jwk)
+        ? `${where} changes the public key of ${kept.kid}`
+        : found.not_before !== kept.not_before
+          ? `${where} gives ${kept.kid} not_before ${found.not_before}`
+          : found.not_after !== kept.not_after
+            ? `${where} gives ${kept.kid} not_after ${found.not_after ?? "absent"}`
+            : undefined;
+  return problem === undefined ? undefined : `${problem}; expected ${canonicalJson(kept)}`;
+};
+
+/** The kids a key history lists more than once: each kid names one entry, one window (FD-PROV-047). */
+const repeatedKids = (where: string, entries: readonly KeyHistoryEntry[]): string | undefined => {
+  const seen = new Set<string>();
+  const repeated = new Set<string>();
+  for (const e of entries) (seen.has(e.kid) ? repeated : seen).add(e.kid);
+  return repeated.size === 0 ? undefined : `${where} repeats key ${[...repeated].join(", ")}`;
 };
 
 /** A key of the previous version: kept as it was, except that an active key may be retired. */
@@ -236,7 +242,8 @@ const logKeys = (policy: VerificationPolicy, kind: LogKind) =>
  * Refuses a policy version whose key history does not keep every entry of the previous version (FD-PROV-047): the same
  * public key and `not_before`, and the same `not_after`, which only an active key may gain. Every key the control
  * plane has used must appear with the window the control plane recorded: provenance keys in the provenance key
- * history, log keys in the private log's key history.
+ * history, log keys in the private log's key history. A history that lists a kid twice is refused, so a verifier never
+ * picks between two windows for one key.
  */
 export const checkKeyHistory = (
   previous: VerificationPolicy | undefined,
@@ -247,6 +254,9 @@ export const checkKeyHistory = (
   const add = (problem: string | undefined) => {
     if (problem !== undefined) problems.push(problem);
   };
+  add(repeatedKids("the provenance key history", next.provenance_keys));
+  for (const kind of LogKind.literals)
+    add(repeatedKids(`the ${kind} log's key history`, logKeys(next, kind)));
   if (previous !== undefined) {
     for (const kept of previous.provenance_keys)
       add(previousMismatch("the provenance key history", kept, next.provenance_keys));
@@ -315,6 +325,19 @@ export class KeyHistoryStore extends Context.Service<
   }
 >()("@fractalboxdev/flare-dispatch-cache/KeyHistoryStore") {}
 
+/**
+ * The control plane's key history, each role's entries with the windows it recorded: what a published policy's key
+ * history must carry (FD-PROV-047), and what the operator's key-history route answers.
+ */
+export const recordedKeys: Effect.Effect<RecordedKeys, PolicyStoreFailed, KeyHistoryStore> =
+  Effect.gen(function* () {
+    const history = yield* KeyHistoryStore;
+    return {
+      provenance: yield* history.entries("provenance"),
+      log: yield* history.entries("log"),
+    };
+  });
+
 const publicOf = (key: ProvenanceKey) => ({
   kid: key.kid,
   jwk: { kty: key.kty, crv: key.crv, x: key.x, y: key.y },
@@ -330,86 +353,6 @@ export const useKey = (role: KeyRole, key: ProvenanceKey, now: number) =>
     const use = yield* keyUse(role, yield* store.entries(role), publicOf(key), now);
     if (use.retire !== undefined || use.insert !== undefined) yield* store.apply(role, use);
     return key;
-  });
-
-/**
- * The control plane's countersignature under its key history: the configured provenance key countersigns only while
- * its window is open, so from the instant a new key is first used the retired one never countersigns (FD-PROV-048).
- */
-export const countersignInWindow = (
-  envelope: Parameters<typeof countersignAccepted>[0],
-  binding: StatementBinding,
-  key: ProvenanceKey,
-  now: number,
-) =>
-  Effect.flatMap(useKey("provenance", key, now), (k) => countersignAccepted(envelope, binding, k));
-
-// ---------------------------------------------------------------------------------------------------------------------
-// Device revocation
-
-/** A revoked device key as the control plane records it. */
-export interface DeviceRevocation {
-  readonly keyThumbprint: string;
-  readonly executorId: string;
-  readonly revokedAt: number;
-  readonly compromisedFrom: number;
-}
-
-/**
- * A revoked device's `compromised_from` (FD-PROV-051): the time of its last successful attestation, or its registration
- * for a key never attested, unless the operator names an earlier time. A named time later than that default fails, so
- * no statement the device signed after its last attestation keeps verifying.
- */
-export const compromisedFrom = (input: {
-  readonly keyThumbprint: string;
-  readonly registeredAt: number;
-  readonly lastAttestedAt: number | null;
-  readonly named?: number;
-}): Effect.Effect<number, CompromisedFromTooLate> => {
-  const latest = input.lastAttestedAt ?? input.registeredAt;
-  if (input.named === undefined) return Effect.succeed(latest);
-  return input.named > latest
-    ? Effect.fail(
-        new CompromisedFromTooLate({
-          keyThumbprint: input.keyThumbprint,
-          named: input.named,
-          latest,
-        }),
-      )
-    : Effect.succeed(input.named);
-};
-
-export class DeviceRevocations extends Context.Service<
-  DeviceRevocations,
-  {
-    /** Records a revocation; a key revoked before keeps the earlier `compromised_from` and `revoked_at`. */
-    readonly record: (
-      revocation: DeviceRevocation,
-    ) => Effect.Effect<DeviceRevocation, PolicyStoreFailed>;
-    readonly get: (
-      keyThumbprint: string,
-    ) => Effect.Effect<DeviceRevocation | undefined, PolicyStoreFailed>;
-  }
->()("@fractalboxdev/flare-dispatch-cache/DeviceRevocations") {}
-
-/** Records the operator's revocation of a device key with its `compromised_from` (FD-PROV-051). */
-export const revokeDevice = (input: {
-  readonly keyThumbprint: string;
-  readonly executorId: string;
-  readonly registeredAt: number;
-  readonly lastAttestedAt: number | null;
-  readonly named?: number;
-  readonly now: number;
-}) =>
-  Effect.gen(function* () {
-    const from = yield* compromisedFrom(input);
-    const revocations = yield* DeviceRevocations;
-    return yield* revocations.record({
-      keyThumbprint: input.keyThumbprint,
-      executorId: input.executorId,
-      revokedAt: input.now,
-      compromisedFrom: from,
-    });
   });
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -479,11 +422,7 @@ export const publishPolicy = (input: unknown, keys: KeysInUse, now: number) =>
       return { policyVersion: policy.policy_version, entry: existing.entry };
     if (keys.provenance !== undefined) yield* useKey("provenance", keys.provenance, now);
     if (keys.log !== undefined) yield* useKey("log", keys.log, now);
-    const history = yield* KeyHistoryStore;
-    const recorded: RecordedKeys = {
-      provenance: yield* history.entries("provenance"),
-      log: yield* history.entries("log"),
-    };
+    const recorded = yield* recordedKeys;
     const current = yield* store.current();
     const previous =
       current === undefined || current.policyVersion === policy.policy_version
@@ -517,7 +456,7 @@ export const servedPolicy = (policyVersion: string | undefined) =>
 // ---------------------------------------------------------------------------------------------------------------------
 // The D1 stores
 
-/** The tables of the policy versions, the key history and the device revocations. */
+/** The tables of the policy versions and the key history. */
 export const POLICY_SCHEMA = [
   `create table if not exists provenance_policies (
      policy_version text primary key,
@@ -535,11 +474,6 @@ export const POLICY_SCHEMA = [
      not_before integer not null,
      not_after integer,
      primary key (role, kid))`,
-  `create table if not exists provenance_device_revocations (
-     key_thumbprint text primary key,
-     executor_id text not null,
-     revoked_at integer not null,
-     compromised_from integer not null)`,
 ];
 
 interface PolicyRow {
@@ -684,50 +618,5 @@ export const d1KeyHistoryStore = (db: D1Database): KeyHistoryStore["Service"] =>
               ]),
         ]),
       ).pipe(Effect.asVoid),
-  };
-};
-
-interface RevocationRow {
-  readonly key_thumbprint: string;
-  readonly executor_id: string;
-  readonly revoked_at: number;
-  readonly compromised_from: number;
-}
-
-const revocationOf = (row: RevocationRow): DeviceRevocation => ({
-  keyThumbprint: row.key_thumbprint,
-  executorId: row.executor_id,
-  revokedAt: row.revoked_at,
-  compromisedFrom: row.compromised_from,
-});
-
-export const d1DeviceRevocations = (db: D1Database): DeviceRevocations["Service"] => {
-  const run = d1Runner(db);
-  const get = (thumbprint: string) =>
-    run(async () => {
-      const row = await db
-        .prepare("select * from provenance_device_revocations where key_thumbprint = ?")
-        .bind(thumbprint)
-        .first<RevocationRow>();
-      return row === null ? undefined : revocationOf(row);
-    });
-  return {
-    get,
-    record: (r) =>
-      run(() =>
-        db
-          .prepare(
-            `insert into provenance_device_revocations (key_thumbprint, executor_id, revoked_at, compromised_from)
-             values (?, ?, ?, ?)
-             on conflict (key_thumbprint) do update set
-               revoked_at = min(revoked_at, excluded.revoked_at),
-               compromised_from = min(compromised_from, excluded.compromised_from)`,
-          )
-          .bind(r.keyThumbprint, r.executorId, r.revokedAt, r.compromisedFrom)
-          .run(),
-      ).pipe(
-        Effect.andThen(get(r.keyThumbprint)),
-        Effect.map((stored) => stored ?? r),
-      ),
   };
 };

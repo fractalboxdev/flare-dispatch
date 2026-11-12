@@ -186,6 +186,7 @@ export const makeDoubles = (): Doubles => {
     provenancePolicies: {
       served: () => Effect.fail(apiError("not_found", "no verification policy is published")),
       publish: () => Effect.fail(apiError("unavailable", "this harness publishes no policy")),
+      keyHistory: Effect.fail(apiError("unavailable", "this harness records no key history")),
     },
   };
   return doubles;
@@ -279,6 +280,7 @@ export const portsContext = (doubles: Doubles) =>
     Context.add(ProvenancePolicies, {
       served: (version) => doubles.provenancePolicies.served(version),
       publish: (envelope, now) => doubles.provenancePolicies.publish(envelope, now),
+      keyHistory: Effect.suspend(() => doubles.provenancePolicies.keyHistory),
     }),
   );
 

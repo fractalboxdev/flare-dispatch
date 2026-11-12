@@ -1,5 +1,6 @@
 // The verification policy's port over the cache area's policy publisher (packages/cache/src/provenance/policy.ts): the
-// stores, the transparency log and the keys the control plane holds come from the deploy. A refused version answers
+// stores, the transparency log and the keys the control plane holds come from the deploy. The key history answers the
+// windows the control plane recorded, which a version's key history must carry (FD-PROV-047). A refused version answers
 // 400 `invalid_body` naming the reason, another envelope under a published version 409 `conflict`, a failed log append
 // 503 `unavailable` with the version unserved (FD-PROV-046), and a stored version that fails the SLSA cap 503
 // `misconfigured` instead of the document (FD-PROV-052).
@@ -8,6 +9,7 @@ import {
   PolicyStore,
   PolicyTransparencyLog,
   publishPolicy,
+  recordedKeys,
   servedPolicy,
   type KeysInUse,
   type PolicyRefused,
@@ -83,6 +85,14 @@ export const provenancePolicies = (
                 ),
             }),
           ),
+        keyHistory: recordedKeys.pipe(
+          Effect.provide(context),
+          Effect.map((recorded) => ({
+            provenance_keys: recorded.provenance,
+            log_keys: recorded.log,
+          })),
+          Effect.catchTag("PolicyStoreFailed", storeFailed),
+        ),
       };
     }),
   );
