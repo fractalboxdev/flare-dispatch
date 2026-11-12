@@ -36,6 +36,12 @@ export const followOnSubmitterLayer = Layer.effect(
           const run = config.catalog(intent.run);
           if (run === undefined)
             return { _tag: "refused" as const, reason: `follow-on: no run named ${intent.run}` };
+          // A dispatch-only run starts from a dispatch, never from another run's intent (FD-GATE-111).
+          if (run.dispatchOnly === true)
+            return {
+              _tag: "refused" as const,
+              reason: `follow-on: ${intent.run} starts only from a dispatch`,
+            };
           let requested = intent.inputs;
           if (parent.run === "worker-deploy" && intent.run === "deploy-smoke") {
             // The deploy executor cannot select another commit or arbitrary probe targets. The parent pins the

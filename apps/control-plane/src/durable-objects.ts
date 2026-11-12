@@ -121,7 +121,9 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
           server_now: Date.now(),
           progress_timeout_ms: PROGRESS_TIMEOUT_MS,
           credentials: {},
-          ...(yield* Effect.promise(() => leaseCache(env, record, row.deadline_at))),
+          ...(yield* Effect.promise(() =>
+            leaseCache(env, record, row.deadline_at, entry?.sealedSandbox === true),
+          )),
           nonce: yield* leaseNonce(env.DB, executionId, row.epoch, Date.now()),
         } satisfies ClaimedLease);
       }).pipe(Effect.provide(d1IntakeStore(env.DB))),

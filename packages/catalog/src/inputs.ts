@@ -18,6 +18,8 @@ export const OFFLOAD_TEST_MAX_DURATION_SEC = 3600;
 export const WORKER_DEPLOY_MAX_DURATION_SEC = 1800;
 export const DEPLOY_SMOKE_MAX_DURATION_SEC = 300;
 export const SANDBOX_IMAGE_MAX_DURATION_SEC = 3600;
+export const SECURITY_GATE_MAX_DURATION_SEC = 1800;
+export const SECURITY_RESCAN_MAX_DURATION_SEC = 1800;
 /** The run ceiling of `gate-job`, the run of one matrix job. */
 export const GATE_JOB_MAX_DURATION_SEC = 3600;
 
@@ -101,3 +103,45 @@ export const SandboxImageInput = Schema.Struct({
   executorLabels: Schema.Array(Schema.String),
 });
 export type SandboxImageInput = typeof SandboxImageInput.Type;
+
+const ScanSha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/));
+
+/**
+ * The commit a scan's checkout starts from and the place its range starts: the repository, the head commit and its ref,
+ * and the execution's `deadline_at`. A scan run's input holds no command, scanner, flag or skip field (FD-GATE-084), so
+ * neither a manifest nor a dispatch changes what the scan runs or whether it runs.
+ */
+const ScanCommitFields = {
+  /** The URL `git fetch` reads the commit from. */
+  repo: Schema.NonEmptyString,
+  sha: ScanSha,
+  ref: Schema.String,
+  /** `<owner>/<repo>`. */
+  scope: Schema.optionalKey(Schema.String),
+  /** The execution's `deadline_at`, epoch milliseconds. */
+  deadlineAt: Schema.optionalKey(Schema.Number),
+};
+
+/**
+ * Where a `security-gate` scan range starts (specs/runs/gate.md § Security gate, step 2): the merge base of the head
+ * and the target branch for a pull request, `merge_group.base_sha` for a merge group.
+ */
+export const SecurityGateBase = Schema.Union([
+  Schema.TaggedStruct("TargetBranch", { branch: Schema.NonEmptyString }),
+  Schema.TaggedStruct("MergeGroup", { baseSha: ScanSha }),
+]);
+export type SecurityGateBase = typeof SecurityGateBase.Type;
+
+/** `security-gate`'s input: the head commit and where its scan range starts. */
+export const SecurityGateInput = Schema.Struct({
+  ...ScanCommitFields,
+  base: SecurityGateBase,
+});
+export type SecurityGateInput = typeof SecurityGateInput.Type;
+
+/**
+ * `security-rescan`'s input: the dispatched commit alone. Its scan range starts at the merge base of that commit and
+ * the default branch head, which the checkout reads from the remote, so no input moves it (FD-GATE-112).
+ */
+export const SecurityRescanInput = Schema.Struct(ScanCommitFields);
+export type SecurityRescanInput = typeof SecurityRescanInput.Type;

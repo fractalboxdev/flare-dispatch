@@ -23,6 +23,9 @@ import {
   requestPlacement,
   SandboxImageEntrySchema,
   sandboxImageDecoder,
+  SecurityGateEntrySchema,
+  securityGateDecoder,
+  securityRescanDecoder,
   WorkerDeployEntrySchema,
   workerDeployDecoder,
   WorkerDeployInput,
@@ -57,6 +60,10 @@ interface ManifestRecipe {
   readonly decoder: (params: unknown, view: EntryView) => Option.Option<RequestDecoder>;
   readonly requiredCheck?: IntakeRun["requiredCheck"];
   readonly pullNumber?: IntakeRun["pullNumber"];
+  /** The run starts from a dispatch alone. */
+  readonly dispatchOnly?: true;
+  /** The run reports under `flare-dispatch/<run>` alone, so its manifest entry names no label. */
+  readonly labelless?: true;
 }
 
 const recipe = <A>(
@@ -153,6 +160,10 @@ const MANIFEST_RECIPES: Readonly<Record<string, ManifestRecipe>> = {
   ),
   deploySmoke: gateRecipe(DeploySmokeEntrySchema, (p) => deploymentStatusDecoder(p)),
   sandboxImage: gateRecipe(SandboxImageEntrySchema, (p) => sandboxImageDecoder(p)),
+  securityGate: {
+    ...gateRecipe(SecurityGateEntrySchema, () => securityGateDecoder()),
+    labelless: true,
+  },
   "pr-review": {
     ...recipe(PrReviewParams, prReviewDecoder),
     requiredCheck: prReviewRequiredCheck,
@@ -161,10 +172,25 @@ const MANIFEST_RECIPES: Readonly<Record<string, ManifestRecipe>> = {
   "improve-pr": recipe(ImprovePrParams, improvePrDecoder),
 };
 
-const manifestRecipeOf = (entry: CatalogEntry): ManifestRecipe | undefined =>
-  entry.manifestKey !== null && Object.hasOwn(MANIFEST_RECIPES, entry.manifestKey)
+/**
+ * The runs that share a manifest key with another but answer other triggers: `security-rescan` reads the
+ * `securityGate` entry as `security-gate` does, and starts from a dispatch alone under the check name
+ * `flare-dispatch/security-rescan` (FD-GATE-111).
+ */
+const RUN_RECIPES: Readonly<Record<string, ManifestRecipe>> = {
+  "security-rescan": {
+    ...gateRecipe(SecurityGateEntrySchema, () => securityRescanDecoder()),
+    dispatchOnly: true,
+    labelless: true,
+  },
+};
+
+const manifestRecipeOf = (entry: CatalogEntry): ManifestRecipe | undefined => {
+  if (Object.hasOwn(RUN_RECIPES, entry.spec.name)) return RUN_RECIPES[entry.spec.name];
+  return entry.manifestKey !== null && Object.hasOwn(MANIFEST_RECIPES, entry.manifestKey)
     ? MANIFEST_RECIPES[entry.manifestKey]
     : undefined;
+};
 
 /** A run's request decoder: its manifest key's decoder, bound to the entry's parameters. */
 export const requestDecoderOf =
@@ -219,6 +245,8 @@ export const catalogRuns =
         placement: (inputs) => requestPlacement(entry.spec, inputs),
         ...serialKeyOf(entry),
         ...requiredCheckOf(entry),
+        ...(manifestRecipeOf(entry)?.dispatchOnly === true ? { dispatchOnly: true } : {}),
+        ...(manifestRecipeOf(entry)?.labelless === true ? { labelless: true } : {}),
       })),
       Match.orElse(() => undefined),
     );

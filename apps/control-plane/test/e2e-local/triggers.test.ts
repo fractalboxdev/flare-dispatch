@@ -114,3 +114,78 @@ describe("triggers reaching the Worker", () => {
       .toEqual([{ at }]);
   });
 });
+
+describe("security-gate on a pull request the other gates skip", () => {
+  let scanned: Stack;
+
+  beforeAll(async () => {
+    scanned = await startStack({
+      manifest: {
+        version: 1,
+        runs: [
+          { recipe: "security-gate", triggers: ["pull_request", "merge_group"], params: {} },
+          {
+            recipe: "check",
+            triggers: ["pull_request"],
+            params: { steps: [{ label: "test", command: "pnpm test", timeoutSec: 600 }] },
+          },
+        ],
+      },
+    });
+  });
+
+  afterAll(async () => {
+    await scanned?.close();
+  });
+
+  const recorded = async (ids: readonly string[]) => {
+    const db = await scanned.mf.getD1Database("DB");
+    const rows = (
+      await db
+        .prepare(
+          `select execution_id, trigger, run, sha, inputs_json from intake_records
+           where execution_id in (${ids.map(() => "?").join(", ")}) order by run`,
+        )
+        .bind(...ids)
+        .all<{ execution_id: string; trigger: string; run: string; sha: string; inputs_json: string }>()
+    ).results;
+    return rows.map((r) => ({ ...r, inputs: JSON.parse(r.inputs_json) as Record<string, unknown> }));
+  };
+
+  it("[FD-GATE-085] the Worker admits security-gate for a draft pull request from dependabot[bot], with no skip fact in its input", async () => {
+    const delivery = scanned.github.delivery(
+      "pull_request",
+      "pull_request.opened.json",
+      WEBHOOK_SECRET,
+      (payload) => {
+        const pr = payload["pull_request"] as Record<string, unknown>;
+        return {
+          ...payload,
+          pull_request: { ...pr, draft: true, user: { login: "dependabot[bot]", id: 49699333, type: "Bot" } },
+          sender: { login: "dependabot[bot]", id: 49699333, type: "Bot" },
+        };
+      },
+    );
+    const r = await fetch(`${scanned.url}/v1/webhooks/github`, {
+      method: "POST",
+      headers: delivery.headers,
+      body: delivery.body,
+    });
+    expect(r.status).toBe(202);
+    const { executions } = (await r.json()) as { executions: string[] };
+    const rows = await recorded(executions);
+    const gate = rows.find((row) => row.run === "security-gate");
+    expect(gate).toMatchObject({ trigger: "webhook", sha: HEAD });
+    expect(gate!.inputs).toMatchObject({
+      repo: `https://github.com/${REPOSITORY}.git`,
+      sha: HEAD,
+      ref: "refs/pull/7/head",
+      base: { _tag: "TargetBranch", branch: "main" },
+    });
+    expect(gate!.inputs).not.toHaveProperty("pullRequest");
+    expect(gate!.inputs).not.toHaveProperty("skipAuthors");
+    // `check` answers the same delivery with the draft state and author its body skips on.
+    const check = rows.find((row) => row.run === "check");
+    expect(check?.inputs).toMatchObject({ pullRequest: { draft: true, author: "dependabot[bot]" } });
+  });
+});
