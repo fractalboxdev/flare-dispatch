@@ -21,6 +21,8 @@ export {
   requestPlacement,
   sandboxImagePlacement,
   sandboxImageSpec,
+  securityGateSpec,
+  securityRescanSpec,
   validateReadOnlyScan,
   workerDeploySpec,
   type CatalogEntry,

@@ -109,6 +109,9 @@ export const validateManifest = (text: string, size: number, catalog: RunCatalog
       errors.push(`runs[${i}].recipe: no recipe named ${entry.recipe}`);
       return;
     }
+    // A dispatch-only run reports under `flare-dispatch/<run>` alone, so its entry names no label (FD-GATE-111).
+    if (run.dispatchOnly === true && entry.label !== undefined)
+      errors.push(`runs[${i}].label: ${entry.recipe} takes no label`);
     const identity = JSON.stringify([run.name, entry.label ?? null]);
     if (seen.has(identity))
       errors.push(

@@ -27,16 +27,21 @@ export interface LeaseOf {
 /**
  * The `cache_namespaces` and `upload_grant` of the execution's lease at an epoch, expiring at the execution's
  * `deadline_at` as admission wrote it; an unknown kind reads as `device`. A `confidential-compute` repository's lease
- * names no namespace and carries no compile-cache token (FD-CACHE-008).
+ * names no namespace and carries no compile-cache token (FD-CACHE-008), and neither does the lease of a run whose job
+ * sandbox is sealed: it reaches no host and holds no tenant-scope secret (FD-GATE-110).
  */
 export const leaseCacheAt = (
   env: Pick<CacheEnv, "PUBLIC_ORIGIN" | "COMPILE_CACHE_SECRET"> & ConfidentialityEnv,
   record: IntakeRecord,
   lease: LeaseOf,
   deadlineAt: number,
+  sealed = false,
 ) =>
   leaseCacheFields(
-    { ...cacheExecutionOf(record), confidential: confidentialCompute(env, record.repo) },
+    {
+      ...cacheExecutionOf(record),
+      confidential: sealed || confidentialCompute(env, record.repo),
+    },
     { epoch: lease.epoch, executorKind: lease.kind ?? "device", deadlineAt },
     { publicOrigin: env.PUBLIC_ORIGIN, tokenSecret: env.COMPILE_CACHE_SECRET },
   );

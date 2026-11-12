@@ -57,16 +57,17 @@ const MANIFEST = {
   ],
 };
 
-const DEV_REPOSITORY = {
+/** The captured repository the Worker reads without an App, carrying `manifest` as its repo manifest. */
+const devRepository = (manifest: unknown) => ({
   repository: REPOSITORY,
   installation: 41000001,
   default_branch: "main",
   head: HEAD,
   confidentiality: "non-confidential",
   files: {
-    ".github/flare-dispatch.json": Buffer.from(JSON.stringify(MANIFEST)).toString("base64"),
+    ".github/flare-dispatch.json": Buffer.from(JSON.stringify(manifest)).toString("base64"),
   },
-};
+});
 
 /** The overlay the stack deploys with: the placeholder values, with the stack's own Access team, plane and App id. */
 const overlayFor = (team: AccessTeam, appId: string) =>
@@ -225,6 +226,8 @@ export interface StackOptions {
   readonly publicOrigin?: boolean;
   /** Worker secrets beyond the ones every stack sets, such as `PROVENANCE_KEY` and `LOG_KEY`. */
   readonly secrets?: Readonly<Record<string, string>>;
+  /** The captured repository's repo manifest, where the stack has no App; `check` alone by default. */
+  readonly manifest?: unknown;
 }
 
 /** An App key pair, as the operator's `GITHUB_APP_PRIVATE_KEY` secret holds the private half. */
@@ -271,7 +274,7 @@ export const startStack = async (options: StackOptions = {}): Promise<Stack> => 
       // What `wrangler dev` for local work overrides, and the Worker secrets `fd deploy` would set.
       DEPLOYMENT: "development",
       ...(key === undefined
-        ? { FD_DEV_REPOSITORY: JSON.stringify(DEV_REPOSITORY) }
+        ? { FD_DEV_REPOSITORY: JSON.stringify(devRepository(options.manifest ?? MANIFEST)) }
         : { GITHUB_APP_PRIVATE_KEY: key.privateKeyPem }),
       WEBHOOK_SECRET,
       CACHE_TOKEN_SECRET: "e2e-cache-token-secret",

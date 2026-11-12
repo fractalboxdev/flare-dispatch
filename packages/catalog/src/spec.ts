@@ -22,12 +22,16 @@ import {
   OffloadTestInput,
   OxlintInput,
   SandboxImageInput,
+  SecurityGateInput,
+  SecurityRescanInput,
   WorkerDeployInput,
   DEPLOY_SMOKE_MAX_DURATION_SEC,
   GATE_JOB_MAX_DURATION_SEC,
   OFFLOAD_TEST_MAX_DURATION_SEC,
   OXLINT_MAX_DURATION_SEC,
   SANDBOX_IMAGE_MAX_DURATION_SEC,
+  SECURITY_GATE_MAX_DURATION_SEC,
+  SECURITY_RESCAN_MAX_DURATION_SEC,
   WORKER_DEPLOY_MAX_DURATION_SEC,
 } from "./inputs.ts";
 
@@ -140,6 +144,12 @@ export interface CatalogEntry {
    * (MAMEKO-ENG-071). Each run registers one body, at version 1.
    */
   readonly workflowVersion: number;
+  /**
+   * The run's job sandbox reaches no host and holds no tenant-scope secret (FD-GATE-110): the run declares no grant in
+   * either egress phase, so the egress proxy denies every request, and its lease names no cache namespace and carries
+   * no compile-cache endpoint or token.
+   */
+  readonly sealedSandbox?: boolean;
 }
 
 /** What the registry validator reads of one run declaration to hold a read-only scan run to its definition. */
@@ -298,6 +308,55 @@ export const sandboxImageSpec = gate("sandbox-image", {
   },
 });
 
+/** The scan runs' capabilities: a workspace and its subprocesses, and the intent that carries the check summary. */
+const SCAN: readonly Capability[] = ["Workspace", "Exec", "Intents"];
+
+/** No grant in either phase: the egress proxy attaches nothing and allows no host (FD-GATE-110). */
+const NO_GRANTS = { setup: [], agent: [] } as const;
+
+/** `security-gate`, the required check on a pull request and a merge group (specs/runs/gate.md § Recipes). */
+export const securityGateSpec = gate("security-gate", {
+  requires: SCAN,
+  limits: {
+    maxDurationSec: SECURITY_GATE_MAX_DURATION_SEC,
+    qosClass: "required",
+    qosCeiling: "required",
+  },
+  grants: NO_GRANTS,
+  intentKinds: ["check.summary"],
+});
+
+/** `security-rescan`, a dispatched rescan of one commit and the catalogue's read-only scan run (§ Terms). */
+export const securityRescanSpec = gate("security-rescan", {
+  requires: SCAN,
+  limits: {
+    maxDurationSec: SECURITY_RESCAN_MAX_DURATION_SEC,
+    qosClass: "batch",
+    qosCeiling: "batch",
+  },
+  grants: NO_GRANTS,
+  intentKinds: ["check.summary"],
+  readOnlyScan: true,
+});
+
+/** The scan runs: cloud-only (FD-PROF-066), with no grant and no cache in the lease (FD-GATE-110). */
+const scanEntry = (
+  spec: RunSpecFields,
+  input: Schema.Decoder<unknown>,
+  defaultClass: string,
+): CatalogEntry => ({
+  spec,
+  input,
+  defaultClass,
+  manifestKey: "securityGate",
+  executors: ["cloud"],
+  containerRateUsdPerHour: null,
+  appCapabilities: [],
+  hostExecution: false,
+  workflowVersion: 1,
+  sealedSandbox: true,
+});
+
 const gateEntries: Readonly<Record<string, CatalogEntry>> = {
   check: {
     spec: checkSpec,
@@ -376,6 +435,8 @@ const gateEntries: Readonly<Record<string, CatalogEntry>> = {
     hostExecution: false,
     workflowVersion: 1,
   },
+  "security-gate": scanEntry(securityGateSpec, SecurityGateInput, "required"),
+  "security-rescan": scanEntry(securityRescanSpec, SecurityRescanInput, "batch"),
 };
 
 /** The input schema of each of the eight agentic recipes (specs/runs/agentic.md § Recipes, FD-AGT-001). */

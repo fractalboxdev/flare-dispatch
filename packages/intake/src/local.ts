@@ -41,7 +41,8 @@ export const submitLocal = (
   Effect.gen(function* () {
     const config = yield* IntakeConfig;
     const run = config.catalog(runName);
-    if (run === undefined) return rejected as LocalSubmitAnswer;
+    // A dispatch-only run starts from a dispatch, never from a local submission (FD-GATE-111).
+    if (run === undefined || run.dispatchOnly === true) return rejected as LocalSubmitAnswer;
     const local = yield* Schema.decodeUnknownEffect(LocalSubmitBody)(body);
     const inputs = yield* Schema.decodeUnknownEffect(run.input)(local.inputs);
     const admitted = yield* submit(

@@ -425,14 +425,19 @@ describe("the drift stage over the overlay's scoped and containment identities",
       ]),
       ["dispatch.scoped.0.runs: run worker-deploy is not a read-only scan run"],
     );
-    // The committed catalogue holds no read-only scan run, so a scoped entry naming one it lacks fails.
+    // The committed catalogue's read-only scan run is security-rescan; a scoped entry naming a run it lacks fails.
     const w = world();
-    const report = await deploy(w, identityOverlay([entry("scanner@example.com")]));
+    const report = await deploy(
+      w,
+      identityOverlay([entry("scanner@example.com", { runs: ["security-sweep"] })]),
+    );
     expect(report.ok).toBe(false);
     expect(report.stages.at(-1)?.detail).toContain(
-      "dispatch.scoped.0.runs: run security-rescan is not a read-only scan run",
+      "dispatch.scoped.0.runs: run security-sweep is not a read-only scan run",
     );
     expect(w.calls.filter(isWrite)).toEqual([]);
+    const committed = await deploy(world(), identityOverlay([entry("scanner@example.com")]));
+    expect(committed.ok).toBe(true);
   });
 
   it("[FD-OPS-092] fd deploy fails before any write when a dispatch.scoped entry's classCeiling is neither interactive nor batch, naming the identity", async () => {

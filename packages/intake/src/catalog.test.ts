@@ -1,11 +1,24 @@
 // The catalogue's request decoders as intake selects them by manifest key: a webhook read as the catalogue's
 // `WebhookDelivery`, each run's parameters bound from its manifest entry.
 import { Outcome, pullRequestSkip, type GateContext } from "@fractalboxdev/flare-dispatch-catalog";
-import { Option } from "effect";
+import { FollowOnSubmitter } from "@fractalboxdev/flare-dispatch-github";
+import { Effect, Option } from "effect";
 import { describe, expect, it } from "vitest";
 import { catalogRuns } from "./catalog.ts";
 import type { DispatchEvent } from "./event.ts";
-import type { EntryView } from "./runs.ts";
+import { followOnSubmitterLayer } from "./follow-on.ts";
+import {
+  admit,
+  authenticated,
+  CATALOG,
+  harness,
+  manifest,
+  refusal,
+  repoWithManifest,
+} from "./harness.test-support.ts";
+import { submitLocal } from "./local.ts";
+import { validateManifest } from "./manifest.ts";
+import { checkName, type EntryView } from "./runs.ts";
 
 const REPO = "acme/app";
 const HEAD = "b".repeat(40);
@@ -208,5 +221,161 @@ describe("offload-test on a release tag push (FD-GATE-054)", () => {
     };
     expect(input.sha).toBe(HEAD);
     expect(input.parentDedupKey).toBe(`offload-test:${REPO}:${HEAD}`);
+  });
+});
+
+describe("the security gate recipes as intake reads them", () => {
+  const production = catalogRuns("production");
+  const SCANS = ["security-gate", "security-rescan"] as const;
+  const mergeGroup = webhook("merge_group", {
+    action: "checks_requested",
+    repository,
+    merge_group: {
+      head_sha: HEAD,
+      head_ref: "refs/heads/gh-readonly-queue/main/pr-12-bbbb",
+      base_ref: "refs/heads/main",
+      base_sha: BASE,
+    },
+  } as { action: string });
+
+  it("[FD-GATE-083] serves security-gate and security-rescan, whose manifest entries take the securityGate parameters", () => {
+    for (const run of SCANS) expect(production(run)?.name).toBe(run);
+    const valid = validateManifest(
+      manifest([
+        { recipe: "security-gate", triggers: ["pull_request", "merge_group"], params: {} },
+        { recipe: "security-rescan", triggers: ["dispatch"] },
+      ]),
+      200,
+      production,
+    );
+    expect(valid._tag).toBe("Valid");
+  });
+
+  it("[FD-GATE-084] refuses a manifest whose securityGate entry names a command, scanner, flag or skip", () => {
+    for (const run of SCANS)
+      for (const params of [
+        { command: "gitleaks detect" },
+        { scanners: { gitleaks: false } },
+        { flags: ["--no-git"] },
+        { skipAuthors: ["dependabot[bot]"] },
+        { skipDraft: true },
+      ]) {
+        const read = validateManifest(
+          manifest([{ recipe: run, triggers: ["pull_request", "dispatch"], params }]),
+          200,
+          production,
+        );
+        expect(read._tag).toBe("Invalid");
+      }
+  });
+
+  it("[FD-GATE-085] admits a draft pull request from dependabot[bot] and a merge group into a scan input with no skip fact", () => {
+    for (const action of ["opened", "synchronize", "reopened", "ready_for_review"])
+      for (const facts of [{ draft: true, author: "dependabot[bot]" }, { draft: false }]) {
+        const input = Option.getOrThrow(
+          production("security-gate")!.trigger(
+            pullRequest({ ...facts, action }),
+            { label: null, params: {} },
+            context,
+          ),
+        );
+        expect(input).toEqual({
+          repo: `https://github.com/${REPO}.git`,
+          sha: HEAD,
+          ref: "refs/pull/12/head",
+          scope: REPO,
+          base: { _tag: "TargetBranch", branch: "main" },
+        });
+      }
+    // The manifest's skipAuthors does not reach the scan input either.
+    const listed = production("security-gate")!.trigger(
+      pullRequest({ author: "renovate[bot]" }),
+      { label: null, params: {}, skipAuthors: ["renovate[bot]"] },
+      context,
+    );
+    expect(Option.getOrThrow(listed)).not.toHaveProperty("skipAuthors");
+    expect(
+      Option.getOrThrow(
+        production("security-gate")!.trigger(mergeGroup, { label: null, params: {} }, context),
+      ),
+    ).toMatchObject({ sha: HEAD, base: { _tag: "MergeGroup", baseSha: BASE } });
+  });
+
+  it("[FD-GATE-110] gives both scan runs no grant in either egress phase", () => {
+    for (const run of SCANS) expect(production(run)!.grants).toEqual({ setup: [], agent: [] });
+  });
+
+  it("[FD-GATE-111] answers no webhook for security-rescan and refuses a label on its manifest entry", () => {
+    const rescan = production("security-rescan")!;
+    expect(rescan.dispatchOnly).toBe(true);
+    expect(production("security-gate")!.dispatchOnly).toBeUndefined();
+    for (const event of [pullRequest(), mergeGroup, push("refs/heads/main")])
+      expect(Option.isNone(rescan.trigger(event, { label: null, params: {} }, context))).toBe(true);
+    const labelled = validateManifest(
+      manifest([{ recipe: "security-rescan", label: "nightly", triggers: ["dispatch"] }]),
+      200,
+      production,
+    );
+    expect(labelled).toEqual({
+      _tag: "Invalid",
+      errors: ["runs[0].label: security-rescan takes no label"],
+    });
+    expect(checkName(rescan.name, null)).toBe("flare-dispatch/security-rescan");
+  });
+
+  it("[FD-GATE-111] starts security-rescan from a dispatch under flare-dispatch/security-rescan, and from no follow-on or local submission", async () => {
+    const h = await harness({
+      repos: {
+        [REPO]: repoWithManifest(
+          manifest([
+            { recipe: "check", label: "ci", triggers: ["pull_request"], params: { steps: ["test"] } },
+            { recipe: "security-rescan", triggers: ["dispatch"] },
+          ]),
+        ),
+      },
+      settings: {
+        catalog: (name) => (name === "security-rescan" ? production(name) : CATALOG[name]),
+      },
+    });
+    const inputs = { repo: `https://github.com/${REPO}.git`, sha: HEAD, ref: "refs/heads/main" };
+    const admitted = await admit(
+      h,
+      authenticated({ run: "security-rescan", label: null, sha: HEAD, inputs }),
+    );
+    expect(admitted.duplicate).toBe(false);
+    expect(h.records()).toMatchObject([{ run: "security-rescan", trigger: "dispatch", label: null }]);
+    expect(h.recorded.resolved.map((r) => r.checkName)).toEqual(["flare-dispatch/security-rescan"]);
+    // A dispatch naming a label matches no manifest entry.
+    expect(
+      await refusal(h, authenticated({ run: "security-rescan", label: "x", sha: HEAD, inputs })),
+    ).toMatchObject({ status: 404, code: "run_not_found" });
+
+    const followOn = await h.run(
+      FollowOnSubmitter.use((s) =>
+        s.submit({
+          executionId: admitted.executionId,
+          intentKey: "run:rescan:0",
+          run: "security-rescan",
+          label: null,
+          inputs,
+        }),
+      ).pipe(Effect.provide(followOnSubmitterLayer)),
+    );
+    expect(followOn).toEqual({
+      _tag: "refused",
+      reason: "follow-on: security-rescan starts only from a dispatch",
+    });
+    const local = await h.run(
+      submitLocal({ leaseId: "L1", epoch: 1 }, "security-rescan", {
+        repository: REPO,
+        baseCommit: HEAD,
+        ref: "refs/heads/main",
+        treeHash: "tree-1",
+        inputsDigest: "inputs-1",
+        inputs,
+      }),
+    );
+    expect(local).toEqual({ _tag: "rejected" });
+    expect(h.records()).toHaveLength(1);
   });
 });

@@ -148,6 +148,14 @@ export const SandboxImageEntrySchema = Schema.Struct({
 });
 export type SandboxImageEntry = typeof SandboxImageEntrySchema.Type;
 
+/**
+ * `securityGate`, which enrolls a repository in `security-gate` and `security-rescan` (FD-GATE-083). The entry holds no
+ * field: the scan bundle the deployment pins fixes the scanners, their flags and their suppression handling, so a
+ * repository can name no command, scanner, flag or skip (FD-GATE-084). Any key fails the decode.
+ */
+export const SecurityGateEntrySchema = Schema.Record(Schema.String, Schema.Never);
+export type SecurityGateEntry = typeof SecurityGateEntrySchema.Type;
+
 /** Every gate recipe's manifest key (specs/runs/gate.md § Recipes). */
 export const GateManifest = Schema.Struct({
   check: Schema.optionalKey(Schema.Array(CheckEntrySchema)),
@@ -156,6 +164,7 @@ export const GateManifest = Schema.Struct({
   workerDeploy: Schema.optionalKey(WorkerDeployEntrySchema),
   deploySmoke: Schema.optionalKey(DeploySmokeEntrySchema),
   sandboxImage: Schema.optionalKey(SandboxImageEntrySchema),
+  securityGate: Schema.optionalKey(SecurityGateEntrySchema),
   warm: Schema.optionalKey(MatrixJobSchema),
 });
 export type GateManifest = typeof GateManifest.Type;

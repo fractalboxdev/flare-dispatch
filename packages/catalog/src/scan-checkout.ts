@@ -17,6 +17,11 @@ export type ScanBase = Data.TaggedEnum<{
   TargetBranch: { readonly branch: string };
   /** A merge group: `merge_group.base_sha`. */
   MergeGroup: { readonly baseSha: string };
+  /**
+   * A rescan: the merge base of the head and the default branch head, which the remote's `HEAD` names, so the base
+   * follows the repository's default branch rather than a branch the request names (FD-GATE-112).
+   */
+  DefaultBranch: {};
 }>;
 export const ScanBase = Data.taggedEnum<ScanBase>();
 
@@ -198,6 +203,7 @@ export const prepareScanCheckout = (
     const baseSpec = ScanBase.$match(base, {
       TargetBranch: ({ branch }) => `+refs/heads/${branch}:${TARGET_REF}`,
       MergeGroup: ({ baseSha }) => `+${baseSha}:${TARGET_REF}`,
+      DefaultBranch: () => `+HEAD:${TARGET_REF}`,
     });
     yield* run("init", `git init -q . && git remote add origin ${shellQuote(ctx.repo)}`);
     yield* run(
@@ -212,6 +218,7 @@ export const prepareScanCheckout = (
     const baseCommit = yield* ScanBase.$match(base, {
       TargetBranch: () => text("merge-base", `git merge-base ${HEAD_REF} ${TARGET_REF}`),
       MergeGroup: ({ baseSha }) => text("base", `git rev-parse --verify ${baseSha}^{commit}`),
+      DefaultBranch: () => text("merge-base", `git merge-base ${HEAD_REF} ${TARGET_REF}`),
     });
     if (!COMMIT.test(baseCommit))
       return yield* new CheckoutFailed({ detail: `base: ${baseCommit}` });

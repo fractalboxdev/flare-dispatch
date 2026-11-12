@@ -63,12 +63,14 @@ const first = async <T>(db: D1Like, sql: string, ...binds: unknown[]): Promise<T
 
 /**
  * A lease's `cache_namespaces` and `upload_grant`, from the won placement's epoch and executor kind; no URL outlives the
- * execution's `deadline_at` as admission wrote it.
+ * execution's `deadline_at` as admission wrote it. A sealed job sandbox's lease names no namespace and carries no
+ * compile-cache endpoint or token (FD-GATE-110).
  */
 export const leaseCache = async (
   env: ControlPlaneEnv & CacheEnv,
   record: IntakeRecord,
   deadlineAt: number,
+  sealed = false,
 ) => {
   const placement = await first<LeaseOf>(
     env.DB,
@@ -76,7 +78,7 @@ export const leaseCache = async (
      where p.execution_id = ?`,
     record.executionId,
   );
-  return leaseCacheAt(env, record, placement ?? { epoch: 1, kind: null }, deadlineAt);
+  return leaseCacheAt(env, record, placement ?? { epoch: 1, kind: null }, deadlineAt, sealed);
 };
 
 /** A binding this deploy lacks answers `unavailable` in the error model's shape (FD-IFC-009). */
