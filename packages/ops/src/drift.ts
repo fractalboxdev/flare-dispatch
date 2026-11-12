@@ -143,6 +143,18 @@ export const deployedCronCheck = (
       ];
 };
 
+/**
+ * Whether the account's Worker holds nothing but secrets: what `wrangler secret put` leaves before the first deploy,
+ * when the operator sets the App key and the presign token the composition reads (FD-ARCH-039). Such a Worker runs no
+ * code, so it has no cron set to drift from; the first deploy writes the template's.
+ */
+export const holdsOnlySecrets = (deployed: DeployedSettings): boolean =>
+  deployed.bindings.length === 0 &&
+  Object.keys(deployed.vars).length === 0 &&
+  deployed.crons.length === 0 &&
+  deployed.routes.length === 0 &&
+  deployed.containers.length === 0;
+
 /** Every binding name a configuration declares. */
 export const bindingsOf = (c: WorkerConfig): ReadonlySet<string> => {
   const names = new Set<string>();
