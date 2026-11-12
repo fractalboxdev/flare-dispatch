@@ -7,6 +7,7 @@ import {
   PrReviewInput,
   SelfHealPrInput,
   SpecDriftInput,
+  TriageIssuesInput,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import { buildProfile, type Deployment } from "@fractalboxdev/flare-dispatch-profile";
 import type { Capability } from "@fractalboxdev/mameko-run";
@@ -277,6 +278,7 @@ const AGENTIC_INPUTS: Readonly<Record<string, Schema.Decoder<unknown>>> = {
   "self-heal-pr": SelfHealPrInput,
   "spec-drift-pr": SpecDriftInput,
   "ci-triage-pr": CiTriageInput,
+  "triage-issues": TriageIssuesInput,
 };
 
 /**
