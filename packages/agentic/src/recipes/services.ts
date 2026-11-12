@@ -223,3 +223,9 @@ export class SuppressionLedger extends Context.Service<
     readonly lookup: (key: string) => Effect.Effect<SuppressionEntry | null, SuppressionReadFailed>;
   }
 >()("@fractalboxdev/flare-dispatch-agentic/SuppressionLedger") {}
+
+/** The execution a run body serves: its id as the control plane assigned it. */
+export class ExecutionIdentity extends Context.Service<
+  ExecutionIdentity,
+  { readonly executionId: string }
+>()("@fractalboxdev/flare-dispatch-agentic/ExecutionIdentity") {}

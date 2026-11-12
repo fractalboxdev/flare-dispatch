@@ -6,6 +6,7 @@ export {
   ciTriageRun,
   improvePrRun,
   prReviewRun,
+  releaseNotesRun,
   selfHealPrRun,
   specDriftRun,
   triageIssuesRun,

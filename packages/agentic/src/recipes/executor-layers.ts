@@ -22,6 +22,7 @@ import {
   Artifacts,
   Checkout,
   EditLoop,
+  ExecutionIdentity,
   modelGatewayClientLayer,
   type EditLoopResult,
   ModelClient,
@@ -238,6 +239,8 @@ export const runnerIntentsLayer: Layer.Layer<RecipeIntents, never, Intents> = La
 
 /** What the cloud executor knows of one execution's job sandbox. */
 export interface CloudAgenticConfig {
+  /** The execution the job sandbox serves, as the lease names it. */
+  readonly executionId: string;
   /** The checkout the workspace holds, at `baseCommit`. */
   readonly checkout: string;
   readonly baseCommit: string;
@@ -274,7 +277,8 @@ export type CloudAgenticServices =
   | ExecutionsRead
   | IssuesRead
   | PullRequestsRead
-  | SuppressionLedger;
+  | SuppressionLedger
+  | ExecutionIdentity;
 
 /**
  * The agentic recipes' services on the cloud executor. The model client sends no credential and reaches the model
@@ -283,6 +287,7 @@ export type CloudAgenticServices =
  * (FD-AGT-059). `ExecutionsRead` reads the control plane's executions and log routes, so the job holds no binding of the
  * executions table or the log store (FD-AGT-071). `IssuesRead` reads GitHub's issue list and `PullRequestsRead` its
  * open pull requests through the egress proxy. The suppression ledger is the read the runner entry supplies.
+ * `ExecutionIdentity` names the execution the lease serves.
  */
 export const cloudAgenticLayers = (
   config: CloudAgenticConfig,
@@ -310,5 +315,6 @@ export const cloudAgenticLayers = (
       fetch: config.fetch,
     }),
     config.suppressionLedger,
+    Layer.succeed(ExecutionIdentity, { executionId: config.executionId }),
   );
 };

@@ -4,6 +4,7 @@ import { AGENTIC_CATALOG, agenticClassRanks, type AgenticSpec } from "./catalog.
 import { CiTriageInput, runCiTriage } from "./ci-triage-pr.ts";
 import { ImprovePrInput, runImprovePr } from "./improve-pr.ts";
 import { PrReviewInput, runPrReview } from "./pr-review.ts";
+import { ReleaseNotesInput, runReleaseNotes } from "./release-notes.ts";
 import { runSelfHealPr, SelfHealPrInput } from "./self-heal-pr.ts";
 import { runSpecDrift, SpecDriftInput } from "./spec-drift-pr.ts";
 import { runTriageIssues, TriageIssuesInput } from "./triage-issues.ts";
@@ -66,6 +67,12 @@ export const triagePrsRun = defineRun(
   catalogue,
 );
 
+export const releaseNotesRun = defineRun(
+  { ...asRunSpec(specOf("release-notes")), input: ReleaseNotesInput },
+  runReleaseNotes,
+  catalogue,
+);
+
 /** The agentic runs whose bodies ship at this phase, in catalogue order. */
 export const agenticRuns = [
   prReviewRun,
@@ -75,4 +82,5 @@ export const agenticRuns = [
   triageIssuesRun,
   triagePrsRun,
   ciTriageRun,
+  releaseNotesRun,
 ] as const;
