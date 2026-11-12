@@ -30,8 +30,15 @@ import {
   type RecordedTrigger,
 } from "./event.ts";
 import { profileRequestOf } from "./layer.ts";
+import { heldCheckOf, HeldCheckReporter } from "./ports.ts";
 import { checkName, type IntakeRun } from "./runs.ts";
-import { IntakeStore, ShedRecorder, type IntakeRecord, type StoreUnavailable } from "./store.ts";
+import {
+  HELD_STATUS,
+  IntakeStore,
+  ShedRecorder,
+  type IntakeRecord,
+  type StoreUnavailable,
+} from "./store.ts";
 
 export const COOLDOWN_MIN_SEC = 60;
 export const COOLDOWN_MAX_SEC = 86_400;
@@ -237,7 +244,7 @@ export const submit = (
 ): Effect.Effect<
   Admitted,
   IntakeError | StoreUnavailable,
-  IntakeConfig | Admission | ClassResolver | IntakeStore | ShedRecorder
+  IntakeConfig | Admission | ClassResolver | IntakeStore | ShedRecorder | HeldCheckReporter
 > =>
   Effect.gen(function* () {
     const config = yield* IntakeConfig;
@@ -355,15 +362,19 @@ export const submit = (
     };
 
     // Inside the run's cooldown window the request is held before admission, and the minute tick admits it once the
-    // window ends (FD-INT-057). A request whose dedup key already names an execution, held or admitted, answers it.
+    // window ends (FD-INT-057). Its check run shows `queued` for the window, under the id the execution is admitted
+    // with. A request whose dedup key already names an execution, held or admitted, answers it and posts nothing.
     if (cooldown !== null && notBefore !== null) {
       const held = yield* store.hold(record, {
         admit: admitInput,
         cooldownBucket: cooldown.bucket,
         notBefore,
       });
-      if (held._tag === "Held")
+      if (held._tag === "Held") {
+        const check = heldCheckOf(admitInput);
+        if (check !== null) yield* (yield* HeldCheckReporter).queued(check);
         return { executionId: id, className, duplicate: false, concluded: null, notBefore };
+      }
       if (key.onMismatch === "conflict" && held.requestDigest !== key.requestDigest)
         return yield* Effect.fail(
           intakeError(
@@ -373,6 +384,12 @@ export const submit = (
             held.executionId,
           ),
         );
+      // A prior delivery may have committed the hold before its outbox insert failed. Rebuild the same cp key from
+      // the authoritative held record, so redelivery repairs reporting without creating or admitting another request.
+      const known = yield* store.get(held.executionId);
+      const check = heldCheckOf(admitInput);
+      if (known?.status === HELD_STATUS && check !== null)
+        yield* (yield* HeldCheckReporter).queued({ ...check, executionId: held.executionId });
       return {
         executionId: held.executionId,
         className,
@@ -455,16 +472,18 @@ export interface ReleaseReport {
 
 /**
  * Admits every held request whose cooldown window has ended (FD-INT-057). An admitted request arms its bucket's window
- * from now; a request admission answers as a duplicate of another execution, or as a conflict, loses its record, as at
- * submit. A duplicate of the request's own id is a release whose admission committed before an earlier pass ended: it
- * is admitted when that admission wrote a placement row, and concluded, arming no window, when it did not.
+ * from now, and admission's `check.open` adopts the queued check run the hold posted; a request admission answers as a
+ * duplicate of another execution, or as a conflict, loses its record, as at submit, and its queued check run concludes
+ * `cancelled`. A duplicate of the request's own id is a release whose admission committed before an earlier pass ended:
+ * it is admitted when that admission wrote a placement row, and concluded, arming no window, when it did not.
  */
 export const releaseHeld = (
   limit: number = RELEASE_PER_PASS,
-): Effect.Effect<ReleaseReport, StoreUnavailable, Admission | IntakeStore> =>
+): Effect.Effect<ReleaseReport, StoreUnavailable, Admission | IntakeStore | HeldCheckReporter> =>
   Effect.gen(function* () {
     const store = yield* IntakeStore;
     const admission = yield* Admission;
+    const checks = yield* HeldCheckReporter;
     const now = yield* Clock.currentTimeMillis;
     const due = yield* store.due(now, limit);
     let admitted = 0;
@@ -485,6 +504,14 @@ export const releaseHeld = (
         unavailable++;
         continue;
       }
+      const dropped = (answeredBy: string) =>
+        Effect.gen(function* () {
+          const check = heldCheckOf(held.admit);
+          if (check !== null) yield* checks.dropped(check, answeredBy);
+          yield* store.release(id);
+          yield* store.drop(id);
+          duplicate++;
+        });
       // The placement row tells a queued execution from one admission concluded, whichever pass admitted it.
       const answered = Effect.gen(function* () {
         yield* store.release(id);
@@ -500,21 +527,9 @@ export const releaseHeld = (
         Match.tag("Queued", () => answered),
         Match.tag("Concluded", () => answered),
         Match.tag("Duplicate", ({ executionId }) =>
-          executionId === id
-            ? answered
-            : Effect.gen(function* () {
-                yield* store.release(id);
-                yield* store.drop(id);
-                duplicate++;
-              }),
+          executionId === id ? answered : dropped(executionId),
         ),
-        Match.tag("Conflict", () =>
-          Effect.gen(function* () {
-            yield* store.release(id);
-            yield* store.drop(id);
-            duplicate++;
-          }),
-        ),
+        Match.tag("Conflict", ({ executionId }) => dropped(executionId)),
         Match.exhaustive,
       );
     }

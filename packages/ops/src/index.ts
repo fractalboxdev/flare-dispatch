@@ -7,6 +7,7 @@ export * from "./decode.ts";
 export * from "./deploy.ts";
 export * from "./drift.ts";
 export * from "./install.ts";
+export * from "./kill-lines.ts";
 export * from "./link-token.ts";
 export * from "./liveness.ts";
 export * from "./operator-routes.ts";

@@ -364,6 +364,32 @@ describe("the cache, artifact and log routes", () => {
     }
   });
 
+  it("[FD-OPS-067] [FD-IFC-019] the execution page's log link opens that execution's logs with no Access identity", async () => {
+    const page = await asMember(`/executions/${EXECUTION}`);
+    expect(page.status).toBe(200);
+    const href = /<a href="([^"]+)">check<\/a>/
+      .exec(await page.text())?.[1]
+      ?.replace(/&amp;/g, "&");
+    expect(href).toBeDefined();
+    const url = new URL(href!);
+    expect(url.pathname).toBe(`/v1/executions/${EXECUTION}/logs`);
+    const token = url.searchParams.get("t")!;
+    const expiry = Number(token.split(".")[0]) - Math.floor(Date.now() / 1000);
+    expect(expiry).toBeGreaterThan(3_600 - 10);
+    expect(expiry).toBeLessThanOrEqual(3_600);
+    const opened = await get(
+      development,
+      `${url.pathname}?format=text&t=${encodeURIComponent(token)}`,
+    );
+    expect(opened.status).toBe(200);
+    expect(await opened.text()).toBe("hello");
+    const other = await get(
+      development,
+      `/v1/executions/01OTHER/logs?t=${encodeURIComponent(token)}`,
+    );
+    expect(other.status).toBe(403);
+  });
+
   it("[FD-IFC-013] answers 401 with neither identity nor link, and redirects a browser to the Access login", async () => {
     for (const path of [logsPath(), artifactPath]) {
       const r = await get(development, path);

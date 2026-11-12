@@ -207,6 +207,45 @@ describe("pr.propose", () => {
     expect(repo.pulls[0]?.title).toBe("Again");
   });
 
+  it("[FD-AGT-041] sanitizes a model-authored title and body before it opens or updates the pull request", async () => {
+    const hostile = {
+      title: "Ping @octocat <b>now</b>",
+      body: "cc @org/team <img src=x>\nSee [docs](specs/a.md)\n```\nopen",
+      draft: true,
+      labels: [],
+    };
+    const repo = fakeRepo();
+    await apply(repo, manifest({ pr: hostile }));
+    expect(repo.pulls[0]).toMatchObject({
+      title: "Ping `@octocat` now",
+      body: "cc `@org/team` \nSee `[docs](specs/a.md)`\n```\nopen\n```",
+    });
+    await apply(repo, manifest({ pr: { ...hostile, title: "Again @octocat", body: "<i>@x</i>" } }));
+    expect(repo.pulls).toHaveLength(1);
+    expect(repo.pulls[0]).toMatchObject({ title: "Again `@octocat`", body: "`@x`" });
+  });
+
+  it("passes the title and body of a run with no model call through unchanged", async () => {
+    const plain = {
+      writebackFor: (run: string) =>
+        run === "spec-drift-pr" ? { writeback, declaresModel: false } : undefined,
+      appLogin: "flare-dispatch[bot]",
+    };
+    const repo = fakeRepo();
+    const pr = {
+      title: "Bump <x>",
+      body: "See [run](https://ci.example/1)",
+      draft: true,
+      labels: [],
+    };
+    await Effect.runPromise(
+      applyPrPropose(plain)(row(manifest({ pr }))).pipe(
+        Effect.provide(Layer.merge(fakeGitLayer(repo), recordsLayer({ modelCalls: false }))),
+      ),
+    );
+    expect(repo.pulls[0]).toMatchObject({ title: pr.title, body: pr.body });
+  });
+
   it("[FD-AGT-016] [FD-AGT-018] a rejected manifest is refused with every reason before any GitHub call", async () => {
     const repo = fakeRepo();
     const bad = manifest({

@@ -1,7 +1,7 @@
 // The control plane's OIDC issuer (specs/provenance.md FD-PROV-049, FD-PROV-050): ES256 JWTs whose public keys
 // `/.well-known/jwks.json` serves. An identity provider verifies a token against the JWKS it last fetched, so a key
 // retired by rotation stays in the set for at least the longest token lifetime.
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { asBuffer, base64url, utf8 } from "./crypto.ts";
 
 export const OIDC_MAX_TTL_SEC = 3600;
@@ -9,12 +9,27 @@ export const OIDC_DEFAULT_TTL_SEC = 900;
 /** Claims the control plane sets; a run's request may set none of them. */
 export const OIDC_RESERVED_CLAIMS = ["iss", "sub", "aud", "iat", "nbf", "exp", "jti"] as const;
 
-/** The issuer's keys, as the `OIDC_SIGNING_KEYS` secret holds them. */
+/** A public ES256 JWK with its `kid`. */
+const PublicEcJwk = Schema.Struct({
+  kty: Schema.Literal("EC"),
+  crv: Schema.Literal("P-256"),
+  x: Schema.String,
+  y: Schema.String,
+  kid: Schema.NonEmptyString,
+});
+/** A private ES256 JWK with its `kid`. */
+const PrivateEcJwk = Schema.Struct({ ...PublicEcJwk.fields, d: Schema.String });
+const KeySet = Schema.Struct({
+  current: PrivateEcJwk,
+  retired: Schema.Array(Schema.Struct({ jwk: PublicEcJwk, retiredAt: Schema.Finite })),
+});
+
+/** The issuer's keys, as the `OIDC_SIGNING_JWK` secret holds them ({@link parseOidcKeys}). */
 export interface OidcKeys {
   /** The current private ES256 JWK, with its `kid`. */
-  readonly current: JsonWebKey & { readonly kid: string };
+  readonly current: typeof PrivateEcJwk.Type;
   /** Keys retired by rotation: public JWK and the epoch ms of the rotation. */
-  readonly retired: readonly { readonly jwk: JsonWebKey & { readonly kid: string }; readonly retiredAt: number }[];
+  readonly retired: readonly { readonly jwk: typeof PublicEcJwk.Type; readonly retiredAt: number }[];
 }
 
 export class OidcRefused extends Schema.TaggedError<OidcRefused>()("OidcRefused", {
@@ -22,7 +37,7 @@ export class OidcRefused extends Schema.TaggedError<OidcRefused>()("OidcRefused"
   detail: Schema.String,
 }) {}
 
-const publicOf = (jwk: JsonWebKey & { readonly kid: string }) => ({
+const publicOf = (jwk: typeof PublicEcJwk.Type) => ({
   kty: "EC",
   crv: "P-256",
   x: jwk.x,
@@ -45,10 +60,19 @@ export const jwks = (keys: OidcKeys, nowMs: number, retainSec = OIDC_MAX_TTL_SEC
   ],
 });
 
-export const handleJwks = (request: Request, keys: OidcKeys | undefined, nowMs: number): Response | null => {
-  if (new URL(request.url).pathname !== "/.well-known/jwks.json") return null;
-  if (keys === undefined) return Response.json({ error: "oidc_not_configured" }, { status: 503 });
-  return Response.json(jwks(keys, nowMs), { headers: { "cache-control": "public, max-age=300" } });
+const decodeSecret = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Union([KeySet, PrivateEcJwk])));
+
+/**
+ * The key set the `OIDC_SIGNING_JWK` secret holds: either one private ES256 JWK with its `kid`, or, after a rotation,
+ * `{ "current": <private JWK>, "retired": [{ "jwk": <public JWK>, "retiredAt": <epoch ms> }] }`. `undefined` while
+ * the secret is unset or holds no P-256 key with a `kid` (FD-IFC-051).
+ */
+export const parseOidcKeys = (secret: string | undefined): OidcKeys | undefined => {
+  if (secret === undefined || secret.trim() === "") return undefined;
+  return Option.match(decodeSecret(secret.trim()), {
+    onNone: () => undefined,
+    onSome: (keys): OidcKeys => ("current" in keys ? keys : { current: keys, retired: [] }),
+  });
 };
 
 export interface TokenRequest {

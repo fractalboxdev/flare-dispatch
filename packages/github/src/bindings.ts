@@ -7,7 +7,7 @@ import { newRow } from "@fractalboxdev/mameko-kernel";
 import { Effect, Schema } from "effect";
 import { InstallationDirectory } from "./applier.ts";
 import { GithubNetworkError } from "./client.ts";
-import type { Verdict } from "./conclusion.ts";
+import { PARENT_CLOSED, type Verdict } from "./conclusion.ts";
 
 /** No installation serves the row's repository, so it has no delivery key. */
 export class NoInstallation extends Schema.TaggedError<NoInstallation>()("NoInstallation", {
@@ -101,19 +101,15 @@ export const insertOpsIntent = (db: D1Like, intent: OpsIntent) =>
 // ---------------------------------------------------------------------------
 // Fan-out children and the neutral invariant
 
+/** The intent key of a child's conclusion. */
+export const CHILD_CONCLUDE_KEY = "cp:check:conclude";
+
 export interface ChildCheck {
   readonly executionId: string;
   /** The child's recorded outcome, or null when it has none. */
   readonly verdict: Verdict | null;
   readonly concluded: boolean;
 }
-
-/** The verdict a child concludes with when its parent reaches its outcome first (FD-GH-020). */
-export const PARENT_CLOSED: Verdict = {
-  _tag: "failure",
-  category: "infra",
-  reason: "parent closed before this part settled",
-};
 
 /**
  * The `check.conclude` intents a fan-out parent's outcome inserts: one per child check run not yet concluded, with the
@@ -124,8 +120,8 @@ export const childConclusions = (children: readonly ChildCheck[]) =>
     .filter((c) => !c.concluded)
     .map((c) => ({
       executionId: c.executionId,
-      intentKey: "cp:check:conclude",
+      intentKey: CHILD_CONCLUDE_KEY,
       verdict: c.verdict ?? PARENT_CLOSED,
     }));
 
-export { checkNeutralInvariant, neutralHolds } from "./conclusion.ts";
+export { checkNeutralInvariant, neutralHolds, PARENT_CLOSED } from "./conclusion.ts";

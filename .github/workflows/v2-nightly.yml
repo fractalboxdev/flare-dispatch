@@ -1,9 +1,9 @@
 name: v2-nightly
 
 # The nightly harnesses on the default branch's head (specs/verification.md § Harness catalog): 1,000,000 traces of
-# `stagedWriteGate` against its oracle (FD-VER-020) and 10,000 seeds per `V-SIM` scenario (FD-VER-024). A differing
-# trace or a failing seed opens a pull request that appends it to `formal/regressions.jsonl` or `test/sim/seeds.jsonl`
-# (FD-VER-021, FD-VER-024). The phase gate reads these runs' conclusions (FD-VER-027).
+# `stagedWriteGate` against its oracle (FD-VER-020), 10,000 seeds per `V-SIM` scenario (FD-VER-024) and the device
+# path of `V-E2E-LOCAL`. A differing trace or a failing seed opens a pull request that appends it to
+# `formal/regressions.jsonl` or `test/sim/seeds.jsonl` (FD-VER-021, FD-VER-024). The phase gate reads these runs' conclusions (FD-VER-027).
 on:
   schedule:
     - cron: "41 3 * * *"
@@ -71,3 +71,15 @@ jobs:
           git push origin "$branch"
           gh pr create --title "test(sim): keep failing simulation seeds" \
             --body "The nightly sim run failed these seeds; this appends them to test/sim/seeds.jsonl."
+
+  # The device path of V-E2E-LOCAL: the control plane under `wrangler dev`, the key helper and the device executor
+  # built from the pinned vendor/mameko, running the gate recipes under the host-process job runtime.
+  e2e-local:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/v2-setup
+        with:
+          mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - name: e2e-local, device path
+        run: pnpm --filter @fractalboxdev/flare-dispatch-control-plane run test:e2e-local-device

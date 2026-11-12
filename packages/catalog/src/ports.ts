@@ -1,6 +1,7 @@
-// The services a gate recipe reaches beyond `GateExec` and `GithubRead`. mameko names `Artifact`, `Intents`, `Cache`
-// and `Children` as capabilities (`CAPABILITIES` in mameko-run) but serves none of them yet, so each is an FD-owned
-// interface that an executor kind's Layer backs.
+// The services a gate recipe reaches beyond `GateExec` and `GithubRead`. A recipe emits its intents through mameko's
+// `Intents`, which the runner serves. mameko names `Artifact`, `Cache` and `Children` as capabilities too
+// (`CAPABILITIES` in mameko-run) but serves none of them yet, so each is an FD-owned interface that an executor kind's
+// Layer backs.
 import { LocalContent } from "@fractalboxdev/mameko-run";
 import { Context, Effect, Layer, Schema } from "effect";
 import type { Outcome } from "./reasons.ts";
@@ -39,25 +40,6 @@ export const localContentArtifacts: Layer.Layer<GateArtifacts, never, LocalConte
     };
   }),
 );
-
-export class IntentRejected extends Schema.TaggedError<IntentRejected>()("IntentRejected", {
-  kind: Schema.String,
-  key: Schema.String,
-  detail: Schema.String,
-}) {}
-
-/** One run-authored intent: its kind from the run's `intentKinds` and its key `<step name>:<index>`. */
-export interface GateIntent {
-  readonly kind: string;
-  readonly key: string;
-  readonly payload: unknown;
-}
-
-/** The run's outbox: the control plane applies each intent after it accepts the result. */
-export class GateIntents extends Context.Service<
-  GateIntents,
-  { readonly emit: (intent: GateIntent) => Effect.Effect<void, IntentRejected> }
->()("@fractalboxdev/flare-dispatch-catalog/GateIntents") {}
 
 /** A cache entry a manifest names: its key and the workspace paths it holds. */
 export interface CacheEntry {

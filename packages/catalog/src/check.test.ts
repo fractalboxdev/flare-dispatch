@@ -224,6 +224,31 @@ describe("runCommand", () => {
     expect(exit).toEqual(CommandExit.OverLimit());
   });
 
+  it("[FD-GATE-006] kills a member of the job's process group that ignores SIGTERM at the timeout", async () => {
+    const { exit, output } = await Effect.runPromise(
+      runCommand({
+        command: "(trap '' TERM; exec sleep 30) >/dev/null 2>&1 & echo $!; wait",
+        cwd: tmpdir(),
+        env: { PATH: process.env["PATH"] ?? "" },
+        timeoutMs: 500,
+      }),
+    );
+    expect(exit).toEqual(CommandExit.TimedOut());
+    const member = Number(new TextDecoder().decode(output).trim());
+    expect(member).toBeGreaterThan(0);
+    const alive = () => {
+      try {
+        process.kill(member, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const until = Date.now() + 2_000;
+    while (alive() && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+    expect(alive()).toBe(false);
+  });
+
   it("[FD-GATE-005] answers a command killed by a signal", async () => {
     const { exit } = await Effect.runPromise(
       runCommand({ command: "kill -KILL $$", cwd: tmpdir(), env: {}, timeoutMs: 10_000 }),

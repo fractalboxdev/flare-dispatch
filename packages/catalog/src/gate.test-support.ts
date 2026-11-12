@@ -1,17 +1,16 @@
 // Test doubles of the gate recipes' services: each records what a recipe asked for and answers from a script.
+import { intentList } from "@fractalboxdev/mameko-run";
 import { Effect, Layer, Ref } from "effect";
 import { CommandExit, GateExec, WorkspaceReadFailed, type CommandOptions } from "./command.ts";
 import { GithubRead, GithubReadFailed } from "./github-read.ts";
 import {
   ArtifactUploadFailed,
   GateArtifacts,
-  GateIntents,
   MatrixChildren,
   type ChildHandle,
   type ChildRequest,
   type ChildVerdict,
   type DiscoveryResult,
-  type GateIntent,
 } from "./ports.ts";
 import { DeployLedger } from "./worker-deploy.ts";
 
@@ -72,12 +71,15 @@ export const fakeArtifacts = (options: { readonly fail?: boolean } = {}) => {
   return { layer, uploads };
 };
 
+/** mameko's `Intents` over the runner's intent list; `emitted` reads each intent as `{ kind, key, payload }`. */
 export const fakeIntents = () => {
-  const emitted: GateIntent[] = [];
-  const layer = Layer.succeed(GateIntents, {
-    emit: (intent) => Effect.sync(() => void emitted.push(intent)),
-  });
-  return { layer, emitted };
+  const list = intentList();
+  return {
+    layer: list.layer,
+    get emitted() {
+      return list.intents().map((i) => ({ kind: i.kind, key: i.intent_key, payload: i.payload }));
+    },
+  };
 };
 
 export const fakeGithub = (answers: {

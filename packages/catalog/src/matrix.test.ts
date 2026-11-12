@@ -289,7 +289,7 @@ describe("job matrix run", () => {
   });
 
   it("[FD-GATE-045] runs the parent with no GateExec in its context", async () => {
-    // `runWith` provides only MatrixChildren, GateIntents and GithubRead; a sandbox call would fail to resolve.
+    // `runWith` provides only MatrixChildren, Intents and GithubRead; a sandbox call would fail to resolve.
     const { outcome } = await runWith(ok, { command: "x" });
     expect(outcome).toEqual(Outcome.success());
   });

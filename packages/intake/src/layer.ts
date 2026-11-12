@@ -26,7 +26,11 @@ import {
   type IntakeSettings,
 } from "./config.ts";
 import { manifestSourceLayer } from "./manifest.ts";
-import { installationEvictionLayer, manifestReporterLayer } from "./ports.ts";
+import {
+  heldCheckReporterLayer,
+  installationEvictionLayer,
+  manifestReporterLayer,
+} from "./ports.ts";
 import { isUnavailable, ProtectionSnapshots, protectionSnapshotsLayer } from "./protection.ts";
 import { d1IntakeStore, d1ShedRecorder } from "./store.ts";
 
@@ -58,6 +62,7 @@ export const intakeLayer = (options: IntakeLayerOptions) =>
     d1ShedRecorder(options.db),
     manifestSourceLayer,
     manifestReporterLayer,
+    heldCheckReporterLayer(options.db, options.settings.profile),
     installationEvictionLayer,
     protectionSnapshotsLayer,
   );

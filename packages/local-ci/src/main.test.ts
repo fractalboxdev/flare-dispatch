@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseArtifacts } from "./main.ts";
+import { parseArtifacts } from "./stack.ts";
 
 describe("parseArtifacts", () => {
   it("takes each executable from cargo's JSON messages, wherever cargo wrote it", () => {

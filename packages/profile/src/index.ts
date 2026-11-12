@@ -82,6 +82,7 @@ export {
   missingPorts,
   portUses,
   profileLoader,
+  reservesOf,
   validateProfile,
   type ValidationContext,
 } from "./validate.ts";

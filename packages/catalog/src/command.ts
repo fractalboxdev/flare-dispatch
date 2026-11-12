@@ -130,6 +130,9 @@ export const runCommand = (options: CommandOptions): Effect.Effect<CommandRun> =
       process.removeListener("SIGTERM", onRunnerStopped);
     };
     child.once("close", (code, signal) => {
+      // A stopped command's group dies with it: a member that outlives the SIGTERM, by ignoring it or by not holding
+      // the output open, takes the SIGKILL now rather than after the grace period the runner may not live through.
+      if (verdict !== undefined) signalGroup(pid, "SIGKILL");
       release();
       resume(
         Effect.succeed({

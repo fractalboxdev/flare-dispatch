@@ -91,6 +91,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: 5.20261012.1
         version: 5.20261012.1
+      '@fractalboxdev/flare-dispatch-local-ci':
+        specifier: workspace:*
+        version: link:../../packages/local-ci
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1
@@ -268,6 +271,9 @@ importers:
 
   packages/api:
     dependencies:
+      '@fractalboxdev/flare-dispatch-cache':
+        specifier: workspace:*
+        version: link:../cache
       '@fractalboxdev/flare-dispatch-catalog':
         specifier: workspace:*
         version: link:../catalog
@@ -397,9 +403,15 @@ importers:
       '@fractalboxdev/flare-dispatch-agentic':
         specifier: workspace:*
         version: link:../agentic
+      '@fractalboxdev/flare-dispatch-api':
+        specifier: workspace:*
+        version: link:../api
       '@fractalboxdev/flare-dispatch-cache':
         specifier: workspace:*
         version: link:../cache
+      '@fractalboxdev/flare-dispatch-catalog':
+        specifier: workspace:*
+        version: link:../catalog
       '@fractalboxdev/flare-dispatch-intake':
         specifier: workspace:*
         version: link:../intake
@@ -647,6 +659,9 @@ importers:
       '@fractalboxdev/flare-dispatch-agentic':
         specifier: workspace:*
         version: link:../agentic
+      '@fractalboxdev/flare-dispatch-api':
+        specifier: workspace:*
+        version: link:../api
       '@fractalboxdev/flare-dispatch-cache':
         specifier: workspace:*
         version: link:../cache

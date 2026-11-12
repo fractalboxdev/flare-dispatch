@@ -494,6 +494,19 @@ describe("spec-drift-pr", () => {
     expect(rec.staged[0]).toMatchObject({ branch: SPEC_DRIFT_BRANCH, pr: { draft: true } });
   });
 
+  it("[FD-AGT-041] sanitizes the model's summary before it becomes the pull-request body", async () => {
+    const answer = JSON.stringify({
+      inSync: false,
+      summary:
+        "Drift for @octocat <script>x</script> in [specs](https://evil.example)\n```md\n@keep",
+      files: [{ path: "specs/a.md", content: "new" }],
+    });
+    const { rec } = await run(answer, { "specs/a.md": "old" });
+    expect(rec.staged[0]?.pr.body).toBe(
+      "Drift for `@octocat` x in `[specs](https://evil.example)`\n```md\n@keep\n```",
+    );
+  });
+
   it("[FD-AGT-070] returns a pr.close for its pull request when the specs are in sync", async () => {
     const { rec } = await run('{"inSync":true,"summary":"","files":[]}');
     expect(rec.intents).toEqual([

@@ -26,12 +26,12 @@ import {
   checkConclusion,
   checkNeutralInvariant,
   ConcludeDetails,
+  concludedVerdictOf,
   concludeSummary,
   OutcomePayload,
   quarantineAnnotations,
   truncate,
   Verdict,
-  verdictOf,
 } from "./conclusion.ts";
 
 /** Which GitHub App installation serves a tenant scope; null when none does. */
@@ -88,6 +88,9 @@ export const Payloads = {
     annotations: Schema.Array(AnnotationSchema),
   }),
 } as const;
+
+/** The payload of the `cp:check:conclude` row a fan-out parent's outcome inserts for a child (FD-GH-020). */
+export const ChildVerdictPayload = Schema.Struct({ verdict: Verdict });
 
 type CheckKind = keyof typeof Payloads;
 type PayloadOf<K extends CheckKind> = (typeof Payloads)[K]["Type"];
@@ -381,24 +384,31 @@ export const makeCheckRunApplier = Effect.gen(function* () {
 
   /**
    * The `check.conclude` payload. The outcome row mameko's terminal write inserts carries `{ outcome }`; its verdict is
-   * `verdictOf(outcome)`, and its name, head SHA, attempt, summary facts and log link come from the execution's records
-   * (FD-GH-008, FD-GH-013, FD-GH-014, FD-GH-015). A row that carries the verdict itself, as a fan-out parent's child
-   * conclusion does, is taken as it is.
+   * `verdictOf(outcome)`, and a child the parent-ended cascade cancelled concludes `failure` "parent closed before this
+   * part settled" (FD-GH-020). The `cp:check:conclude` row a fan-out parent's outcome inserts for a child carries
+   * `{ verdict }` (FD-GH-020). Either way the name, head SHA, attempt, summary facts and log link come from the
+   * execution's records (FD-GH-008, FD-GH-013, FD-GH-014, FD-GH-015). A row that carries the whole payload is taken as
+   * it is.
    */
   const concludePayload = (executionId: string, payload: unknown) =>
     Effect.gen(function* () {
       const given = Schema.decodeUnknownOption(Payloads["check.conclude"])(payload);
       if (Option.isSome(given)) return { payload: given.value, recorded: null };
-      const { outcome } = yield* Schema.decodeUnknownEffect(OutcomePayload)(payload).pipe(
-        Effect.catchTag("SchemaError", (e) => unservable(`payload: ${e.message}`)),
-      );
+      const child = Schema.decodeUnknownOption(ChildVerdictPayload)(payload);
+      const verdict = Option.isSome(child)
+        ? child.value.verdict
+        : concludedVerdictOf(
+            (yield* Schema.decodeUnknownEffect(OutcomePayload)(payload).pipe(
+              Effect.catchTag("SchemaError", (e) => unservable(`payload: ${e.message}`)),
+            )).outcome,
+          );
       const known = yield* facts.of(executionId);
       if (known === null) return yield* unservable("conclude: no record of the execution");
       const built: PayloadOf<"check.conclude"> = {
         name: known.name,
         head_sha: known.headSha,
         ...(known.detailsUrl === undefined ? {} : { details_url: known.detailsUrl }),
-        verdict: verdictOf(outcome),
+        verdict,
         attempt: known.attempt,
         details: known.details,
       };

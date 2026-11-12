@@ -1,6 +1,8 @@
 // `/.well-known/openid-configuration`, `/.well-known/jwks.json` and `/health`. The OIDC routes are cached for an hour,
 // answer `not_configured` while no OIDC key is set (FD-IFC-051), and never serve a private key member (FD-IFC-052).
-import { Effect } from "effect";
+// The JWKS holds the current ES256 key and every key retired by rotation within the last 3600 s (FD-PROV-049).
+import { jwks } from "@fractalboxdev/flare-dispatch-cache/oidc";
+import { Clock, Effect } from "effect";
 import { HttpServerResponse } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
 import { ApiConfig } from "../config.ts";
@@ -10,25 +12,20 @@ import { OidcKey } from "../ports.ts";
 
 const CACHE = { "cache-control": "max-age=3600" };
 
-/** The public members of an RSA or EC JWK; every private member (`d`, the CRT primes, `k`) is left out. */
-const PUBLIC_MEMBERS = ["kty", "kid", "alg", "use", "n", "e", "crv", "x", "y"] as const;
-
-export const publicOnly = (jwk: Readonly<Record<string, unknown>>): Record<string, unknown> =>
-  Object.fromEntries(PUBLIC_MEMBERS.flatMap((m) => (jwk[m] === undefined ? [] : [[m, jwk[m]]])));
-
-const publicKey = Effect.gen(function* () {
+/** The public keys the JWKS serves now; each carries only `kty`, `crv`, `x`, `y`, `kid`, `use` and `alg`. */
+const servedKeys = Effect.gen(function* () {
   const oidc = yield* OidcKey;
-  const jwk = yield* oidc.publicJwk;
-  if (jwk === undefined)
+  const keys = yield* oidc.keys;
+  if (keys === undefined)
     return yield* apiError("not_configured", "this deployment has no OIDC key");
-  return publicOnly(jwk);
+  return jwks(keys, yield* Clock.currentTimeMillis).keys;
 });
 
 export const WellKnownHandlers = HttpApiBuilder.group(FlareDispatchApi, "wellKnown", (handlers) =>
   handlers
     .handle("openidConfiguration", () =>
       Effect.gen(function* () {
-        yield* publicKey;
+        yield* servedKeys;
         const { publicOrigin } = yield* ApiConfig;
         return HttpServerResponse.jsonUnsafe(
           {
@@ -36,7 +33,7 @@ export const WellKnownHandlers = HttpApiBuilder.group(FlareDispatchApi, "wellKno
             jwks_uri: `${publicOrigin}/.well-known/jwks.json`,
             response_types_supported: ["id_token"],
             subject_types_supported: ["public"],
-            id_token_signing_alg_values_supported: ["RS256"],
+            id_token_signing_alg_values_supported: ["ES256"],
             claims_supported: [
               "sub",
               "aud",
@@ -53,9 +50,7 @@ export const WellKnownHandlers = HttpApiBuilder.group(FlareDispatchApi, "wellKno
       }),
     )
     .handle("jwks", () =>
-      Effect.map(publicKey, (key) =>
-        HttpServerResponse.jsonUnsafe({ keys: [key] }, { headers: CACHE }),
-      ),
+      Effect.map(servedKeys, (keys) => HttpServerResponse.jsonUnsafe({ keys }, { headers: CACHE })),
     )
     .handle("health", () => Effect.succeed({ status: "ok" as const })),
 );

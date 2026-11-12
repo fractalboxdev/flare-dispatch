@@ -1,3 +1,4 @@
+import { issueOidcToken, type OidcKeys } from "@fractalboxdev/flare-dispatch-cache/oidc";
 import { Effect } from "effect";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -6,6 +7,7 @@ import {
   makeHarness,
   MEMBER,
   OPERATOR,
+  ORIGIN,
   record,
   type Harness,
 } from "../api.test-support.ts";
@@ -351,22 +353,27 @@ describe("operator routes", () => {
   });
 });
 
+const ecKey = async (kid: string) => {
+  const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
+  const jwk = async (key: CryptoKey) => ({
+    ...((await crypto.subtle.exportKey("jwk", key)) as JsonWebKey),
+    kid,
+  });
+  return {
+    private: (await jwk(pair.privateKey)) as OidcKeys["current"],
+    public: (await jwk(pair.publicKey)) as OidcKeys["retired"][number]["jwk"],
+  };
+};
+
 describe("well-known", () => {
   it("[FD-IFC-051]: the OIDC routes answer 503 not_configured while no key is set, and cache for an hour once one is", async () => {
-    h.doubles.oidcJwk = undefined;
+    h.doubles.oidcKeys = undefined;
     expect((await h.fetch("/.well-known/jwks.json")).status).toBe(503);
     expect((await h.fetch("/.well-known/openid-configuration")).status).toBe(503);
-    h.doubles.oidcJwk = {
-      kty: "RSA",
-      kid: "k1",
-      alg: "RS256",
-      use: "sig",
-      n: "abc",
-      e: "AQAB",
-      d: "secret",
-      p: "p",
-      q: "q",
-    };
+    h.doubles.oidcKeys = { current: (await ecKey("k1")).private, retired: [] };
     const jwks = await h.fetch("/.well-known/jwks.json");
     expect(jwks.status).toBe(200);
     expect(jwks.headers.get("cache-control")).toBe("max-age=3600");
@@ -378,23 +385,75 @@ describe("well-known", () => {
   });
 
   it("[FD-IFC-052]: the JWKS carries no private key member", async () => {
-    h.doubles.oidcJwk = {
-      kty: "RSA",
-      kid: "k1",
-      alg: "RS256",
-      use: "sig",
-      n: "abc",
-      e: "AQAB",
-      d: "secret",
-      dp: "x",
-      dq: "y",
-      qi: "z",
+    const current = (await ecKey("k2")).private;
+    const retired = (await ecKey("k1")).private;
+    const extra = { dp: "x", dq: "y", qi: "z", p: "p", q: "q", k: "k", oth: [] };
+    h.doubles.oidcKeys = {
+      current: { ...current, ...extra },
+      retired: [{ jwk: { ...retired, ...extra }, retiredAt: Date.now() }],
     };
     const { keys } = (await (await h.fetch("/.well-known/jwks.json")).json()) as {
       keys: Record<string, unknown>[];
     };
-    for (const member of ["d", "p", "q", "dp", "dq", "qi", "k", "oth"])
-      expect(keys[0]).not.toHaveProperty(member);
+    expect(keys).toHaveLength(2);
+    for (const key of keys)
+      for (const member of ["d", "p", "q", "dp", "dq", "qi", "k", "oth"])
+        expect(key).not.toHaveProperty(member);
+  });
+
+  it("[FD-PROV-049] the served JWKS keeps a key retired by rotation for 3600 s, and a token it signed verifies under the advertised ES256", async () => {
+    const [k0, k1, k2] = await Promise.all([ecKey("k0"), ecKey("k1"), ecKey("k2")]);
+    const now = Date.now();
+    // k1 signed a token just before it was retired; the token lives at most 3600 s.
+    const token = await Effect.runPromise(
+      issueOidcToken(
+        { current: k1.private, retired: [] },
+        ORIGIN,
+        {
+          run: "deploy",
+          executionId: "e1",
+          audience: "sts.amazonaws.com",
+          ttlSec: 3600,
+        },
+        now - 3599_000,
+      ),
+    );
+    h.doubles.oidcKeys = {
+      current: k2.private,
+      retired: [
+        { jwk: k1.public, retiredAt: now - 3599_000 },
+        { jwk: k0.public, retiredAt: now - 3601_000 },
+      ],
+    };
+    const { keys } = (await (await h.fetch("/.well-known/jwks.json")).json()) as {
+      keys: (JsonWebKey & { kid: string })[];
+    };
+    expect(keys.map((k) => k.kid)).toEqual(["k2", "k1"]);
+    const config = await json(await h.fetch("/.well-known/openid-configuration"));
+    const [header, payload, signature] = token.jwt.split(".") as [string, string, string];
+    const { alg, kid } = JSON.parse(Buffer.from(header, "base64url").toString()) as {
+      alg: string;
+      kid: string;
+    };
+    expect(config["id_token_signing_alg_values_supported"]).toEqual([alg]);
+    expect(alg).toBe("ES256");
+    const served = keys.find((k) => k.kid === kid)!;
+    expect(served.alg).toBe("ES256");
+    const verifier = await crypto.subtle.importKey(
+      "jwk",
+      served,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"],
+    );
+    expect(
+      await crypto.subtle.verify(
+        { name: "ECDSA", hash: "SHA-256" },
+        verifier,
+        Buffer.from(signature, "base64url"),
+        new TextEncoder().encode(`${header}.${payload}`),
+      ),
+    ).toBe(true);
   });
 
   it("/health needs no identity", async () => {

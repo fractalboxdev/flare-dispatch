@@ -10,6 +10,7 @@ import {
 } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Effect, Layer } from "effect";
 import { ClassResolver, type ClassRequest } from "./config.ts";
+import { HeldCheckReporter, type HeldCheck } from "./ports.ts";
 import { migrateIntake } from "./store.ts";
 
 const statement = (
@@ -67,4 +68,13 @@ export const recordingResolver = (
         seen.push(r);
         return answer(r);
       }),
+  });
+
+/** A held-check reporter that records every queued and dropped check run, in order (FD-INT-057). */
+export const recordingHeldChecks = (
+  seen: { readonly write: "queued" | "dropped"; readonly check: HeldCheck }[] = [],
+) =>
+  Layer.succeed(HeldCheckReporter, {
+    queued: (check) => Effect.sync(() => void seen.push({ write: "queued", check })),
+    dropped: (check) => Effect.sync(() => void seen.push({ write: "dropped", check })),
   });

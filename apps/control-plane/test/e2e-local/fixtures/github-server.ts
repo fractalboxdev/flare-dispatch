@@ -6,7 +6,8 @@
 // - webhook deliveries: the recorded payloads of `recordings/`, signed with the deployment's webhook secret;
 // - the REST API: a stack without an App credential reads its repository from the development repository binding, so
 //   the server holds no REST state. A stack with one hands the server its recorded state (`intake-github.json`): the
-//   App, the installation that covers each repository, and each repository's branches and files. The server checks
+//   App, the installation that covers each repository, and each repository's branches and files; a test sets a
+//   branch's required checks, which its branch rules answer from then on (`requireChecks`). The server checks
 //   the App JWT and each installation token as GitHub does. Any REST call the state does not answer gets 404 and is
 //   listed in `unrecorded`, so a test can assert it made none.
 import { createHmac, randomBytes, verify, type KeyObject } from "node:crypto";
@@ -83,6 +84,11 @@ export interface GithubFixtureServer {
   ) => Promise<string>;
   /** The key id of the issuer key this server publishes in its JWKS. */
   readonly issuerKid: string;
+  /**
+   * Sets the status checks a ruleset requires on `branch` of `repository`, which every later read of the branch's rules
+   * answers; an empty list leaves the branch with no rules, as every recorded branch starts.
+   */
+  readonly requireChecks: (repository: string, branch: string, checks: readonly string[]) => void;
   /** Answers one request addressed to GitHub; the stack routes the Worker's outbound requests here. */
   readonly handle: (request: Request) => Promise<Response>;
   /** A recorded webhook delivery with its GitHub headers, the body signed with `secret`. */
@@ -128,6 +134,8 @@ const send = async (res: ServerResponse, response: Response) => {
 
 const notFound = () => json(404, { message: "Not Found" });
 
+const requiredKey = (repository: string, branch: string) => `${repository.toLowerCase()}#${branch}`;
+
 const bearerOf = (request: Request) =>
   /^bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
 
@@ -154,7 +162,11 @@ const appJwtIssuer = (jwt: string | undefined, key: KeyObject): string | undefin
 };
 
 /** The REST API over a recorded state; `undefined` for a call the state does not answer. */
-const restApi = (app: GithubAppFixture, writes: GithubWrite[]) => {
+const restApi = (
+  app: GithubAppFixture,
+  writes: GithubWrite[],
+  required: ReadonlyMap<string, readonly string[]>,
+) => {
   const { state, publicKey } = app;
   /** Each installation token minted, and the installation it acts for. */
   const tokens = new Map<string, number>();
@@ -212,8 +224,27 @@ const restApi = (app: GithubAppFixture, writes: GithubWrite[]) => {
         ? json(404, { message: "Branch not found" })
         : json(200, { name: decodeURIComponent(branch), commit: { sha }, protected: false });
     }
-    // The recorded repositories hold no branch rules and no classic protection.
-    if (request.method === "GET" && rules !== undefined) return json(200, []);
+    // A branch's rules are the required checks a test set on it; no recorded branch has classic protection.
+    if (request.method === "GET" && rules !== undefined) {
+      const checks = required.get(requiredKey(fullName, decodeURIComponent(rules))) ?? [];
+      return json(
+        200,
+        checks.length === 0
+          ? []
+          : [
+              {
+                type: "required_status_checks",
+                ruleset_source_type: "Repository",
+                ruleset_source: fullName,
+                ruleset_id: 1,
+                parameters: {
+                  strict_required_status_checks_policy: false,
+                  required_status_checks: checks.map((context) => ({ context })),
+                },
+              },
+            ],
+      );
+    }
     if (request.method === "GET" && protection !== undefined)
       return json(404, { message: "Branch not protected" });
     if (request.method === "GET" && content !== undefined) {
@@ -257,7 +288,8 @@ export const startGithubFixtureServer = async (
   const calls: GithubCall[] = [];
   const writes: GithubWrite[] = [];
   const unrecorded: GithubCall[] = [];
-  const rest = app === undefined ? undefined : restApi(app, writes);
+  const required = new Map<string, readonly string[]>();
+  const rest = app === undefined ? undefined : restApi(app, writes, required);
   /** Each request token the runtime handed out, and the job it belongs to. */
   const requestTokens = new Map<string, ActionsJob>();
   let origin = "";
@@ -325,6 +357,8 @@ export const startGithubFixtureServer = async (
     },
     oidcToken,
     issuerKid: issuer.kid,
+    requireChecks: (repository, branch, checks) =>
+      void required.set(requiredKey(repository, branch), [...checks]),
     handle,
     delivery: (event, recording, secret, patch = (p) => p) => {
       const body = JSON.stringify(patch(readRecording(recording)));

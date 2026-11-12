@@ -49,11 +49,14 @@ export const fromBase64url = (text: string): Uint8Array | undefined => {
   }
 };
 
+/** The key `crypto.subtle.importKey` answers, named without the `CryptoKey` global so Node-only consumers type-check. */
+type HmacKey = Awaited<ReturnType<typeof crypto.subtle.importKey>>;
+
 /**
  * An HMAC-SHA256 key derived from `secret` with HKDF-SHA256 under the domain-separation `label`, so a token of one
  * kind never verifies as another kind even though every kind derives from the same Worker secret.
  */
-export const derivedHmacKey = async (secret: string, label: string): Promise<CryptoKey> => {
+export const derivedHmacKey = async (secret: string, label: string): Promise<HmacKey> => {
   const ikm = await crypto.subtle.importKey("raw", asBuffer(utf8(secret)), "HKDF", false, [
     "deriveBits",
   ]);
@@ -68,11 +71,11 @@ export const derivedHmacKey = async (secret: string, label: string): Promise<Cry
   ]);
 };
 
-export const hmacSign = async (key: CryptoKey, message: string): Promise<Uint8Array> =>
+export const hmacSign = async (key: HmacKey, message: string): Promise<Uint8Array> =>
   new Uint8Array(await crypto.subtle.sign("HMAC", key, asBuffer(utf8(message))));
 
 /** `crypto.subtle.verify` compares the MAC in constant time. */
-export const hmacVerify = (key: CryptoKey, mac: Uint8Array, message: string): Promise<boolean> =>
+export const hmacVerify = (key: HmacKey, mac: Uint8Array, message: string): Promise<boolean> =>
   crypto.subtle.verify("HMAC", key, asBuffer(mac), asBuffer(utf8(message)));
 
 /** 128 bits from the platform's cryptographically secure generator, as 32 lowercase hex characters. */

@@ -2,6 +2,7 @@
 // document decides both.
 import type { ApiEnv } from "@fractalboxdev/flare-dispatch-api";
 import { deploymentOf } from "@fractalboxdev/flare-dispatch-catalog";
+import type { ConcludeKind } from "@fractalboxdev/flare-dispatch-github";
 import type { MonitorNamespace } from "@fractalboxdev/flare-dispatch-ops";
 import type { CacheEnv } from "./cache.ts";
 import {
@@ -133,5 +134,17 @@ export const executionConfig = (
     appliedFor: Object.fromEntries(
       Object.entries(profile.intent_kinds).map(([name, kind]) => [name, kind.applied_for]),
     ),
+  };
+};
+
+/** The row fields of the profile's `check.conclude` kind, which a child's conclusion carries like any row of it. */
+export const concludeKindOf = (profile: Profile): ConcludeKind => {
+  const entry = profile.intent_kinds["check.conclude"];
+  return {
+    tier: entry?.delivery_tier ?? "outcome",
+    priority: entry?.priority ?? 0,
+    effectClass: entry?.effect_class ?? "adoptable",
+    drawsReserve: entry?.draws_reserve === true,
+    classRanks: Object.fromEntries(profile.classes.map((c) => [c.name, c.rank])),
   };
 };
