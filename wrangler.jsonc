@@ -3,6 +3,12 @@
   // Non-destructive: distinct name + fresh D1/R2/KV so it never collides with
   // any prior deployment in the same account. Dashboard SPA assets are omitted
   // (the SSR fallback in dashboard.ts serves the routes).
+  //
+  // Account-specific values below are placeholders marked `operator overlay`.
+  // A deploying org replaces this whole file with its own copy carrying the
+  // real ones (actions/deploy-dispatcher-action). Locally, keep that copy as
+  // the gitignored wrangler.overlay.local.jsonc and pass it with
+  // `pnpm exec wrangler deploy -c wrangler.overlay.local.jsonc`.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "flare-dispatch",
   "main": "apps/dispatcher/src/index.ts",
@@ -11,6 +17,14 @@
 
   "observability": { "enabled": true },
   "keep_vars": true,
+
+  // A Workflow instance's subrequests accumulate across its steps. A release
+  // cell polls a multi-hour cross-build across dozens of steps, each spending
+  // sandbox, R2 and D1 calls, so the Workers Paid default of 10,000 per
+  // instance ends a long build at its publish steps. 10,000,000 is the Workers
+  // Paid ceiling. The deploy merges this block into the operator overlay
+  // (infra/overlay-limits.mjs), so an overlay need not restate it.
+  "limits": { "subrequests": 10000000 },
 
   // Wall-clock dispatch. Each expression must match a registered run's
   // `schedules[].cron` EXACTLY — `schedulesByCron` (apps/dispatcher/src/registry.ts)
@@ -28,8 +42,17 @@
       "45 5 * * *", // org-spec-audit — daily, after spec-drift-pr
       "0 6 * * *", // ci-triage-pr   — daily
       "0 7 * * 1", // finops-audit   — Mondays
-      "17 2 * * *", // contextful-measures — daily
-      "17 3 * * SUN", // contextful-protocol — Sunday at 03:17 UTC
+      // contextful-measures ("17 2 * * *") and contextful-protocol
+      // ("17 3 * * SUN") are unarmed: contextful uses FlareDispatch for tag
+      // releases only.
+      // The verdict reconcile sweep, not a run: re-sends the conclusion of
+      // every finished execution GitHub never received (DELIVERY_SWEEP_CRON,
+      // apps/dispatcher/src/delivery-sweep.ts).
+      "*/10 * * * *",
+      // The compile-cache sweep, not a run: deletes expired entries, evicts
+      // each repository down to its ceiling and measures it into the ledger
+      // (COMPILE_CACHE_SWEEP_CRON, apps/dispatcher/src/routes/compile-cache.ts).
+      "41 * * * *",
     ],
   },
 
@@ -45,12 +68,11 @@
   //
   // Add the expression here when that decision is made; the runs need no change.
 
-  // Custom domain (requires the fractalbox.dev zone in this account). The
-  // GitHub App install flow substitutes the request origin into the manifest,
-  // so hitting the install page on this host wires the App's webhook/callback
-  // URLs to it. The bare flare-dispatch.fractalbox.dev serves the documentation
-  // site (apps/docs/wrangler.jsonc).
-  "routes": [{ "pattern": "flare-dispatch-app.fractalbox.dev", "custom_domain": true }],
+  // Custom domain (requires its zone in the deploying account). The GitHub App
+  // install flow substitutes the request origin into the manifest, so hitting
+  // the install page on this host wires the App's webhook/callback URLs to it.
+  // Hostname: operator overlay.
+  "routes": [{ "pattern": "dispatcher.example.com", "custom_domain": true }],
 
   // Workers AI — backs the modelGateway capability the pr-review engine calls.
   // The binding IS the auth (account-billed), so no model API key is needed.
@@ -60,16 +82,35 @@
   // for parity with the run set).
   "browser": { "binding": "BROWSER" },
 
+  // The deployed version's id — logged by a run at each spawn beside its
+  // execution's creation time, so an instance created before a deploy shows
+  // whether it runs the deployed code.
+  "version_metadata": { "binding": "VERSION_METADATA" },
+
   "vars": {
-    "CLOUDFLARE_ACCOUNT_ID": "c91d52c288c452ab734ede1518b00e11",
+    // Operator overlay.
+    "CLOUDFLARE_ACCOUNT_ID": "00000000000000000000000000000000",
     // AI Gateway the modelGateway routes through — REQUIRED for prefixed model
     // ids (`anthropic/*`, `deepseek/*`, `openai/*`, `bedrock/*`), which ride the
     // gateway universal endpoint / Bedrock forwarder. `openai/*` additionally
     // needs unified billing enabled on this gateway (or a stored OpenAI key —
     // mutually exclusive). If the gateway has Authenticated Gateway turned on,
-    // also set the AI_GATEWAY_AUTH_TOKEN secret.
-    "AI_GATEWAY_ID": "fractalbox-engineering-gateway",
-    "ADMISSION_CAP": "16",
+    // also set the AI_GATEWAY_AUTH_TOKEN secret. Operator overlay.
+    "AI_GATEWAY_ID": "your-ai-gateway",
+    "ADMISSION_CAP": "48",
+    // The agent, browser and release pools admit at most RunSandboxAgent's,
+    // RunSandboxBrowser's and RunSandboxRelease's max_instances. Each cap is an
+    // upper bound; SPEND_BURN_MAX_USD_PER_HOUR sets the operating concurrency.
+    "ADMISSION_CAP_AGENT": "8",
+    "ADMISSION_CAP_BROWSER": "16",
+    "ADMISSION_CAP_RELEASE": "8",
+    // Compile-cache bounds (apps/dispatcher/src/routes/compile-cache.ts): one
+    // entry, one repository, one execution's writes, and the entry age the
+    // hourly sweep deletes.
+    "COMPILE_CACHE_MAX_OBJECT_BYTES": "104857600",
+    "COMPILE_CACHE_MAX_REPO_BYTES": "21474836480",
+    "COMPILE_CACHE_MAX_EXECUTION_BYTES": "10737418240",
+    "COMPILE_CACHE_TTL_DAYS": "14",
     // Opt the human-facing viewer surfaces (incl. the GitHub App install flow)
     // out of the Cloudflare Access gate for the initial dogfood. Configure
     // ACCESS_AUD and drop this to re-gate them. NOTE: the viewer surfaces still
@@ -80,11 +121,13 @@
     // Cloudflare Access team domain (issuer) — shared by the viewer + deploy
     // gates. The deploy console verifies the Access JWT against this + the AUD
     // below, and fetches identity from <issuer>/cdn-cgi/access/get-identity.
-    "ACCESS_TEAM_DOMAIN": "fractalbox.cloudflareaccess.com",
+    // Operator overlay.
+    "ACCESS_TEAM_DOMAIN": "your-team.cloudflareaccess.com",
     // Deploy console (/deploy) Access application AUD. Distinct from the viewer
-    // ACCESS_AUD. The app's policy allows the GitHub `fractalboxdev/devs` team;
-    // per-env authorization is CONFIG_KV `deploy.env-authz`. See deploy-access.ts.
-    "DEPLOY_ACCESS_AUD": "44c3a07df1b0a4e454b28da9f55e7dbf3e279d1d09274667467a4d41ba79cafe",
+    // ACCESS_AUD. The app's policy allows the org's GitHub team; per-env
+    // authorization is CONFIG_KV `deploy.env-authz`. See deploy-access.ts.
+    // Operator overlay.
+    "DEPLOY_ACCESS_AUD": "your-deploy-access-aud",
     // Execution backend. "on" routes every facade-capable run through the
     // SUBSTRATE binding below; anything else keeps the container path in this
     // config. Flipping it is the cutover — see apps/substrate/specs/adoption-runbook.md.
@@ -158,7 +201,13 @@
   // class) bakes the native toolchain + Rust: webhook-mode runs have no
   // setup step to install one, and consumer Rust workspaces with `*-sys`
   // crates both need `cc` to link and more memory than standard-2 gives a
-  // cold `cargo test` of a large dep graph.
+  // cold `cargo test` of a large dep graph. `WITH_RUST` also bakes a
+  // sha256-pinned prebuilt DuckDB shared library under /opt/duckdb and
+  // exports `DUCKDB_LIB_DIR` / `DUCKDB_INCLUDE_DIR` (ADR-0007, "Prebuilt
+  // heavy native dependencies"). A consumer opts in by building `duckdb`
+  // without its `bundled` feature in CI, asserts the loaded library's
+  // version at startup, and moves its crate pin with the image's
+  // `DUCKDB_VERSION`; a bundled build ignores the variables.
   "containers": [
     {
       "class_name": "RunSandbox",
@@ -166,26 +215,32 @@
       "image_build_context": ".",
       "image_vars": { "WITH_BUILD_TOOLS": "true", "WITH_RUST": "true" },
       "instance_type": "standard-4",
-      "max_instances": 16,
+      "max_instances": 56,
     },
     {
       "class_name": "RunSandboxBrowser",
       "image": "./infra/Dockerfile.sandbox",
       "instance_type": "standard-2",
-      "max_instances": 16,
+      "max_instances": 24,
     },
     {
       "class_name": "RunSandboxAgent",
       "image": "./infra/Dockerfile.sandbox",
       "instance_type": "standard-3",
-      "max_instances": 8,
+      "max_instances": 16,
     },
     {
       "class_name": "RunSandboxRelease",
       "image": "./infra/Dockerfile.sandbox-release",
       "image_build_context": ".",
       "instance_type": "standard-4",
-      "max_instances": 8,
+      "max_instances": 16,
+      // Every deploy pushes a new image and rolls every container. A rollout
+      // replaces an active instance once this grace has passed, and a
+      // replaced release container loses its build (`SandboxProcessLost`):
+      // the grace spans the 14400 s build ceiling, the 1800 s collect step
+      // and 600 s of checkout. A cell started in the grace keeps its image.
+      "rollout_active_grace_period": 16800,
     },
   ],
 
@@ -196,6 +251,7 @@
       { "name": "AGENT_BUDGET", "class_name": "AgentBudget" },
       { "name": "RUNS_SANDBOX_AGENT", "class_name": "RunSandboxAgent" },
       { "name": "RUNS_SANDBOX_RELEASE", "class_name": "RunSandboxRelease" },
+      { "name": "COMPILE_CACHE_LEDGER", "class_name": "CompileCacheLedger" },
     ],
   },
 
@@ -205,15 +261,17 @@
     { "tag": "v2", "new_sqlite_classes": ["AgentBudget"] },
     { "tag": "v3", "new_sqlite_classes": ["RunSandboxAgent"] },
     { "tag": "v4", "new_sqlite_classes": ["RunSandboxRelease"] },
+    { "tag": "v5", "new_sqlite_classes": ["CompileCacheLedger"] },
   ],
 
-  "r2_buckets": [{ "binding": "RUNS_STORAGE", "bucket_name": "flare-dispatch" }],
+  // Bucket name, database name and id, and namespace ids: operator overlay.
+  "r2_buckets": [{ "binding": "RUNS_STORAGE", "bucket_name": "your-runs-bucket" }],
 
   "d1_databases": [
     {
       "binding": "RUNS_METADATA",
-      "database_name": "flare-dispatch",
-      "database_id": "3a365bf1-fae3-4a29-bef7-5b020f8cb283",
+      "database_name": "your-runs-database",
+      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "infra/migrations",
     },
   ],
@@ -221,11 +279,11 @@
   "kv_namespaces": [
     {
       "binding": "CONFIG_KV",
-      "id": "dff3e9657cf34c94955c31a333084f1c",
+      "id": "00000000000000000000000000000001",
     },
     {
       "binding": "IDEMPOTENCY_KV",
-      "id": "3002db8dac904fc794cf2686fb5dfe57",
+      "id": "00000000000000000000000000000002",
     },
   ],
 }

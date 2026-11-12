@@ -13,7 +13,9 @@ import {
   AdmissionTimedOut,
   ExecFailed,
   ExecTimeout,
+  RunDurationExceeded,
   RunSkipped,
+  SandboxProcessLost,
   SecretsMissing,
   SerialQueueTimedOut,
   StepFailed,
@@ -23,11 +25,28 @@ import {
   TRUNCATION_NOTE,
   admissionTimedOutMd,
   appendFailureSummary,
+  failingStepMd,
   failureSummaryMd,
   runSkippedReason,
+  unrecordedFailureTag,
 } from "./failure-summary";
 
 describe("failureSummaryMd", () => {
+  it("renders a RunDurationExceeded naming the ceiling it crossed (issue #42)", () => {
+    const md = failureSummaryMd(
+      Exit.fail(new RunDurationExceeded({ maxDurationSec: 1800, elapsedSec: 1800 })),
+    );
+    expect(md).toContain("Exceeded the run ceiling");
+    expect(md).toContain("30 min");
+    expect(md).toContain("`limits.maxDurationSec: 1800`");
+  });
+
+  it("renders a SandboxProcessLost as an infrastructure loss with no verdict", () => {
+    const md = failureSummaryMd(Exit.fail(new SandboxProcessLost({ launches: 3 })));
+    expect(md).toContain("lost the command process");
+    expect(md).toContain("3 launches");
+    expect(md).toContain("not a verdict on the code");
+  });
   it("extracts the markdown from a failed Exit carrying AcceptanceFailed.summaryMd", () => {
     const exit = Exit.fail(
       new AcceptanceFailed({
@@ -261,5 +280,58 @@ describe("appendFailureSummary", () => {
     const combined = appendFailureSummary(generic, md);
     expect(combined).toBe(`${generic}\n\n${md}`);
     expect(combined).not.toContain("summary truncated");
+  });
+});
+
+describe("failingStepMd", () => {
+  it("names the recorded step and the tag it failed with", () => {
+    const md = failingStepMd(Exit.fail(new ExecFailed({ exitCode: 101, stderrTail: "x" })), {
+      name: "measure",
+      errorTag: "ExecFailed",
+    });
+    expect(md).toBe("**Failing step:** `measure` — `ExecFailed`");
+  });
+
+  it("takes the step a StepFailed names when no step row recorded the failure", () => {
+    const md = failingStepMd(
+      Exit.fail(new StepFailed({ step: "build-report", cause: "exit 2" })),
+      undefined,
+    );
+    expect(md).toBe("**Failing step:** `build-report` — `StepFailed`");
+  });
+
+  it("ignores a step row whose tag differs from the run's failure", () => {
+    const md = failingStepMd(Exit.fail(new SecretsMissing({ keys: ["K"] })), {
+      name: "checkout",
+      errorTag: "ExecFailed",
+    });
+    expect(md).toBe("**Failed outside any step** — `SecretsMissing`");
+  });
+
+  it("is undefined for a success Exit", () => {
+    expect(failingStepMd(Exit.succeed(1), undefined)).toBeUndefined();
+  });
+});
+
+describe("unrecordedFailureTag", () => {
+  it("names the tag of a typed failure no step row recorded", () => {
+    const exit = Exit.fail(new SandboxProcessLost({ launches: 2 }));
+    expect(unrecordedFailureTag(exit, undefined)).toBe("SandboxProcessLost");
+  });
+
+  it("names it when the last failed step recorded a different tag", () => {
+    const exit = Exit.fail(new SandboxProcessLost({ launches: 2 }));
+    expect(unrecordedFailureTag(exit, { name: "collect", errorTag: "StepFailed" })).toBe("SandboxProcessLost");
+  });
+
+  it("is absent when the failed step already carries the tag", () => {
+    const exit = Exit.fail(new ExecFailed({ exitCode: 1, stderrTail: "x" }));
+    expect(unrecordedFailureTag(exit, { name: "measure", errorTag: "ExecFailed" })).toBeUndefined();
+  });
+
+  it("is absent for a success, a skip and a defect", () => {
+    expect(unrecordedFailureTag(Exit.succeed(1), undefined)).toBeUndefined();
+    expect(unrecordedFailureTag(Exit.fail(new RunSkipped({ reason: "no command" })), undefined)).toBeUndefined();
+    expect(unrecordedFailureTag(Exit.die(new Error("boom")), undefined)).toBeUndefined();
   });
 });

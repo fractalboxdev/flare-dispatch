@@ -1,36 +1,252 @@
 import { Effect, Schema } from "effect";
 import {
   AcceptanceFailed,
+  checks,
+  type CommitPullRequest,
+  config,
   defineRun,
+  DEPLOYED_VERSION_ENV,
+  EXECUTION_CREATED_AT_ENV,
+  github,
   handoffChildAdmission,
+  io,
+  isTerminalChildStatus,
+  RunSkipped,
   sandbox,
   step,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
   ensureWorkspace,
   fanOut,
-  waitForChildrenDurably,
+  prebuildCargoBinary,
+  prebuiltCommand,
+  waitForAnyChildDurably,
   workspace,
+  type CompileCacheLane,
+  type PrebuiltBinary,
 } from "@fractalboxdev/flare-dispatch-core/primitives";
+import { check } from "./check";
 
 const REPO = "fractalboxdev/contextful";
-const DISCOVER = "cargo run --locked -q -p contextful-ci -- stages --parts";
+const SHA40 = /^[a-f0-9]{40}$/i;
+const ZERO_SHA = "0".repeat(40);
+export const CI_PACKAGE = "contextful-ci";
+const CARGO_RUN_CI = `cargo run --locked -q -p ${CI_PACKAGE} --`;
+const DISCOVER = `${CARGO_RUN_CI} stages --parts`;
 const STAGE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
 const MAX_STAGES = 64;
 const MAX_STAGE_LIST_BYTES = 4096;
-const STAGE_CONCURRENCY = 2;
+/** Moves the head checkout's work tree to `sha`; the clone holds every branch's history. */
+const checkoutCommand = (sha: string): string =>
+  `git -c advice.detachedHead=false checkout --quiet --force --detach ${sha}`;
+/**
+ * Each part's exec deadline. One cold build of the binary under one feature set
+ * takes 550–760 s, and its ordinary suite another ~1100 s, so a single part needs
+ * up to ~1750 s; 2700 s keeps that at about 65% of the deadline.
+ */
+export const STAGE_TIMEOUT_SEC = 2700;
+/** Admission queue age a part may wait before it starts. */
+const STAGE_QUEUE_SEC = 90 * 60;
+/** A spawned part's whole budget: its queue age plus the check run's ceiling. */
+const STAGE_BUDGET_MS = (STAGE_QUEUE_SEC + check.limits.maxDurationSec) * 1000;
+/** Status-poll cadence while the window is full. */
+const STAGE_POLL_EVERY = "1 minute";
+
+/**
+ * Parts in flight at once, unless `contextful-gate.window:<repo>` in the config
+ * store names another value.
+ *
+ * Fairness. Admission is a FIFO counting semaphore per sandbox pool
+ * (`ADMISSION_CAP`, default 16). A part enqueues at its own spawn time: the
+ * gate hands its admission row off right after its first spawn, and a child
+ * whose parent holds no row keeps its own clock (run-admission-d1.ts). So a run
+ * that arrives while a gate is live queues behind only the parts already
+ * spawned, never behind the parts the gate spawns later, and each gate
+ * contributes at most `window` rows — queued or admitted — to that line.
+ * {@link WINDOW_MAX} keeps one gate four below the default cap; concurrent
+ * gates on different pull requests each add their own `window`, and rows past
+ * the cap queue in arrival order like any other run. A deploy whose
+ * `ADMISSION_CAP` is lower sets the window below it.
+ */
+export const WINDOW_DEFAULT = 10;
+export const WINDOW_MAX = 12;
+const windowKey = (repo: string): string => `contextful-gate.window:${repo}`;
+
+/** The configured window, clamped to `[1, WINDOW_MAX]`; absent or garbage → the default. */
+export const parseWindow = (raw: string | undefined): number => {
+  const n = Number(raw?.trim());
+  return raw === undefined || raw.trim() === "" || !Number.isInteger(n) || n < 1
+    ? WINDOW_DEFAULT
+    : Math.min(n, WINDOW_MAX);
+};
+
+/**
+ * The check-run name a part's `check` child posts (`flare-dispatch/check:<label>`,
+ * apps/dispatcher/src/check-name.ts); a part not dispatched is posted under it.
+ */
+export const partCheckName = (stage: string): string => `flare-dispatch/check:${stage}`;
+export const NOT_AFFECTED_SUMMARY = "not affected by this change";
+
+/**
+ * The two-tier gate (specs/adr/0009-fast-trustworthy-verdicts.md § Two-tier
+ * gate). `gate.lightLabels:<repo>` lists the light parts; every other part is
+ * heavy. A pull-request gate runs the light parts, and a push to the default
+ * branch runs the heavy parts once per head. Unset, every part is heavy and a
+ * pull-request gate runs all of them, as it does without the key.
+ */
+export const lightLabelsKey = (repo: string): string => `gate.lightLabels:${repo}`;
+
+/**
+ * The configured light labels: a JSON list of strings or a comma-separated
+ * list. Absent, blank, empty or malformed → `undefined`: every part is heavy.
+ */
+export const parseLightLabels = (raw: string | undefined): readonly string[] | undefined => {
+  const text = raw?.trim() ?? "";
+  if (text === "") return undefined;
+  let labels: readonly string[];
+  if (text.startsWith("[") || text.startsWith("{")) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return undefined;
+    }
+    if (!Array.isArray(parsed) || parsed.some((label) => typeof label !== "string")) return undefined;
+    labels = parsed as string[];
+  } else {
+    labels = text.split(",");
+  }
+  const trimmed = [...new Set(labels.map((label) => label.trim()).filter((label) => label !== ""))];
+  return trimmed.length === 0 ? undefined : trimmed;
+};
+
+/** Which half of a two-tier gate one execution runs. */
+export type GateTier = "pull-request" | "heavy";
+
+/**
+ * The parts one tier dispatches, in plan order. With no light labels a
+ * pull-request gate dispatches every part and the heavy tier none: the split
+ * is off.
+ */
+export const tierParts = (
+  dispatch: readonly string[],
+  lightLabels: readonly string[] | undefined,
+  tier: GateTier,
+): readonly string[] => {
+  if (lightLabels === undefined) return tier === "pull-request" ? dispatch : [];
+  const light = new Set(lightLabels);
+  return dispatch.filter((stage) => light.has(stage) === (tier === "pull-request"));
+};
+
+/**
+ * Why a gate stops spawning before every part has run. A `spend budget
+ * reached: …` reason is the deploy's monthly budget closing before a window
+ * spawns (specs/adr/0006-spend-guard.md).
+ */
+export type StopReason =
+  | "head superseded"
+  | "pull request closed"
+  | "admission backlog"
+  | `spend budget reached: ${string}`;
+
+/** Whether the gated pull request is still open at the gated commit. */
+export type Liveness = { readonly live: true } | { readonly live: false; readonly reason: StopReason };
+
+const LIVE: Liveness = { live: true };
+
+/**
+ * Decide liveness from the gated pull request's state. An input naming `pr`
+ * passes that PR (`pulls/{pr}`); an input naming none passes the PRs GitHub
+ * associates with the gated commit (`commits/{sha}/pulls`) and gates every one
+ * headed in the gated repository. A gated PR open at `sha` is live; one open at
+ * another head is superseded; one closed or merged is closed. No gated PR in
+ * the answer is unknown, and unknown is live: `commits/{sha}/pulls` answers []
+ * alike for a commit force-pushed off its branch and for one no PR ever held,
+ * which is why an input naming `pr` reads `pulls/{pr}` instead.
+ */
+export const prLiveness = (
+  input: { readonly repo: string; readonly sha: string; readonly pr?: number | undefined },
+  prs: readonly CommitPullRequest[],
+): Liveness => {
+  const gated = prs.filter((pr) =>
+    input.pr !== undefined ? pr.number === input.pr : pr.headRepo === input.repo,
+  );
+  if (gated.length === 0) return LIVE;
+  const open = gated.filter((pr) => pr.state === "open");
+  if (open.some((pr) => pr.headSha.toLowerCase() === input.sha.toLowerCase())) return LIVE;
+  return { live: false, reason: open.length > 0 ? "head superseded" : "pull request closed" };
+};
+
+/**
+ * The gated pull request's liveness: `pulls/{pr}` when the input names it,
+ * `commits/{sha}/pulls` otherwise. An unreadable answer is live.
+ */
+export const readLiveness = (input: {
+  readonly repo: string;
+  readonly sha: string;
+  readonly pr?: number | undefined;
+}) =>
+  (input.pr !== undefined
+    ? github.pullRequest({ repo: input.repo, number: input.pr }).pipe(Effect.map((pr) => [pr]))
+    : github.commitPullRequests({ repo: input.repo, sha: input.sha })
+  ).pipe(
+    Effect.map((prs) => prLiveness(input, prs)),
+    Effect.orElseSucceed((): Liveness => LIVE),
+  );
+
+/** The summary on the check of a part the gate did not run. */
+export const unrunSummary = (reason: StopReason, timedOut: readonly string[]): string =>
+  reason === "admission backlog"
+    ? `not run — admission backlog: ${timedOut.join(", ")} waited past the ${STAGE_QUEUE_SEC / 60}-minute queue age, so the gate spawns no further parts into a saturated pool`
+    : `not run — ${reason}`;
 
 const Input = Schema.Struct({
   repo: Schema.Literal(REPO),
   sha: Schema.String.pipe(Schema.pattern(/^[a-f0-9]{40}$/i)),
   baseSha: Schema.String.pipe(Schema.pattern(/^[a-f0-9]{40}$/i)),
+  /** The pull request; a newer gate run of the same one supersedes this run. */
+  pr: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  /**
+   * The pull request's `updated_at` in ms: the revision order within its
+   * supersession group, so a later push outranks an earlier one whichever
+   * gate registers first. A reopen adds {@link REOPEN_RANK_OFFSET_MS}.
+   */
+  revisedAt: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.nonNegative())),
+  /** `heavy`: a push to the default branch, which runs the heavy parts. Absent: a pull-request gate. */
+  tier: Schema.optional(Schema.Literal("heavy")),
+  /** The default branch a heavy-tier push landed on; its head is the serial group's current revision. */
+  branch: Schema.optional(Schema.String),
 });
 
 type InputType = Schema.Schema.Type<typeof Input>;
 
+/**
+ * The compile-cache lane a gate's parts write: `base` from a default-branch
+ * push, the pull request's own lane from a pull-request gate, and none
+ * (read-only) from a gate that names no pull request.
+ */
+export const compileCacheLane = (input: InputType): CompileCacheLane => (input.tier === "heavy" ? "base" : input.pr !== undefined ? `pr-${input.pr}` : "read-only");
+
+/**
+ * A reopen ranks this far above its `updated_at`, past the close marker's
+ * 1 ms (apps/dispatcher/src/pr-close.ts): GitHub reports `updated_at` to the
+ * second, and a close and reopen in one second would otherwise leave the
+ * reopen's gate below the marker, standing itself down. A push in the
+ * reopen's own second ranks below that gate and stands down; the reopen's gate
+ * then stops as head superseded, and the next push starts a gate.
+ */
+export const REOPEN_RANK_OFFSET_MS = 2;
+
 const Output = Schema.Struct({
   stages: Schema.Number,
   failed: Schema.Array(Schema.String),
+  notAffected: Schema.Array(Schema.String),
+  /**
+   * The affected parts this tier left to the other one (two-tier gate only):
+   * the heavy parts on a pull request, the light parts on a default-branch
+   * push. Absent when the split is off.
+   */
+  deferred: Schema.optional(Schema.Array(Schema.String)),
 });
 
 /** A malformed or empty discovery cannot quietly remove required checks. */
@@ -50,7 +266,47 @@ export const parseStages = (stdout: string): readonly string[] | undefined => {
   return stages;
 };
 
-/** Base-only checks remain required; complete base-aware parts refine their legacy whole check. */
+/**
+ * One part's command: the binary the parent built when there is one, `cargo run`
+ * otherwise — and on the child too, when the restored binary is absent or broken.
+ */
+export const stageCommand = (
+  stage: string,
+  baseSha: string,
+  prebuilt: PrebuiltBinary | null,
+): string => {
+  const args = `gate --predecessors --stage ${stage} --base ${baseSha}`;
+  return prebuilt === null
+    ? `${CARGO_RUN_CI} ${args}`
+    : prebuiltCommand({ path: prebuilt.path, fallback: CARGO_RUN_CI, args });
+};
+
+/**
+ * The `--affected` subset of the head's required parts. Empty output is a valid
+ * answer — nothing the diff reaches. A part outside `required`, a duplicate or a
+ * malformed line is `undefined`, and the gate then dispatches every part.
+ */
+export const parseAffected = (
+  stdout: string,
+  required: readonly string[],
+): readonly string[] | undefined => {
+  if (new TextEncoder().encode(stdout).length > MAX_STAGE_LIST_BYTES) return undefined;
+  const lines = stdout
+    .trim()
+    .split(/\r?\n/)
+    .map((stage) => stage.trim())
+    .filter((stage) => stage !== "");
+  const known = new Set(required);
+  if (lines.some((stage) => !known.has(stage)) || new Set(lines).size !== lines.length)
+    return undefined;
+  return lines;
+};
+
+/**
+ * The required set: the head's parts plus every base-only part, so a change
+ * cannot drop a required check by deleting it. A complete base-aware head
+ * discovery refines the base's whole `test-first` check into its parts.
+ */
 export const mergeStages = (
   head: readonly string[],
   base: readonly string[],
@@ -63,32 +319,139 @@ export const mergeStages = (
   return [...new Set([...head, ...base.filter((stage) => !(splitTestFirst && stage === "test-first"))])];
 };
 
+export type StagePlan = {
+  /** Every required part, in run order. */
+  readonly required: readonly string[];
+  /** The parts that run: the head's affected parts, then every base-only part. */
+  readonly dispatch: readonly string[];
+  /** Head parts the diff cannot reach — posted green without running. */
+  readonly notAffected: readonly string[];
+};
+
+/**
+ * Which required parts run. The head's `--affected` output is untrusted, so
+ * every required part runs until a trusted selector is available.
+ */
+export const planStages = (
+  head: readonly string[],
+  base: readonly string[],
+  discovery: { readonly headDiscoveredAgainstBase: boolean },
+  _affected: readonly string[] | undefined,
+): StagePlan => {
+  const required = mergeStages(head, base, discovery);
+  return { required, dispatch: required, notAffected: [] };
+};
+
 export const contextfulGate = defineRun({
   name: "contextful-gate",
-  version: "1.0.0",
+  // 1.5.0 — a part writes the compile cache's default-branch lane only from a
+  // default-branch push, and its own pull request's lane otherwise.
+  // 1.4.0 — every part compiles through the shared compile cache.
+  // 1.3.0 — two-tier gate: `gate.lightLabels:<repo>` splits light parts (pull
+  // requests) from heavy parts (pushes to the default branch).
+  // 1.2.2 — a reopen ranks above the close marker of its own second.
+  version: "1.5.0",
   inputs: Input,
   outputs: Output,
   triggers: [
     {
       event: "pull_request",
       actions: ["opened", "synchronize", "reopened", "ready_for_review"],
+      // A reopen keys on its own `updated_at`: the close terminated the gate
+      // keyed on this head and base, and a reopen without a push must start a
+      // new one rather than collapse onto it.
       idempotencyKey: ({ payload }) =>
-        `contextful-gate:${String(payload.pull_request?.number ?? "")}:${String(payload.pull_request?.head?.sha ?? "")}:${String(payload.pull_request?.base?.sha ?? "")}`,
+        `contextful-gate:${String(payload.pull_request?.number ?? "")}:${String(payload.pull_request?.head?.sha ?? "")}:${String(payload.pull_request?.base?.sha ?? "")}${
+          payload.action === "reopened" ? `:reopened:${String(payload.pull_request?.updated_at ?? "")}` : ""
+        }`,
       gate: ({ payload }) =>
         payload.repository?.full_name === REPO &&
         payload.pull_request?.head?.repo?.full_name === REPO,
+      inputs: ({ payload }): InputType => {
+        const pr = Number(payload.pull_request?.number);
+        const revisedAt = Date.parse(String(payload.pull_request?.updated_at ?? ""));
+        return {
+          repo: REPO,
+          sha: String(payload.pull_request?.head?.sha ?? ""),
+          baseSha: String(payload.pull_request?.base?.sha ?? ""),
+          ...(Number.isInteger(pr) && pr > 0 ? { pr } : {}),
+          ...(Number.isInteger(revisedAt) && revisedAt >= 0
+            ? { revisedAt: revisedAt + (payload.action === "reopened" ? REOPEN_RANK_OFFSET_MS : 0) }
+            : {}),
+        };
+      },
+    },
+    {
+      // The heavy tier: one gate per new default-branch head. The receiver
+      // dispatches it only when `gate.lightLabels:<repo>` exists (`optIn`).
+      event: "push",
+      idempotencyKey: ({ payload }) => `contextful-gate:push:${String(payload.after ?? "")}`,
+      gate: ({ payload }) =>
+        payload.repository?.full_name === REPO &&
+        typeof payload.repository?.default_branch === "string" &&
+        payload.ref === `refs/heads/${payload.repository.default_branch}` &&
+        typeof payload.after === "string" && SHA40.test(payload.after) && payload.after !== ZERO_SHA &&
+        typeof payload.before === "string" && SHA40.test(payload.before) && payload.before !== ZERO_SHA,
       inputs: ({ payload }): InputType => ({
         repo: REPO,
-        sha: String(payload.pull_request?.head?.sha ?? ""),
-        baseSha: String(payload.pull_request?.base?.sha ?? ""),
+        sha: String(payload.after),
+        baseSha: String(payload.before),
+        tier: "heavy",
+        branch: String(payload.repository?.default_branch),
       }),
     },
   ],
+  // A pull-request gate reads its light labels in the body and needs no
+  // opt-in; a heavy-tier push exists only for a repo that lists them.
+  optIn: ({ input }) => (input.tier === "heavy" ? [lightLabelsKey(input.repo)] : []),
+  // Heavy-tier gates of one repo never overlap: a newer default-branch head
+  // replaces a waiting older one, and a head that is no longer current skips.
+  serialize: (input) =>
+    input.tier === "heavy"
+      ? {
+          group: `contextful-gate:heavy:${input.repo}`,
+          revision: input.sha,
+          ...(input.branch !== undefined && input.branch !== ""
+            ? {
+                current: github.branchHead({ repo: input.repo, branch: input.branch }).pipe(
+                  Effect.map((sha): string | undefined => sha),
+                  Effect.orElseSucceed(() => undefined),
+                ),
+              }
+            : {}),
+        }
+      : undefined,
+  // One gate run per pull request is live: a newer revision cancels the older
+  // run, its children and their checks (apps/dispatcher/src/supersede.ts), and
+  // the pull request's close cancels the live one (apps/dispatcher/src/pr-close.ts).
+  supersede: (input) =>
+    input.pr === undefined
+      ? undefined
+      : {
+          group: `contextful-gate:${input.repo}#${input.pr}`,
+          ...(input.revisedAt !== undefined ? { order: input.revisedAt } : {}),
+        },
+  // The gate reads every part's verdict: a part still queued once the gate
+  // has ended leaves the admission queue (apps/dispatcher/src/admission-parent.ts).
+  joinsChildren: true,
   limits: { maxDurationSec: 30 * 3600, admissionMaxQueueAgeSec: 90 * 60 },
   run: (input) =>
     Effect.gen(function* () {
+      const tier: GateTier = input.tier === "heavy" ? "heavy" : "pull-request";
+      const lightLabels = yield* step("resolve-tiers", () =>
+        config.get(lightLabelsKey(input.repo)).pipe(Effect.map((raw) => parseLightLabels(raw) ?? null)),
+      );
+      // The heavy tier runs only beside a configured light tier.
+      if (tier === "heavy" && lightLabels === null) {
+        return yield* Effect.fail(
+          new RunSkipped({ reason: `two-tier gate not configured — ${lightLabelsKey(input.repo)} is unset` }),
+        );
+      }
+      // Discovery runs in the execution's one container, the one its admission
+      // slot pays for: head first, then the base in the same checkout, so the
+      // base build reuses the head's `target/` and compiles only what differs.
       const { container, dir } = yield* step("checkout", () =>
-        workspace({ repo: input.repo, sha: input.sha }),
+        workspace({ repo: input.repo, sha: input.sha, install: true }),
       );
       const discovery = yield* step(
         "discover-stages",
@@ -122,42 +485,74 @@ export const contextfulGate = defineRun({
         { timeoutSec: 1920, retries: 3, retryOn: ["ExecFailed", "StepFailed", "CheckoutFailed"] },
       );
       const headStages = discovery.exitCode === 0 ? parseStages(discovery.stdout) : undefined;
-      const baseWorkspace = yield* step("checkout-base", () =>
-        workspace({ repo: input.repo, sha: input.baseSha }),
-      );
+      // Discovery compiled the tool in this checkout; storing that one executable
+      // spares every part its own cold compile. `null` keeps the parts on cargo run.
+      const prebuilt =
+        headStages === undefined
+          ? null
+          : yield* step(
+              "prebuild-ci-binary",
+              () =>
+                ensureWorkspace({ current: { container, dir }, repo: input.repo, sha: input.sha, install: true }).pipe(
+                  Effect.flatMap((ws) => prebuildCargoBinary({ workspace: ws, pkg: CI_PACKAGE, bin: CI_PACKAGE })),
+                ),
+              { timeoutSec: 1920, retries: 1, retryOn: ["CheckoutFailed"] },
+            ).pipe(Effect.orElseSucceed((): PrebuiltBinary | null => null));
+      // PR-head code can choose its own `--affected` answer, including an empty
+      // one. Only a trusted selector may authorize synthetic success checks.
       const baseDiscovery = yield* step(
         "discover-base-stages",
         () =>
-          ensureWorkspace({ current: baseWorkspace, repo: input.repo, sha: input.baseSha }).pipe(
+          ensureWorkspace({ current: { container, dir }, repo: input.repo, sha: input.sha }).pipe(
             Effect.flatMap((ws) =>
-              sandbox
-                .exec({
+              Effect.gen(function* () {
+                const moved = yield* sandbox.exec({
                   container: ws.container,
                   cwd: ws.dir,
+                  command: checkoutCommand(input.baseSha),
+                  timeoutSec: 120,
+                });
+                // A base the head clone lacks gets a checkout of its own, in the
+                // same container.
+                const baseWs =
+                  moved.exitCode === 0 ? ws : yield* workspace({ repo: input.repo, sha: input.baseSha });
+                const result = yield* sandbox.exec({
+                  container: baseWs.container,
+                  cwd: baseWs.dir,
                   command: DISCOVER,
                   timeoutSec: 1800,
-                })
-                .pipe(Effect.map((result) => ({ ...result, container: ws.container }))),
+                });
+                return { ...result, container: baseWs.container };
+              }),
             ),
           ),
-        { timeoutSec: 1920, retries: 3, retryOn: ["ExecFailed", "StepFailed", "CheckoutFailed"] },
+        { timeoutSec: 2100, retries: 3, retryOn: ["ExecFailed", "StepFailed", "CheckoutFailed"] },
       );
-      const baseStages =
-        baseDiscovery.exitCode === 0 ? parseStages(baseDiscovery.stdout) : undefined;
+      // The gate's container goes before its admission slot does: the parts
+      // run in containers of their own.
       yield* step("release-discovery-container", () =>
         sandbox.destroy({ container: baseDiscovery.container }),
       );
-      if (headStages === undefined || baseStages === undefined) {
+      const head = {
+        exitCode: discovery.exitCode,
+        headStages,
+        headDiscoveredAgainstBase: discovery.headDiscoveredAgainstBase,
+      };
+      const base = {
+        exitCode: baseDiscovery.exitCode,
+        stages: baseDiscovery.exitCode === 0 ? parseStages(baseDiscovery.stdout) : undefined,
+      };
+      if (head.headStages === undefined || base.stages === undefined) {
         return yield* Effect.fail(
           new AcceptanceFailed({
-            exitCode: discovery.exitCode || baseDiscovery.exitCode || 1,
+            exitCode: head.exitCode || base.exitCode || 1,
             summaryMd:
               "The head or base gate stage list is empty, invalid, or could not be discovered.",
           }),
         );
       }
-      const stages = mergeStages(headStages, baseStages, discovery);
-      if (stages.length > MAX_STAGES) {
+      const plan = planStages(head.headStages, base.stages, head, undefined);
+      if (plan.required.length > MAX_STAGES) {
         return yield* Effect.fail(
           new AcceptanceFailed({
             exitCode: 1,
@@ -165,48 +560,207 @@ export const contextfulGate = defineRun({
           }),
         );
       }
+      // This tier's parts. The other tier's parts post no check here.
+      const dispatch = tierParts(plan.dispatch, lightLabels ?? undefined, tier);
 
-      const failed: string[] = [];
-      for (let offset = 0; offset < stages.length; offset += STAGE_CONCURRENCY) {
-        const batch = stages.slice(offset, offset + STAGE_CONCURRENCY);
-        const handles = yield* step(`spawn-stages-${offset}`, () =>
-          fanOut({
-            run: "check",
-            items: batch,
-            concurrency: STAGE_CONCURRENCY,
-            toInput: (stage) => ({
-              repo: input.repo,
-              sha: input.sha,
-              checkLabel: stage,
-              command: `cargo run --locked -q -p contextful-ci -- gate --predecessors --stage ${stage} --base ${input.baseSha}`,
-              failOnNonZeroExit: true,
-              timeoutSec: 1800,
-              admissionMaxQueueAgeSec: 90 * 60,
-              install: false,
-              secrets: [],
-            }),
+      // Branch protection requires every part's check: a part the diff cannot
+      // reach is posted green under the same name instead of running. Creating
+      // and concluding are separate checkpoints per part, so a retried
+      // conclusion never opens a second check-run.
+      yield* Effect.forEach(
+        plan.notAffected,
+        (stage) =>
+          Effect.gen(function* () {
+            const name = partCheckName(stage);
+            const output = { title: name, summary: NOT_AFFECTED_SUMMARY };
+            const checkRunId = yield* step(`open-not-affected-${stage}`, () =>
+              checks.create({ repo: input.repo, sha: input.sha, name, output }),
+            );
+            yield* step(`conclude-not-affected-${stage}`, () =>
+              checks.update({ repo: input.repo, checkRunId, conclusion: "success", output }),
+            );
           }),
-        );
-        if (offset === 0) {
-          yield* step("handoff-admission", () => handoffChildAdmission());
-        }
-        const results = yield* waitForChildrenDurably({
-            name: `await-stages-${offset}`,
-            ids: handles.map((handle) => handle.executionId),
-            timeout: "130 minutes",
+        { concurrency: 4, discard: true },
+      );
+
+      const window = yield* step("resolve-window", () =>
+        config.get(windowKey(input.repo)).pipe(Effect.map(parseWindow)),
+      );
+
+      // Sliding window: the next part spawns as soon as any running part
+      // settles. Every spawn and every observation is a checkpoint, so a replay
+      // walks the same sequence of spawns and slot frees. The `-parts-` step
+      // names share no checkpoint with the paired batches' `-stages-` steps, so
+      // a gate in flight across a deploy re-spawns under new names; a child's
+      // instance id derives from its input, so the re-spawn finds the same
+      // children.
+      //
+      // Each spawn step first asks GitHub whether the pull request is still
+      // open at this commit, and spawns nothing when it is not; an unreadable
+      // answer spawns as before. The read lives inside the spawn checkpoint, so
+      // an instance replaying spawns cached before the read existed replays
+      // them all before the first fresh read. A part that times out in the
+      // admission queue also stops it: the pool is saturated, and further
+      // windows would only queue behind the backlog.
+      const queue = [...dispatch];
+      const running: { readonly stage: string; readonly id: string; readonly expiresAt: number }[] = [];
+      const failed = new Set<string>();
+      const timedOut: string[] = [];
+      let stopped: StopReason | undefined;
+      let spawned = 0;
+      const createdAt = (yield* io.env(EXECUTION_CREATED_AT_ENV)) ?? "unknown";
+      const deployedVersion = (yield* io.env(DEPLOYED_VERSION_ENV)) ?? "unknown";
+      for (let round = 0; stopped === undefined && (queue.length > 0 || running.length > 0); round++) {
+        const free = window - running.length;
+        if (queue.length > 0 && free > 0) {
+          // Logged on every invocation that reaches a spawn, replays included:
+          // an instance created before a deploy that logs this line runs the
+          // deployed code.
+          yield* io.log("info", `spawn-parts-${spawned}: execution created ${createdAt}, deployed version ${deployedVersion}`, {
+            step: `spawn-parts-${spawned}`,
+            executionCreatedAt: createdAt,
+            deployedVersion,
           });
-        results.forEach((result, index) => {
-          if (result.status !== "success") failed.push(batch[index]!);
+          const batch = queue.slice(0, free);
+          const spawn = yield* step(`spawn-parts-${spawned}`, () =>
+            Effect.gen(function* () {
+              // A default-branch head has no open pull request to outlive.
+              const liveness = tier === "heavy" ? LIVE : yield* readLiveness(input);
+              if (!liveness.live) return { stopped: liveness.reason };
+              const fanned = yield* fanOut({
+                run: "check",
+                items: batch,
+                concurrency: batch.length,
+                toInput: (stage) => ({
+                  repo: input.repo,
+                  sha: input.sha,
+                  checkLabel: stage,
+                  command: stageCommand(stage, input.baseSha, prebuilt),
+                  failOnNonZeroExit: true,
+                  timeoutSec: STAGE_TIMEOUT_SEC,
+                  admissionMaxQueueAgeSec: STAGE_QUEUE_SEC,
+                  // Stays on: what the stage runs is the consumer's `contextful-ci`,
+                  // and its `.cargo/config.toml` may set `net.offline`, so whether
+                  // the stage fetches its own crates is not decidable here
+                  // (specs/adr/0007-cost-efficient-execution.md § Fan-out parts).
+                  install: true,
+                  // Every part compiles the workspace; the shared compile
+                  // cache (sccache over the dispatcher's compile-cache route)
+                  // replaces each part's cold compile with cache reads.
+                  compileCache: true,
+                  compileCacheLane: compileCacheLane(input),
+                  ...(prebuilt === null
+                    ? {}
+                    : { restore: [{ key: prebuilt.key, base: prebuilt.base, paths: prebuilt.paths }] }),
+                  secrets: [],
+                }),
+              }).pipe(
+                // The monthly budget closed: spawn nothing more, post the
+                // unrun parts, and end the gate skipped with that reason.
+                Effect.catchTag("RunSkipped", (skip) =>
+                  Effect.succeed({ stopped: skip.reason as StopReason }),
+                ),
+              );
+              if ("stopped" in fanned) return fanned;
+              return { handles: fanned, spawnedAt: yield* io.now };
+            }),
+          );
+          if ("stopped" in spawn) {
+            stopped = spawn.stopped;
+            break;
+          }
+          const { handles, spawnedAt } = spawn;
+          queue.splice(0, batch.length);
+          if (spawned === 0) {
+            yield* step("handoff-admission", () => handoffChildAdmission());
+          }
+          batch.forEach((stage, index) => {
+            running.push({
+              stage,
+              id: handles[index]!.executionId,
+              // A part still inside its queue age and its check run's ceiling
+              // is never reported failed.
+              expiresAt: spawnedAt + STAGE_BUDGET_MS,
+            });
+          });
+          spawned += batch.length;
+        }
+        const records = yield* waitForAnyChildDurably({
+          name: `await-parts-${round}`,
+          ids: running.map((part) => part.id),
+          expiresAt: Math.min(...running.map((part) => part.expiresAt)),
+          pollEvery: STAGE_POLL_EVERY,
         });
+        const settled = new Map(
+          records
+            .filter((record) => isTerminalChildStatus(record.status))
+            .map((record) => [record.executionId, record]),
+        );
+        for (let index = running.length - 1; index >= 0; index--) {
+          const part = running[index]!;
+          const record = settled.get(part.id);
+          if (record === undefined) continue;
+          if (record.status !== "success") failed.add(part.stage);
+          if (record.failureTag === "AdmissionTimedOut") timedOut.push(part.stage);
+          running.splice(index, 1);
+        }
+        if (timedOut.length > 0 && queue.length > 0) stopped = "admission backlog";
       }
-      if (failed.length > 0) {
+      if (stopped !== undefined) {
+        // Branch protection requires every part's check: each part never
+        // spawned is posted cancelled, naming why. A part still running or
+        // queued ends on its own; a queued one leaves the queue once this
+        // gate has ended.
+        const reason = stopped;
+        const unrun = [...queue];
+        const timedOutInOrder = dispatch.filter((stage) => timedOut.includes(stage));
+        yield* Effect.forEach(
+          unrun,
+          (stage) =>
+            Effect.gen(function* () {
+              const name = partCheckName(stage);
+              const output = { title: name, summary: unrunSummary(reason, timedOutInOrder) };
+              const checkRunId = yield* step(`open-unrun-${stage}`, () =>
+                checks.create({ repo: input.repo, sha: input.sha, name, output }),
+              );
+              yield* step(`conclude-unrun-${stage}`, () =>
+                checks.update({ repo: input.repo, checkRunId, conclusion: "cancelled", output }),
+              );
+            }),
+          { concurrency: 4, discard: true },
+        );
+        if (reason !== "admission backlog") {
+          return yield* Effect.fail(
+            new RunSkipped({ reason: `${reason} — ${unrun.length} of ${dispatch.length} parts not run` }),
+          );
+        }
+        const failedParts = dispatch.filter((stage) => failed.has(stage));
         return yield* Effect.fail(
           new AcceptanceFailed({
             exitCode: 1,
-            summaryMd: `Gate stages failed: ${failed.join(", ")}`,
+            summaryMd: [
+              `Admission backlog: ${timedOutInOrder.join(", ")} waited past the ${STAGE_QUEUE_SEC / 60}-minute queue age; the gate spawned no further parts.`,
+              `Not run: ${unrun.join(", ")}`,
+              ...(failedParts.length > 0 ? [`Gate stages failed: ${failedParts.join(", ")}`] : []),
+            ].join("\n\n"),
           }),
         );
       }
-      return { stages: stages.length, failed };
+      const failedInOrder = dispatch.filter((stage) => failed.has(stage));
+      if (failedInOrder.length > 0) {
+        return yield* Effect.fail(
+          new AcceptanceFailed({
+            exitCode: 1,
+            summaryMd: `Gate stages failed: ${failedInOrder.join(", ")}`,
+          }),
+        );
+      }
+      const deferred = plan.dispatch.filter((stage) => !dispatch.includes(stage));
+      return {
+        stages: plan.required.length,
+        failed: failedInOrder,
+        notAffected: plan.notAffected,
+        ...(lightLabels === null ? {} : { deferred }),
+      };
     }),
 });

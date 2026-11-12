@@ -34,13 +34,26 @@ import {
   type ChildRunsService,
   ChildSpawnFailed,
   type ChildStatusRecord,
+  isTerminalChildStatus,
+  RunSkipped,
 } from "@fractalboxdev/flare-dispatch-core";
 import { makeRunAdmissionD1 } from "./run-admission-d1";
 
-/** The minimal CF `Workflow`-binding surface `spawn` needs. */
+/**
+ * The minimal CF `Workflow`-binding surface: `spawn` creates instances, and
+ * `poll` reads an instance's engine status when its D1 row has not settled.
+ */
 export type WorkflowBindingLike = {
   readonly create: (opts: { id: string; params: unknown }) => Promise<unknown>;
+  readonly get?: (id: string) => Promise<{ status: () => Promise<{ status: string }> }>;
 };
+
+/**
+ * Engine states in which an instance runs no more code. A child in one of these
+ * whose row is still non-terminal never wrote its verdict (the terminal D1
+ * write failed, or the instance died first), so the row will never settle.
+ */
+const ENDED_INSTANCE = new Set(["errored", "terminated", "complete"]);
 
 /** The github context children inherit from their spawning parent. */
 export type ChildGithubContext = {
@@ -73,6 +86,14 @@ export type ChildRunsLiveConfig = {
    * Workflow has no request to infer it from). Absent → relative paths.
    */
   readonly origin?: string;
+  /**
+   * The deploy's monthly-budget read (ADR-0006): resolves the `RunSkipped`
+   * reason when month-to-date spend is at or over the budget, `undefined`
+   * while it is open; rejects when spend is unreadable. The dispatcher wires
+   * it over D1 + `CONFIG_KV`. Absent = a runtime with no spend guard, the
+   * same as an `unlimited` budget.
+   */
+  readonly spendGate?: () => Promise<string | undefined>;
 };
 
 /** Map a raw `executions.status` cell to the capability's `ChildRunStatus`. */
@@ -142,7 +163,19 @@ export const deriveChildInstanceId = (opts: {
 
 /** Build the live `ChildRuns` Layer bound to a CF `Workflow` binding. */
 export const makeChildRunsLive = (cfg: ChildRunsLiveConfig): Layer.Layer<ChildRuns> => {
+  const spendGate = cfg.spendGate;
   const service: ChildRunsService = {
+    spendGate: (run) =>
+      spendGate === undefined
+        ? Effect.void
+        : Effect.tryPromise({
+            try: spendGate,
+            catch: (cause) => new ChildSpawnFailed({ run, instanceId: "spend-gate", cause }),
+          }).pipe(
+            Effect.flatMap((closed) =>
+              closed === undefined ? Effect.void : Effect.fail(new RunSkipped({ reason: closed })),
+            ),
+          ),
     handoffAdmission: () =>
       makeRunAdmissionD1(cfg.db).release(cfg.parentExecutionId).pipe(Effect.orDie),
     spawn: ({ run, input, instanceId }) => {
@@ -194,26 +227,73 @@ export const makeChildRunsLive = (cfg: ChildRunsLiveConfig): Layer.Layer<ChildRu
       if (ids.length === 0) {
         return Effect.succeed([] as readonly ChildStatusRecord[]);
       }
-      const placeholders = ids.map(() => "?").join(", ");
-      return Effect.tryPromise(async () => {
+      const readRows = async (wanted: readonly string[]) => {
         const { results } = await cfg.db
           .prepare(
-            `SELECT id, status, summary_json
-               FROM executions
-              WHERE id IN (${placeholders})`,
+            `SELECT e.id, e.status, e.summary_json, e.check_run_id,
+                    (SELECT s.error_tag FROM steps AS s
+                      WHERE s.execution_id = e.id AND s.status = 'failure' AND s.error_tag IS NOT NULL
+                      ORDER BY s.completed_at DESC LIMIT 1) AS failure_tag
+               FROM executions AS e
+              WHERE e.id IN (${wanted.map(() => "?").join(", ")})`,
           )
-          .bind(...ids)
-          .all<{ id: string; status: string; summary_json: string | null }>();
+          .bind(...wanted)
+          .all<{
+            id: string;
+            status: string;
+            summary_json: string | null;
+            check_run_id: number | string | null;
+            failure_tag: string | null;
+          }>();
         const byId = new Map(results.map((r) => [r.id, r]));
         // Preserve input order; an id with no row yet is `missing`.
-        return ids.map((id): ChildStatusRecord => {
+        return wanted.map((id): ChildStatusRecord => {
           const row = byId.get(id);
           if (row === undefined) return { executionId: id, status: "missing" };
           return {
             executionId: id,
             status: toChildStatus(row.status),
             ...(row.summary_json !== null ? { summaryJson: row.summary_json } : {}),
+            ...(row.check_run_id !== null ? { checkRunId: String(row.check_run_id) } : {}),
+            ...(row.status === "failure" && row.failure_tag !== null
+              ? { failureTag: row.failure_tag }
+              : {}),
           };
+        });
+      };
+      return Effect.tryPromise(async () => {
+        const fromRows = await readRows(ids);
+        // A non-terminal row whose instance has ended reports `failure`: no
+        // verdict was recorded, and waiting on it only holds the parent until
+        // its deadline. A failed lookup keeps the row's own status.
+        const get = cfg.workflow.get;
+        if (get === undefined) return fromRows;
+        const ended = new Set<string>();
+        await Promise.all(
+          fromRows.map(async (record) => {
+            if (isTerminalChildStatus(record.status)) return;
+            try {
+              const { status } = await (await get(record.executionId)).status();
+              if (ENDED_INSTANCE.has(status)) ended.add(record.executionId);
+            } catch {
+              // Unknown instance state: keep waiting on the row.
+            }
+          }),
+        );
+        if (ended.size === 0) return fromRows;
+        // The row was read before the engine: a child that recorded its verdict
+        // and completed in between is re-read, never misreported as failed.
+        const reread = new Map((await readRows([...ended])).map((r) => [r.executionId, r]));
+        return fromRows.map((record): ChildStatusRecord => {
+          const fresh = reread.get(record.executionId);
+          if (fresh === undefined) return record;
+          return isTerminalChildStatus(fresh.status)
+            ? fresh
+            : {
+                executionId: record.executionId,
+                status: "failure",
+                ...(fresh.checkRunId !== undefined ? { checkRunId: fresh.checkRunId } : {}),
+              };
         });
       }).pipe(
         // A transient D1 read fault must not fail the join — degrade every id to

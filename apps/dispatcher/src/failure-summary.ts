@@ -14,7 +14,9 @@ import type {
   AdmissionTimedOut,
   ExecFailed,
   ExecTimeout,
+  RunDurationExceeded,
   RunError,
+  SandboxProcessLost,
   SecretsMissing,
   SerialQueueTimedOut,
   StepFailed,
@@ -61,6 +63,26 @@ export const serialQueueTimedOutMd = (e: SerialQueueTimedOut): string =>
   `${e.holderRevision !== "" ? `\`${e.holderRevision.slice(0, 12)}\`` : "a peer"}.\n\n` +
   `The execution **never started**. Runs of this group never overlap, and the ` +
   `holder was still alive when the wait gave up. Re-run once it finishes.`;
+
+/**
+ * Render a `RunDurationExceeded`: the run started and was cut at its declared
+ * wall-clock ceiling (issue #42), whatever its steps were still doing.
+ */
+export const runDurationExceededMd = (e: RunDurationExceeded): string =>
+  `⏱ **Exceeded the run ceiling** of ${Math.round(e.maxDurationSec / 60)} min ` +
+  `(\`limits.maxDurationSec: ${e.maxDurationSec}\`).\n\n` +
+  `The run was stopped and its sandbox destroyed. Retries inside the run share ` +
+  `this one ceiling; a suite that needs longer needs a larger \`maxDurationSec\`.`;
+
+/**
+ * Render a `SandboxProcessLost`: the command ran, but every launch's
+ * process vanished with its container, so no exit status exists to report.
+ */
+export const sandboxProcessLostMd = (e: SandboxProcessLost): string =>
+  `🔌 **The sandbox lost the command process** on each of ${e.launches} launches ` +
+  `(container recycled or its supervisor gone).\n\n` +
+  `No exit status was produced, so this is an infrastructure loss — **not a ` +
+  `verdict on the code**. Re-run once the container pool drains.`;
 
 const execFailedMd = (e: ExecFailed): string =>
   `**Exec failed** (exit \`${e.exitCode}\`):\n\n\`\`\`\n${clip(e.stderrTail)}\n\`\`\``;
@@ -116,7 +138,7 @@ export const runSkippedReason = (exit: Exit.Exit<unknown, RunError>): string | u
  * present. `undefined` on success, on a defect/interrupt (`Cause.failureOption`
  * is none — there is no typed failure to read), and on typed failures we have
  * not opted into rendering. `AcceptanceFailed` carries run-authored markdown;
- * `AdmissionTimedOut` / `ExecFailed` / `ExecTimeout` / `StepFailed` /
+ * `AdmissionTimedOut` / `RunDurationExceeded` / `SandboxProcessLost` / `ExecFailed` / `ExecTimeout` / `StepFailed` /
  * `SecretsMissing` render structured infra explanations so a red check is not
  * only a Cloudflare workflow link.
  *
@@ -136,12 +158,72 @@ export const failureSummaryMd = (exit: Exit.Exit<unknown, RunError>): string | u
             Match.tag("AcceptanceFailed", (e) => e.summaryMd),
             Match.tag("AdmissionTimedOut", (e) => admissionTimedOutMd(e)),
             Match.tag("SerialQueueTimedOut", (e) => serialQueueTimedOutMd(e)),
+            Match.tag("RunDurationExceeded", (e) => runDurationExceededMd(e)),
+            Match.tag("SandboxProcessLost", (e) => sandboxProcessLostMd(e)),
             Match.tag("ExecFailed", (e) => execFailedMd(e)),
             Match.tag("ExecTimeout", (e) => execTimeoutMd(e)),
             Match.tag("StepFailed", (e) => stepFailedMd(e)),
             Match.tag("SecretsMissing", (e) => secretsMissingMd(e)),
             Match.orElse(() => undefined),
           ),
+      }),
+  });
+
+/** The last `steps` row an execution recorded as `failure`. */
+export type FailedStepRow = { readonly name: string; readonly errorTag: string | null };
+
+/**
+ * The tag of a typed run failure that no `steps` row carries — a failure
+ * raised outside any step, such as `SandboxProcessLost` from `durableExec`.
+ * The dispatcher records it as a `run` step so a fan-out parent reads it as
+ * `ChildStatusRecord.failureTag`. Absent for a success, a skip and a defect.
+ */
+export const unrecordedFailureTag = (
+  exit: Exit.Exit<unknown, RunError>,
+  failedStep: FailedStepRow | undefined,
+): string | undefined =>
+  Exit.match(exit, {
+    onSuccess: () => undefined,
+    onFailure: (cause) =>
+      Option.match(Cause.failureOption(cause), {
+        onNone: () => undefined,
+        onSome: (failure) => {
+          const tag = (failure as { _tag?: unknown })._tag;
+          if (typeof tag !== "string" || tag === "RunSkipped") return undefined;
+          return failedStep?.errorTag === tag ? undefined : tag;
+        },
+      }),
+  });
+
+/**
+ * Name the step a failed run died in and the tag it failed with — the line a
+ * scheduled run's check-run carries in place of a row only D1 holds. The tag is
+ * the run's typed failure; the step is the one a `StepFailed` names, else the
+ * last failed `steps` row when that row recorded the same tag. A failure no
+ * step recorded reads as outside any step. `undefined` on success and on a
+ * defect or interrupt, which carry no tag.
+ */
+export const failingStepMd = (
+  exit: Exit.Exit<unknown, RunError>,
+  failedStep: FailedStepRow | undefined,
+): string | undefined =>
+  Exit.match(exit, {
+    onSuccess: () => undefined,
+    onFailure: (cause) =>
+      Option.match(Cause.failureOption(cause), {
+        onNone: () => undefined,
+        onSome: (failure) => {
+          // `_tag` read as data for the label, as `describeFailure` in core's step.ts does.
+          const tag = (failure as { _tag?: unknown })._tag;
+          if (typeof tag !== "string") return undefined;
+          const stepName = Match.value(failure).pipe(
+            Match.tag("StepFailed", (e) => e.step),
+            Match.orElse(() => (failedStep?.errorTag === tag ? failedStep.name : undefined)),
+          );
+          return stepName === undefined
+            ? `**Failed outside any step** — \`${tag}\``
+            : `**Failing step:** \`${stepName}\` — \`${tag}\``;
+        },
       }),
   });
 

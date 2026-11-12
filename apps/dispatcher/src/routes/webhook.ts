@@ -35,6 +35,8 @@
 import { checkAndArmCooldown } from "../cooldown";
 import { verify } from "../hmac";
 import { toInstanceId } from "../instance-id";
+import { resolveOptIn } from "../opt-in";
+import { closedGroups, closeInstanceId, type CloseGroupPayload } from "../pr-close";
 import { triggersByEvent } from "../registry";
 import { resolveReleaseApproval } from "../release-approval";
 import { decodeRerequest, handleRerequest } from "../rerequest";
@@ -85,8 +87,12 @@ export const synthesizeGithubBlock = (
   const checkSuiteSha = (payload as { check_suite?: { head_sha?: string } }).check_suite?.head_sha;
   const pushSha = (payload as { after?: string }).after;
   const pushRef = (payload as { ref?: string }).ref;
+  // An annotated tag push's `after` is the tag object, which a check-run refuses
+  // (HTTP 422); `head_commit.id` is the commit the tag names.
+  const tagPush = typeof pushRef === "string" && pushRef.startsWith("refs/tags/");
+  const pushedSha = tagPush ? (commitSha ?? pushSha) : (pushSha ?? commitSha);
   const sha =
-    deploymentSha ?? prSha ?? pushSha ?? commitSha ?? checkRunSha ?? checkSuiteSha ?? "main";
+    deploymentSha ?? prSha ?? pushedSha ?? checkRunSha ?? checkSuiteSha ?? "main";
   const ref =
     typeof pushRef === "string" && pushRef.startsWith("refs/") ? pushRef : "refs/heads/main";
 
@@ -133,6 +139,15 @@ export const handleGithubWebhook = async (request: Request, env: Env): Promise<R
   }
   if (event === null || event.length === 0) {
     return json({ error: "missing_event", message: "X-GitHub-Event is required" }, 400);
+  }
+
+  // The deploy's allowlist applies before dedup, signals, reruns, and triggers.
+  // App subscriptions can stay broad while Action mode owns PR-triggered work.
+  if (
+    env.GITHUB_WEBHOOK_EVENTS !== undefined &&
+    !env.GITHUB_WEBHOOK_EVENTS.split(",").some((allowed) => allowed.trim() === event)
+  ) {
+    return json({ event, deliveryId, ignored: true, reason: "event_not_allowed" }, 202);
   }
 
   // 5. Receiver-level dedup short-circuit on X-GitHub-Delivery.
@@ -229,13 +244,40 @@ export const handleGithubWebhook = async (request: Request, env: Env): Promise<R
     );
   }
 
+  // 7a. A closed pull request ends every superseding run of its groups
+  //     (pr-close.ts): one RunWorkflow instance per group cancels the live
+  //     members. A close never also starts a run — no trigger's `actions`
+  //     names `closed`.
+  const closed: Array<{ group: string; instanceId: string }> = [];
+  for (const { group, rank } of closedGroups(event, payload, matches, Date.now())) {
+    const id = closeInstanceId(group, rank);
+    const { repo, installation_id } = synthesizeGithubBlock(payload);
+    const params: CloseGroupPayload = {
+      closeGroup: { group, rank, repo, ...(installation_id !== undefined ? { installation_id } : {}) },
+    };
+    try {
+      await env.RUNS_WORKFLOW.create({ id, params });
+      closed.push({ group, instanceId: id });
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (/already exists|duplicate/i.test(message)) {
+        closed.push({ group, instanceId: id });
+        continue;
+      }
+      console.error(`[webhook] close create failed group="${group}" id="${id}": ${message}`);
+    }
+  }
+
   const dispatched: Array<{ run: string; executionId: string }> = [];
-  const skipped: Array<{
-    run: string;
-    executionId: string;
-    reason: "cooldown";
-    retryAfterSec: number;
-  }> = [];
+  const skipped: Array<
+    | {
+        run: string;
+        executionId: string;
+        reason: "cooldown";
+        retryAfterSec: number;
+      }
+    | { run: string; reason: "not-configured" }
+  > = [];
   for (const { run, trigger } of matches) {
     if (
       trigger.actions !== undefined &&
@@ -248,6 +290,22 @@ export const handleGithubWebhook = async (request: Request, env: Env): Promise<R
 
     const id = toInstanceId(trigger.idempotencyKey(ctx));
     const inputs = trigger.inputs(ctx);
+
+    // Opt-in (when declared) — a repo with none of the run's CONFIG_KV keys
+    // gets no Workflow, no check-run and no admission slot. Read before the
+    // cooldown so an unconfigured repo never arms a window.
+    const optIn = run.optIn;
+    if (optIn !== undefined) {
+      const verdict = await resolveOptIn({
+        configKv: env.CONFIG_KV,
+        runName: run.name,
+        keys: () => optIn({ input: inputs }),
+      });
+      if (verdict === "not-configured") {
+        skipped.push({ run: run.name, reason: "not-configured" });
+        continue;
+      }
+    }
 
     // Run cooldown (when declared) — same check-and-arm Action mode applies,
     // so the cap holds across BOTH dispatch paths. A skipped trigger is
@@ -316,8 +374,10 @@ export const handleGithubWebhook = async (request: Request, env: Env): Promise<R
       event,
       deliveryId,
       dispatched,
-      // Shape-stable: `skipped` appears only when a cooldown actually fired.
+      // Shape-stable: `skipped` appears only when a cooldown or an opt-in
+      // check actually skipped a run.
       ...(skipped.length > 0 ? { skipped } : {}),
+      ...(closed.length > 0 ? { closed } : {}),
     },
     202,
   );

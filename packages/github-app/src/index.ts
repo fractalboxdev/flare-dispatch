@@ -23,13 +23,16 @@ export {
   type GetInstallationTokenOptions,
   type ResolveRepoInstallationOptions,
 } from "./installation-token";
+export { rateLimitFromHeaders, type RateLimitSnapshot } from "./http";
 export {
   createCheckRun,
+  getCheckRunStatus,
   progressCheckRun,
   updateCheckRun,
   type CheckConclusion,
   type CheckRunOutput,
   type CreateCheckRunOptions,
+  type GetCheckRunStatusOptions,
   type ProgressCheckRunOptions,
   type UpdateCheckRunOptions,
 } from "./check-runs";
@@ -71,9 +74,17 @@ export {
   type ReadRepoTextFileResult,
 } from "./repo-files";
 export { readBranchHead, branchRefUrl, type ReadBranchHeadOptions } from "./branch-head";
+export {
+  commitPullsUrl,
+  getPullRequest,
+  listCommitPullRequests,
+  type CommitPullRequest,
+  type ListCommitPullRequestsOptions,
+} from "./commit-pulls";
 export { appendGitNote, type AppendGitNoteOptions } from "./git-notes";
 export {
   addIssueLabels,
+  closeBotIssue,
   closeIssueAsDuplicate,
   createIssue,
   createIssueComment,
@@ -81,6 +92,8 @@ export {
   removeIssueLabel,
   type AddIssueLabelsOptions,
   type AuthorAssociation,
+  type CloseBotIssueOptions,
+  type CloseBotIssueResult,
   type CloseIssueAsDuplicateOptions,
   type CreateIssueCommentOptions,
   type CreateIssueOptions,

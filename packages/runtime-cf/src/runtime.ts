@@ -43,10 +43,12 @@ import { makeOidcLive, type OidcLiveConfig } from "./oidc-live";
 import { type ExecutionContext, makeD1ExecutionsLive } from "./executions-d1";
 import { makeIOLive } from "./io-live";
 import { makeSandboxCloudflareLive } from "./sandbox-cf";
+import { resolveSandboxTransport } from "./sandbox-transport";
 import type { CheckCommandOwner, Container } from "@fractalboxdev/flare-dispatch-core";
 import { resolveAppCredentials } from "./sandbox-clone-auth";
 import { CacheOnFacade, makeSandboxFacadeLive, type SandboxFacadeOptions } from "./sandbox-facade";
 import { makeStepRunnerCloudflare } from "./step-runner-cf";
+import { WorkflowEngine, type WorkflowEngineService } from "./workflow-engine";
 
 /**
  * What `makeCFRuntimeLive` needs to run this execution on the substrate rather
@@ -58,11 +60,6 @@ export type SubstrateExecution = Omit<
   SandboxFacadeOptions,
   "bucket" | "executionId" | "repo" | "sha" | "logsViewerBase"
 >;
-
-/** The minimal `WorkflowStep` surface `StepRunnerCloudflare` needs. */
-type WorkflowStepLike = {
-  readonly do: <T>(name: string, callback: () => Promise<T>) => Promise<T>;
-};
 
 /** Everything `makeCFRuntimeLive` needs to wire the per-execution runtime. */
 export type CFRuntimeLiveOptions<T extends Sandbox = Sandbox> = {
@@ -86,8 +83,11 @@ export type CFRuntimeLiveOptions<T extends Sandbox = Sandbox> = {
    * service binding plus the run's grant-catalog entry.
    */
   readonly substrate?: SubstrateExecution;
-  /** The `step` argument from `WorkflowEntrypoint.run`. */
-  readonly workflowStep: WorkflowStepLike;
+  /**
+   * The invocation's `step`, as the engine `RunWorkflow` built over it. The
+   * dispatcher's own steps share it, so one engine loss latches both.
+   */
+  readonly engine: WorkflowEngineService;
   /**
    * The CF `Workflow` binding (`env.RUNS_WORKFLOW`) backing the `childRuns`
    * capability (`spawnChildRun` / the `fanOut` primitive). A run spawns child
@@ -98,6 +98,11 @@ export type CFRuntimeLiveOptions<T extends Sandbox = Sandbox> = {
    * required Dispatcher binding, so the production call site always passes it.
    */
   readonly runsWorkflow?: WorkflowBindingLike;
+  /**
+   * The monthly-budget read a fan-out runs before it spawns children
+   * (ADR-0006) — see `ChildRunsLiveConfig.spendGate`. Absent = no spend guard.
+   */
+  readonly spendGate?: () => Promise<string | undefined>;
   /** This execution's ULID — namespaces D1 rows, R2 keys, the sandbox id. */
   readonly executionId: string;
   /** repo/ref/sha/input the `executions` row requires. */
@@ -177,12 +182,20 @@ export type CFRuntimeLiveOptions<T extends Sandbox = Sandbox> = {
    */
   readonly sandboxPreviewHostname?: string;
   /**
-   * Pin this execution's containers to a transport instead of the Worker-wide
-   * `SANDBOX_TRANSPORT` default — see `makeSandboxCloudflareLive`'s `transport`
-   * option for why the choice is per-execution rather than per-Worker.
-   * Container path only; the substrate facade owns its own transport.
+   * The `CONFIG_KV` `sandbox.transport:<repo>` pin, as read. It outranks
+   * `sandboxTransportDefault` in either direction, so an operator moves one
+   * repo onto or off `rpc` without a deploy. A value that is not a transport
+   * name is skipped. Container path only; the substrate facade owns its own
+   * transport. See `resolveSandboxTransport`.
    */
-  readonly sandboxTransport?: "http" | "websocket" | "rpc";
+  readonly sandboxTransport?: string;
+  /**
+   * The Worker-wide `SANDBOX_TRANSPORT` var, as read. Applies when no repo pin
+   * names a transport; when it names none either, containers run on `rpc`.
+   * The resolved transport is pinned onto every container the execution
+   * acquires and tells the `cache` Layer whether an archive can stream in.
+   */
+  readonly sandboxTransportDefault?: string;
   /**
    * The dispatcher's own public origin (e.g.
    * `https://<worker>.<account>.workers.dev`) — prefixed onto the
@@ -203,6 +216,8 @@ export type CFRuntimeLiveOptions<T extends Sandbox = Sandbox> = {
    * the historical message.
    */
   readonly logsViewerBase?: string;
+  /** Values `io.env` answers for this execution (io-live.ts). */
+  readonly ioVars?: Readonly<Record<string, string>>;
   /**
    * OIDC signing config for the `oidc` capability — the ES256 private JWK
    * (`OIDC_SIGNING_JWK` secret) + the issuer URL the IdP's trust policy
@@ -290,6 +305,7 @@ export const makeCFRuntimeLive = <T extends Sandbox>(
     db: opts.db,
     currentExecutionId: opts.executionId,
     ...(opts.logsViewerBase !== undefined ? { logsViewerBase: opts.logsViewerBase } : {}),
+    ...(opts.ioVars !== undefined ? { vars: opts.ioVars } : {}),
   });
   const executions = makeD1ExecutionsLive(opts.db, opts.execution);
   const artifact = makeR2ArtifactLive(
@@ -307,6 +323,13 @@ export const makeCFRuntimeLive = <T extends Sandbox>(
     ...(opts.githubApp !== undefined ? { githubApp: opts.githubApp } : {}),
     ...(opts.checks !== undefined ? { checks: opts.checks } : {}),
     payloadRepo: opts.execution.repo,
+  });
+  // The repo pin, else the Worker-wide var, else `rpc` — pinned onto every
+  // container this execution acquires, so the cache restores only where the
+  // container streams. Pure and unit-tested in `sandbox-transport.ts`.
+  const sandboxTransport = resolveSandboxTransport({
+    repoPin: opts.sandboxTransport,
+    workerDefault: opts.sandboxTransportDefault,
   });
   // The substrate path and the container path are mutually exclusive by
   // construction: one execution runs entirely on one of them, so there is never
@@ -328,10 +351,10 @@ export const makeCFRuntimeLive = <T extends Sandbox>(
           cloneAuth,
           opts.sandboxPreviewHostname,
           opts.logsViewerBase,
-          opts.sandboxTransport,
+          sandboxTransport,
           opts.checkCommandOwner,
         );
-  const stepRunner = makeStepRunnerCloudflare(opts.workflowStep, opts.executionId);
+  const stepRunner = makeStepRunnerCloudflare(opts.executionId);
   const checks = makeChecksGithubLive(opts.checks);
   // The cache archive key is scoped by repo so two repos with an identical
   // lockfile hash cannot collide (cross-repo cache poisoning). On the substrate
@@ -339,7 +362,12 @@ export const makeCFRuntimeLive = <T extends Sandbox>(
   const cache =
     opts.substrate !== undefined
       ? CacheOnFacade
-      : makeCacheR2Live(opts.bucket, opts.sandboxNs!, opts.execution.repo);
+      : makeCacheR2Live(
+          opts.bucket,
+          opts.sandboxNs!,
+          opts.execution.repo,
+          sandboxTransport,
+        );
   // `Config` is live when the `CONFIG_KV` binding is present; absent, the
   // dying stub keeps a config-reading run from silently mis-behaving.
   const config =
@@ -411,6 +439,7 @@ export const makeCFRuntimeLive = <T extends Sandbox>(
           workflow: opts.runsWorkflow,
           db: opts.db,
           parentExecutionId: opts.executionId,
+          ...(opts.spendGate !== undefined ? { spendGate: opts.spendGate } : {}),
           // Children inherit the parent's public origin so their artifact
           // links are absolute too (a child posts its own check-run).
           ...(opts.publicOrigin !== undefined ? { origin: opts.publicOrigin } : {}),
@@ -443,6 +472,9 @@ export const makeCFRuntimeLive = <T extends Sandbox>(
     childRuns,
     executions,
     // StepRunnerCloudflare needs Executions + IO — supply them from the merge.
-    Layer.provide(stepRunner, Layer.merge(executions, io)),
+    Layer.provide(
+      stepRunner,
+      Layer.mergeAll(executions, io, Layer.succeed(WorkflowEngine, opts.engine)),
+    ),
   );
 };

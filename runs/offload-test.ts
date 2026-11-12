@@ -55,10 +55,10 @@
 //
 // Staging makes earlier stages' logs DURABLE — it does not buy a long suite
 // more wall time. Each stage runs under its own exec ceiling (the labelled /
-// unlabelled `timeoutSec` rungs), and those per-exec ceilings are the only
-// runtime enforcement there is: `limits.maxDurationSec` is validated at
-// definition time and never read again at runtime. Size the stage ceilings to
-// the suite; staging alone does not stretch them.
+// unlabelled `timeoutSec` rungs), and every stage, with its retries, draws on
+// the one run ceiling: the dispatcher fails the run `RunDurationExceeded` once
+// `limits.maxDurationSec` elapses from the body's start. Size the stage
+// ceilings to the suite and their sum to the run ceiling.
 //
 // --- Isolated stages (`offload-test.stageConcurrency:<repo>` > 1) -------------
 //
@@ -243,6 +243,13 @@ const OffloadTestInput = Schema.Struct({
   failOnNonZeroExit: Schema.optionalWith(Schema.Boolean, {
     default: () => false,
   }),
+  /**
+   * The pull request's base branch. Webhook mode sets it from
+   * `pull_request.base.ref`; an Action dispatch omits it. When CONFIG_KV
+   * `offload-test.bases:<repo>` lists branches and this one is not among them,
+   * the run skips before checkout (see `repoBasesKey`).
+   */
+  baseRef: Schema.optional(Schema.String),
 });
 
 /** Output contract — specs/02-runs.md § 1. */
@@ -261,10 +268,10 @@ const TIMEOUT_SEC_DEFAULT = 600;
  * streamed so far) instead of the platform hard-killing the step at the same
  * instant (`WorkflowTimeoutError`, no log, nothing for `upload-log` to serve).
  * Same idea as playwright-demo's headroom, with one deliberate difference: NOT
- * clamped to `maxDurationSec`. At the documented `offload-test.timeoutSec =
- * 1800` config the clamp would collapse the headroom to zero — step and exec
- * expire together and the platform kill wins, which is exactly the failure
- * this exists to prevent.
+ * clamped to `maxDurationSec`. At an exec timeout equal to the run ceiling the
+ * clamp would collapse the headroom to zero — step and exec expire together
+ * and the platform kill wins, which is exactly the failure this exists to
+ * prevent. The run ceiling bounds the body as a whole, never one step.
  */
 const STEP_TIMEOUT_HEADROOM_SEC = 120;
 
@@ -340,11 +347,26 @@ const repoCommandKey = (repo: string): string => `offload-test.command:${repo}`;
  *   wrangler kv key put --binding=CONFIG_KV "offload-test.timeoutSec:owner/repo" "1800"
  *
  * An explicit dispatch value always wins; these only fill the gap the trigger
- * leaves. `timeoutSec` is enforced per exec by the sandbox's own deadline —
- * there is no additional runtime wall-clock clamp (`limits.maxDurationSec` is
- * a definition-time validation only).
+ * leaves. `timeoutSec` is enforced per exec by the sandbox's own deadline, and
+ * the run's `limits.maxDurationSec` bounds the whole body above it: the exec,
+ * its retries and every other step share that one ceiling.
  */
 const repoInstallKey = (repo: string): string => `offload-test.install:${repo}`;
+
+/**
+ * Per-repo base-branch allow-list for webhook mode: a comma-separated list of
+ * the base branches whose pull requests run the suite.
+ *
+ *   wrangler kv key put --binding=CONFIG_KV "offload-test.bases:owner/repo" "main"
+ *
+ * Absent → every base branch runs, as before the key existed. A repo whose
+ * long-lived branches need a different toolchain (a rewrite branch with a
+ * private submodule, say) lists only the branches the configured commands
+ * build. A pull request into an unlisted base skips with a neutral check before
+ * any container starts. An Action dispatch carries no `baseRef` and is never
+ * filtered: its caller chose to run.
+ */
+const repoBasesKey = (repo: string): string => `offload-test.bases:${repo}`;
 const repoTimeoutKey = (repo: string): string => `offload-test.timeoutSec:${repo}`;
 
 /**
@@ -456,12 +478,14 @@ const parseIntConfig = (raw: string | undefined): number | undefined => {
 
 export const offloadTest = defineRun({
   name: "offload-test",
+  // 1.5.0 — additive: base-branch scoping (`offload-test.bases:<repo>`) for
+  // webhook mode. Absent key → the 1.4.0 behaviour, byte-identical.
   // 1.4.0 — additive: per-repo secret names (`offload-test.secrets:<repo>`)
   // for webhook mode. Absent key → the 1.3.0 behaviour, byte-identical.
   // 1.3.0 — additive: isolated stages (`offload-test.stageConcurrency:<repo>`).
   // Absent or 1 → the 1.2.0 staged behaviour, byte-identical; no stages key →
   // the 1.1.0 single-exec behaviour, likewise.
-  version: "1.4.0",
+  version: "1.5.0",
 
   // Webhook-mode trigger — the zero-GHA test path (specs/04-gha-integration.md
   // § Pure webhook mode). Fires the repo's suite on every PR push; the run body
@@ -494,6 +518,9 @@ export const offloadTest = defineRun({
         // precedence over `offload-test.install:<repo>`, which is exactly the
         // override webhook mode has no other way to express.
         failOnNonZeroExit: true,
+        ...(typeof payload.pull_request?.base?.ref === "string"
+          ? { baseRef: payload.pull_request.base.ref }
+          : {}),
         // `secrets` keeps its schema default restated — a PR-triggered dispatch
         // must never carry credentials, so pinning it empty here is deliberate.
         // A repo whose command needs one names it in
@@ -506,12 +533,21 @@ export const offloadTest = defineRun({
   inputs: OffloadTestInput,
   outputs: OffloadTestOutput,
 
+  // The keys `resolve-command` decides on: the per-repo command, the
+  // dispatcher-wide default, and the stages key (staged mode runs with neither
+  // command). See specs/adr/0007-cost-efficient-execution.md § Dispatch only work.
+  optIn: ({ input }) =>
+    input.command !== undefined
+      ? []
+      : [repoCommandKey(input.repo), COMMAND_KEY, repoStagesKey(input.repo)],
+
   limits: {
-    // Wall-time ceiling — specs/02-runs.md § 1. Single container, no
-    // concurrency parameter. Validated at definition time (define-run.ts);
-    // the runtime enforcement a stage actually meets is its per-exec
-    // `timeoutSec` ceiling — see header § Staged mode.
-    maxDurationSec: 1800,
+    // Run-body wall-time ceiling — specs/02-runs.md § 1, enforced by the
+    // dispatcher. One documented 1800 s exec plus checkout, install and
+    // upload fits; aligned retries of that exec do not (issue #42).
+    maxDurationSec: 3600,
+    // A PR verdict someone waits on: admitted ahead of batch work.
+    admissionClass: "interactive",
   },
 
   run: (input) =>
@@ -539,11 +575,28 @@ export const offloadTest = defineRun({
         stageConcurrency?: number | undefined;
         /** KV-resolved secret NAMES — never values (this is a step result). */
         secretNames?: readonly string[] | undefined;
+        /** Set only when `offload-test.bases:<repo>` excludes the PR's base. */
+        excludedBase?: { readonly baseRef: string; readonly bases: readonly string[] } | undefined;
         secretPrefix?: string | undefined;
       } =
         input.command === undefined
           ? yield* step("resolve-command", () =>
               Effect.gen(function* () {
+                // Base scoping first: an excluded base reads no further config
+                // and resolves no command, so the skip below fires before
+                // checkout. Read only when the dispatch names a base, so an
+                // Action dispatch keeps its historical config reads.
+                if (input.baseRef !== undefined && input.baseRef.length > 0) {
+                  const bases = parseNameList(yield* config.get(repoBasesKey(input.repo)));
+                  if (bases.length > 0 && !bases.includes(input.baseRef)) {
+                    return {
+                      command: undefined,
+                      install: undefined,
+                      timeoutSec: undefined,
+                      excludedBase: { baseRef: input.baseRef, bases },
+                    };
+                  }
+                }
                 const perRepo = yield* config.get(repoCommandKey(input.repo));
                 const command =
                   perRepo !== undefined && perRepo.trim().length > 0
@@ -669,6 +722,17 @@ export const offloadTest = defineRun({
               install: undefined,
               timeoutSec: undefined,
             };
+      if (resolved.excludedBase !== undefined) {
+        return yield* Effect.fail(
+          new RunSkipped({
+            reason:
+              `offload-test runs ${input.repo} pull requests into ` +
+              `${resolved.excludedBase.bases.map((b) => `\`${b}\``).join(", ")} only ` +
+              `(CONFIG_KV \`${repoBasesKey(input.repo)}\`); this one targets ` +
+              `\`${resolved.excludedBase.baseRef}\``,
+          }),
+        );
+      }
       const stages = resolved.stages;
       const command = resolved.command;
       // Unstaged only: with stages declared, every stage already carries a

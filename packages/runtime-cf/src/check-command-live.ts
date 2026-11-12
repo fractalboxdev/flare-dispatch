@@ -10,8 +10,9 @@ import {
   type CheckCommandOpts,
   type ExecResult,
 } from "@fractalboxdev/flare-dispatch-core";
-import { commandFingerprint } from "./check-command";
+import { commandFingerprint, isSpoolUnavailable } from "./check-command";
 import { scrubLogPrefix } from "./check-command-log";
+import { checkChunkLogFile, checkHandleId, checkLogFile } from "./log-names";
 import { redactLongestFirst as redact } from "./sandbox-output";
 
 export function makeCheckCommandService(
@@ -44,7 +45,7 @@ export function makeCheckCommandService(
       ),
     });
   };
-  const root = (h: CheckCommandHandle) => `logs/${executionId}/check-${h.id}`;
+  const logs = `logs/${executionId}/`;
   const validate = async (h: CheckCommandHandle, opts: CheckCommandOpts) => {
     const values = policy(opts);
     const containerId = opts.container?.id ?? defaultContainer;
@@ -75,7 +76,7 @@ export function makeCheckCommandService(
       const prefix = scrubLogPrefix(raw.text, opts.redactValues ?? [], terminal);
       if (prefix.characters === 0) continue;
       const end = offset + new TextEncoder().encode(raw.text.slice(0, prefix.characters)).length;
-      const key = `${root(h)}/${stream}-${offset}-${end}.ndjson`;
+      const key = logs + checkChunkLogFile(h.id, stream, offset, end);
       await writeLog(
         key,
         redact(flattenCommand(opts.command), opts.redactValues),
@@ -111,7 +112,7 @@ export function makeCheckCommandService(
           );
           const startedAt = Date.now();
           const candidate: CheckCommandHandle = {
-            id: `check-${operation.slice(0, 48)}`,
+            id: checkHandleId(operation),
             container: opts.container ?? { id: defaultContainer },
             fingerprint,
             startedAt,
@@ -140,7 +141,16 @@ export function makeCheckCommandService(
         try: async () => {
           await validate(handle, opts);
           const status = await ownerFor(handle.container).observe(handle);
-          await capture(handle, opts, status.state !== "running");
+          try {
+            await capture(handle, opts, status.state !== "running");
+          } catch (error) {
+            // Log progress is durable at its offset: the next observation or
+            // finalization reads on from it. Only the process state is a verdict.
+            if (!isSpoolUnavailable(error)) throw error;
+            console.warn(
+              `check command ${handle.id}: log capture skipped, resumes at its durable offset — ${redact((error as Error).message, opts.redactValues)}`,
+            );
+          }
           return status;
         },
         catch: failed(opts),
@@ -193,7 +203,7 @@ export function makeCheckCommandService(
               if (part === null) throw new Error("durable check log chunk missing");
               size += part.size;
             }
-            const logPath = `${root(handle)}.ndjson`;
+            const logPath = logs + checkLogFile(handle.id);
             const pipe = new FixedLengthStream(size);
             const writer = pipe.writable.getWriter();
             const writing = (async () => {

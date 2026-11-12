@@ -24,6 +24,14 @@ flowchart TB
   class checks ok
 ```
 
+A cron tick carries no commit. A scheduled run whose inputs name a `repo` and a
+`refs/heads/<branch>` ref, and no `sha`, is pinned at the tick to that branch's
+head through the repo's GitHub App installation: the run receives the commit as
+`inputs.sha`, and its `flare-dispatch/<run>` check-run opens on that commit when
+the run starts and concludes with the run's outcome. A failure's summary names
+the failing step and its error tag. A repo without the App installed, or a
+deploy without App credentials, runs the schedule and posts no check-run.
+
 A run is a recipe: it composes primitives, which ride the capability layer, and
 calls capabilities directly where no primitive fits.
 
@@ -62,7 +70,12 @@ a gate timeout included — completes the check-run it opened.
 ```mermaid
 flowchart TB
   accTitle: One execution inside RunWorkflow
-  open["**check-run opens**<br/>in_progress"] --> ser{"run declares<br/>serialize?"}
+  open["**check-run opens**<br/>in_progress"] --> sup{"run declares<br/>supersede?"}
+  sup -->|yes| rank{"higher-ranked<br/>member live?"}
+  rank -->|yes| stood["**stand down**<br/>cancelled"]
+  rank -->|no| cancel["**supersede**<br/>cancel lower-ranked members"]
+  sup -->|no| ser{"run declares<br/>serialize?"}
+  cancel --> ser
   ser -->|yes| serial["**serial gate**<br/>one execution per group"]
   ser -->|no| adm
   serial --> adm["**admission**<br/>per-pool slot, FIFO"]
@@ -86,13 +99,14 @@ flowchart TB
 Three layers, closest first:
 
 1. **The check-run summary** (PR → Checks tab). Every check-run — in-progress
-   and completed, green and red, on every dispatch path — carries up to two
-   links: **"view full logs ↗"** opens the readable log viewer
+   and completed, green and red, on every dispatch path — carries
+   **"view full logs ↗"**, which opens the readable log viewer
    (`<origin>/logs/<instance-id>?t=<token>`; the token is signed with
    `LOG_LINK_SECRET`, falling back to `HMAC_SECRET`, and the link is omitted
-   when neither secret is set), and **"view step logs in Cloudflare ↗"** opens
-   the Workflows instance page (present only when `CLOUDFLARE_ACCOUNT_ID` is
-   set, and needs dashboard access to your account). The dispatcher's own
+   when neither secret is set). A check-run is as public as its repository, so
+   it never links the Cloudflare Workflows instance page, whose URL carries
+   your account id; the Access-gated viewer and executions API link it
+   instead. The dispatcher's own
    dashboard at `GET /` (Cloudflare Access-gated) lists recent executions with
    the same tokened viewer links — the browse path when you don't have the PR
    open. Cron-scheduled runs have no request to infer an origin from, so their
@@ -374,8 +388,9 @@ timeout would otherwise reach `sandbox.exec` as `NaN` — a timeout that never
 fires, i.e. a hung run holding a container indefinitely.
 
 `timeoutSec` is enforced per exec by the sandbox's own deadline. The run's
-`maxDurationSec` (1800) is validated at definition time only — it is not a
-runtime kill.
+`maxDurationSec` (3600) bounds the whole body above it: the dispatcher fails the
+run `RunDurationExceeded` once the ceiling elapses from the body's start, and the
+exec's retries draw on that same budget.
 
 ```mermaid
 flowchart TB
@@ -489,34 +504,42 @@ flowchart TB
 
 ### Container transport (`sandbox.transport:<repo>`)
 
+Containers run on the SDK's `rpc` transport. The dispatcher resolves one
+transport per execution and pins it onto every container the execution
+acquires, highest first:
+
+1. the `CONFIG_KV` key `sandbox.transport:<repo>`;
+2. the Worker-wide `SANDBOX_TRANSPORT` var;
+3. `rpc`.
+
+Each level takes `http`, `websocket` or `rpc`. The pin overrides the var in
+either direction, so one repo moves back to `http` without a deploy:
+
 ```bash
-wrangler kv key put --binding=CONFIG_KV "sandbox.transport:owner/repo" "rpc"
+wrangler kv key put --binding=CONFIG_KV "sandbox.transport:owner/repo" "http"
 ```
 
-Pins every container that repo's executions acquire to one of `http` (the
-default), `websocket`, or `rpc`. **Any other value is dropped by the dispatcher
-before it reaches the SDK** — silently, and the run proceeds on the default. A
-typo therefore degrades rather than breaks, but it also says nothing: check the
-key back if a transport change appears to have had no effect.
+Deleting the key returns the repo to the var, or to `rpc`. **A value that is not
+a transport name is skipped at its level**, silently: a typo in the pin falls
+through to the var, and one in the var falls through to `rpc`. Check the key
+back if a transport change appears to have had no effect. The precedence lives
+in `packages/runtime-cf/src/sandbox-transport.ts`.
 
-**Why it exists.** The SDK's streaming file APIs live only on its `rpc` client —
+**Why `rpc`.** The SDK's streaming file APIs live only on its `rpc` client —
 its own comment calls `rpc` the "primary container-control client" and
 `http`/`websocket` the "route-based compatibility client", and `writeFileStream`
-is a bare `throw` off `rpc`. That is why the R2 dependency cache misses on every
-run: `installCached`'s restore hands `writeFile` a `ReadableStream`, the SDK
-routes any stream to `writeFileStream`, it raises, and `composeRestoreOr`
-records a miss.
-
-`SANDBOX_TRANSPORT=rpc` as a Worker var fixes that in one line — and changes the
-control path for every repo this dispatcher serves, at once. This key is the
-same choice scoped to one consumer, so a change with that blast radius can be
-proved before it is taken.
+is a bare `throw` off `rpc`. `installCached`'s restore hands `writeFile` a
+`ReadableStream`, and the SDK routes any stream to `writeFileStream`, so off
+`rpc` a stored archive cannot be applied. The R2 cache receives the resolved
+transport: on `rpc` it streams the archive in; on `http` or `websocket` it reads
+only the archive's head, reports `unapplied`, runs the install and skips the
+save, so the run pays for neither the download nor a second upload.
 
 **It is sticky.** `setTransport` persists to the container's Durable Object
 storage, and the SDK prefers a stored transport over the env-derived default on
-cold start. A container pinned here keeps that transport for its lifetime;
-since ids are per execution, the pin is re-applied per run and costs one DO call
-at acquire.
+cold start. A container keeps the transport it started with for its lifetime;
+since ids are per execution, a changed pin or var takes effect on the next run,
+and the pin costs one DO call per container at acquire.
 
 ### A stage does not assume its checkout
 
@@ -639,10 +662,21 @@ wrangler kv key put --binding=CONFIG_KV \
 
 `timeoutSec` precedence is dispatch value → `worker-deploy.timeoutSec:<repo>` → 900. A malformed value degrades to 900.
 
-**A deploy is never step-retried.** The `exec` step runs with `retries: 0` and a
-Workflow step timeout of the exec timeout + 120s, so the sandbox's deadline —
-not the platform's 600s step default — ends a slow deploy, and a failure is
-reported once instead of re-publishing every Worker on a second attempt.
+**A deploy launches once.** The deploy command runs as one process the sandbox
+owns (`durableExec`), watched by short `exec-start` / `exec-observe-<i>` /
+`exec-finalize` steps. Those steps retry platform failures — a restarted
+Workflow instance, a dropped sandbox connection — and `exec-start` claims the
+launch once, so a retry never starts a second deploy. A process the sandbox
+loses (its container recycled) fails `SandboxProcessLost`, since the deploy may
+already have published; a dispatch whose command may safely run twice — a
+preview publish of one commit — sets `"relaunchOnProcessLoss": true` to
+relaunch it once in a fresh container. The relaunch happens only if the command's
+timeout, plus 300s to rebuild the container, still fits inside the run's 1800s
+`maxDurationSec`; otherwise the run fails `SandboxProcessLost` rather than have
+the ceiling interrupt a half-run publish. The durable form applies at every exec
+timeout, short ones included.
+Only without a durable process owner does the command run as a single `exec`
+step, with `retries: 0` and a Workflow step timeout of the exec timeout + 120s.
 
 ```mermaid
 flowchart TB
@@ -653,7 +687,7 @@ flowchart TB
   head --> is{"head is<br/>the dispatched sha?"}
   is -->|"no, requireHead"| skip["**neutral**<br/>superseded by the head"]
   is -->|"yes, or unknown"| checkout["**checkout**<br/>clone the sha"]
-  checkout --> exec["**exec**<br/>secrets loaded inline<br/>retries 0, step timeout +120s"]
+  checkout --> exec["**exec**<br/>secrets loaded inline<br/>one durable process, launched once"]
   exec --> upload["**upload-log**<br/>step.log"]
   upload --> code{"exit code"}
   code -->|0| ok["**success**<br/>deployed"]

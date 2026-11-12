@@ -1,5 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { rm } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { makeCheckCommandOwner, commandFingerprint } from "./check-command";
+import { makeCheckCommandOwner, commandFingerprint, commandSpool } from "./check-command";
 
 const request = {
   id: "check-fixed",
@@ -10,7 +12,11 @@ const request = {
 };
 const opts = { handle: request, command: "exit 7", cwd: "/workspace", env: {} };
 
-function fixture() {
+/** The pinned SDK's answer for an id its container has never started: a throw, not `null`. */
+const processNotFound = (id: string) =>
+  Object.assign(new Error(`Process ${id} not found`), { name: "ProcessNotFoundError" });
+
+function fixture(sdk: { throwsWhenAbsent?: boolean; execForReal?: boolean } = {}) {
   const records = new Map<string, unknown>();
   let reserved = false;
   let launches = 0;
@@ -18,6 +24,10 @@ function fixture() {
   let present = false;
   let loseResponse = false;
   let exitCode: number | undefined;
+  let spoolFailures = 0;
+  let spoolRejects = false;
+  const pauses: number[] = [];
+  const execTimeouts: number[] = [];
   const storage = {
     async load(key: string) {
       return records.get(key);
@@ -46,16 +56,30 @@ function fixture() {
       present = true;
       if (loseResponse) throw new Error("lost launch response");
     },
-    async getProcess() {
+    async getProcess(id: string) {
+      if (!present && sdk.throwsWhenAbsent) throw processNotFound(id);
       return present
         ? { status: exitCode === undefined ? "running" : "completed", exitCode }
         : null;
     },
-    async exec() {
+    async exec(command: string, options: { timeout: number }) {
+      execTimeouts.push(options.timeout);
+      if (spoolFailures > 0) {
+        spoolFailures--;
+        if (spoolRejects) throw new Error("exec timed out after 10000ms");
+        return { exitCode: 137, stdout: "", stderr: "Killed" };
+      }
+      if (sdk.execForReal) {
+        const result = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8", timeout: 10000 });
+        return { exitCode: result.status ?? 1, stdout: result.stdout };
+      }
       return { exitCode: 0, stdout: JSON.stringify({ exitCode, timedOut: false, endedAt: now }) };
     },
   };
-  const owner = () => makeCheckCommandOwner(storage, box, () => now);
+  const owner = () =>
+    makeCheckCommandOwner(storage, box, () => now, async (ms) => {
+      pauses.push(ms);
+    });
   return {
     owner,
     records,
@@ -72,6 +96,12 @@ function fixture() {
     advance: (ms: number) => {
       now += ms;
     },
+    spoolFails: (times: number, rejects = false) => {
+      spoolFailures = times;
+      spoolRejects = rejects;
+    },
+    pauses,
+    execTimeouts,
   };
 }
 
@@ -112,14 +142,15 @@ describe("durable check command", () => {
     ]) await expect(f.owner().prepare(changed)).rejects.toThrow("identity");
     expect(f.launches()).toBe(0);
   });
-  it("preparation preserves legacy launch intents and never relaunches a lost process", async () => {
+  it("preparation preserves legacy launch intents and never relaunches a lost process under its handle", async () => {
     const f = fixture();
     await f.owner().start(opts);
     const stored = f.records.get(`check-command:${request.id}`) as Record<string, unknown>;
     delete stored.launched;
     expect(await f.owner().prepare({ ...request, startedAt: 2000, deadline: 62000 })).toEqual(request);
     f.gone();
-    await expect(f.owner().start(opts)).rejects.toThrow("uncertain");
+    await f.owner().start(opts);
+    expect(await f.owner().observe(request)).toEqual({ state: "missing" });
     expect(f.launches()).toBe(1);
   });
   it("changed environment cannot recover an old command receipt", async () => {
@@ -141,12 +172,13 @@ describe("durable check command", () => {
     expect(f.launches()).toBe(1);
     expect(await f.owner().observe(request)).toMatchObject({ state: "running" });
   });
-  it("concurrent reservation launches once and a missing uncertain process never relaunches", async () => {
+  it("concurrent reservation launches once and a lost process observes missing without a second launch", async () => {
     const f = fixture();
     await Promise.allSettled([f.owner().start(opts), f.owner().start(opts)]);
     expect(f.launches()).toBe(1);
     f.gone();
-    await expect(f.owner().start(opts)).rejects.toThrow("uncertain");
+    await f.owner().start(opts);
+    expect(await f.owner().observe(request)).toEqual({ state: "missing" });
     expect(f.launches()).toBe(1);
   });
   it("preserves the original deadline and actual zero/nonzero exit", async () => {
@@ -183,5 +215,67 @@ describe("durable check command", () => {
     expect(await f.owner().finish(request, result)).toEqual(result);
     expect(await f.owner().finish(request, { ...result, logPath: "different" })).toEqual(result);
     expect(await f.owner().receipt(request)).toEqual(result);
+  });
+  it("a process its recycled container no longer knows observes missing, not an exec failure", async () => {
+    const f = fixture({ throwsWhenAbsent: true });
+    await f.owner().start(opts);
+    f.gone();
+    expect(await f.owner().observe(request)).toEqual({ state: "missing" });
+    await f.owner().start(opts);
+    expect(await f.owner().observe(request)).toEqual({ state: "missing" });
+    expect(f.launches()).toBe(1);
+  });
+  it("a terminal process that published no terminal record observes missing", async () => {
+    const f = fixture({ execForReal: true });
+    await rm(commandSpool(request), { recursive: true, force: true });
+    await f.owner().start(opts);
+    f.exit(1);
+    expect(await f.owner().observe(request)).toEqual({ state: "missing" });
+  });
+  it("a spool read that fails transiently is retried within one observation", async () => {
+    const f = fixture();
+    await f.owner().start(opts);
+    f.exit(7);
+    f.spoolFails(2);
+    expect(await f.owner().observe(request)).toMatchObject({ state: "exited", exitCode: 7 });
+    expect(f.pauses.length).toBe(2);
+  });
+  it("a terminal record the spool never yields fails the observation and keeps the exit for its retry", async () => {
+    const f = fixture();
+    await f.owner().start(opts);
+    f.exit(7);
+    f.spoolFails(Number.MAX_SAFE_INTEGER);
+    await expect(f.owner().observe(request)).rejects.toThrow(
+      /^check command spool unavailable \(exit 137: Killed\)$/,
+    );
+    f.spoolFails(0);
+    expect(await f.owner().observe(request)).toMatchObject({ state: "exited", exitCode: 7 });
+  });
+  it("each spool read attempt gets a longer exec ceiling for a slow node start", async () => {
+    const f = fixture();
+    await f.owner().start(opts);
+    f.spoolFails(Number.MAX_SAFE_INTEGER);
+    await expect(f.owner().read(request, "stdout", 0, 1024)).rejects.toThrow(/spool unavailable/);
+    expect(f.execTimeouts).toEqual([10_000, 20_000, 30_000]);
+    expect(f.pauses).toEqual([1_000, 2_000]);
+  });
+  it("an exec that rejects is retried, and a persistent rejection carries its message", async () => {
+    const f = fixture();
+    await f.owner().start(opts);
+    f.exit(3);
+    f.spoolFails(1, true);
+    expect(await f.owner().observe(request)).toMatchObject({ state: "exited", exitCode: 3 });
+    f.spoolFails(Number.MAX_SAFE_INTEGER, true);
+    await expect(f.owner().read(request, "stderr", 0, 1024)).rejects.toThrow(
+      /^check command spool unavailable \(exec timed out after 10000ms\)$/,
+    );
+  });
+  it("a log read the spool never yields fails as spool unavailable with its exit status", async () => {
+    const f = fixture();
+    await f.owner().start(opts);
+    f.spoolFails(Number.MAX_SAFE_INTEGER);
+    await expect(f.owner().read(request, "stdout", 0, 1024)).rejects.toThrow(
+      /^check command spool unavailable \(exit 137: Killed\)$/,
+    );
   });
 });

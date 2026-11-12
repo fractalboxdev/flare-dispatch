@@ -12,7 +12,9 @@
 //   - duplicate-id `create` error → swallowed, NOT propagated (dedup path).
 
 import { describe, expect, it, vi } from "vitest";
-import { handleScheduled } from "./scheduled";
+import { DELIVERY_SWEEP_CRON } from "../delivery-sweep";
+import { COMPILE_CACHE_SWEEP_CRON } from "./compile-cache";
+import { handleScheduled, liveDeliverySweepPorts } from "./scheduled";
 import type { Env } from "../env";
 import { makeFakeR2, makeFakeWorkflow } from "../test-helpers";
 
@@ -64,6 +66,63 @@ describe("handleScheduled", () => {
     warn.mockRestore();
   });
 
+  it("pins a branch-targeting run to the head it resolves and carries the installation for its check-run", async () => {
+    const workflow = makeFakeWorkflow();
+    const env = makeEnv(workflow);
+    const head = "c".repeat(40);
+    const resolveHead = vi.fn(async () => ({ installationId: 4242, sha: head }));
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    // `contextful-measures` subscribes to "17 2 * * *" with inputs { repo, ref: refs/heads/main }.
+    await handleScheduled(env, "17 2 * * *", FIRED_AT, resolveHead);
+
+    expect(resolveHead).toHaveBeenCalledWith("fractalboxdev/contextful", "main");
+    const params = workflow.calls[0]!.params as {
+      github: { repo: string; ref: string; sha: string; installation_id?: number };
+      inputs: { sha?: string };
+    };
+    expect(params.github).toEqual({
+      repo: "fractalboxdev/contextful",
+      ref: "refs/heads/main",
+      sha: head,
+      installation_id: 4242,
+    });
+    // The run measures the same commit the check-run lands on.
+    expect(params.inputs.sha).toBe(head);
+    info.mockRestore();
+  });
+
+  it("fires without a check-run when the target repo's head does not resolve", async () => {
+    const workflow = makeFakeWorkflow();
+    const env = makeEnv(workflow);
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await handleScheduled(env, "17 2 * * *", FIRED_AT, async () => undefined);
+
+    const params = workflow.calls[0]!.params as {
+      github: { installation_id?: number };
+      inputs: { sha?: string };
+    };
+    expect(params.github.installation_id).toBeUndefined();
+    expect(params.inputs.sha).toBeUndefined();
+    info.mockRestore();
+  });
+
+  it("does not resolve a head for a run whose inputs name no branch ref", async () => {
+    const workflow = makeFakeWorkflow();
+    const env = makeEnv(workflow);
+    const resolveHead = vi.fn(async () => ({ installationId: 1, sha: "d".repeat(40) }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleScheduled(env, "0 14 * * *", FIRED_AT, resolveHead);
+
+    expect(resolveHead).not.toHaveBeenCalled();
+    expect((workflow.calls[0]!.params as { github: object }).github).not.toHaveProperty(
+      "installation_id",
+    );
+    warn.mockRestore();
+  });
+
   it("collapses duplicate-id create errors as the dedup path (not a hard failure)", async () => {
     const workflow = makeFakeWorkflow();
     // First call records; second call (with same id) throws as a real
@@ -98,5 +157,43 @@ describe("handleScheduled", () => {
     expect(errorLog).not.toHaveBeenCalled();
     info.mockRestore();
     errorLog.mockRestore();
+  });
+});
+
+describe("handleScheduled — verdict reconcile sweep", () => {
+  it("runs the sweep on its cron and fires no run, without the no-match warning", async () => {
+    const workflow = makeFakeWorkflow();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sweep = vi.fn(async () => {});
+
+    await handleScheduled(makeEnv(workflow), DELIVERY_SWEEP_CRON, FIRED_AT, undefined, sweep);
+
+    expect(sweep).toHaveBeenCalledTimes(1);
+    expect(workflow.calls).toHaveLength(0);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("routes the compile-cache cron to the compile-cache sweep alone", async () => {
+    const workflow = makeFakeWorkflow();
+    const delivery = vi.fn(async () => {});
+    const compileCache = vi.fn(async () => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await handleScheduled(makeEnv(workflow), COMPILE_CACHE_SWEEP_CRON, FIRED_AT, undefined, delivery, compileCache);
+    expect(compileCache).toHaveBeenCalledTimes(1);
+    expect(delivery).not.toHaveBeenCalled();
+    expect(workflow.calls).toHaveLength(0);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("leaves the sweep alone on every other cron", async () => {
+    const sweep = vi.fn(async () => {});
+    await handleScheduled(makeEnv(makeFakeWorkflow()), "0 14 * * *", FIRED_AT, undefined, sweep);
+    expect(sweep).not.toHaveBeenCalled();
+  });
+
+  it("has no ports on a deploy without App credentials, where no verdict is owed", () => {
+    expect(liveDeliverySweepPorts(makeEnv(makeFakeWorkflow()))).toBeUndefined();
   });
 });

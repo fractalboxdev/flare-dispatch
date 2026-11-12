@@ -14,10 +14,42 @@ import { Context, Effect } from "effect";
 /** A check-run conclusion — the terminal verdict GitHub renders. */
 export type CheckConclusion = "success" | "failure" | "neutral" | "cancelled" | "timed_out";
 
+/**
+ * Whether a check-run still renders as running. `unknown` when it cannot be
+ * read — a caller deciding whether to conclude it leaves an `unknown` one alone.
+ */
+export type CheckRunState = "completed" | "open" | "unknown";
+
 /** The output block GitHub renders under the check-run. */
 export type CheckOutput = {
   readonly title: string;
   readonly summary: string;
+};
+
+/**
+ * Whether a concluding write reached GitHub. `delivered` carries the id of the
+ * check-run that holds the verdict — a fresh one when the opening create never
+ * landed. `undelivered` is a write worth sending again (a rate limit, an
+ * outage, missing credentials); `refused` is one GitHub rejected for this
+ * check-run itself (404 or 422 — the repository, installation or commit is
+ * gone, or the payload is invalid), so the same write fails again. Both carry
+ * the reason for the log line beside them.
+ */
+export type CheckDelivery =
+  | { readonly _tag: "delivered"; readonly checkRunId: string }
+  | { readonly _tag: "undelivered"; readonly reason: string }
+  | { readonly _tag: "refused"; readonly reason: string };
+
+/** The options a concluding write takes. */
+export type CheckConcludeOptions = {
+  repo: string;
+  /** The head SHA and name — used when the check-run must be created at conclusion. */
+  sha: string;
+  name: string;
+  checkRunId: string;
+  conclusion: CheckConclusion;
+  output?: CheckOutput;
+  detailsUrl?: string;
 };
 
 /**
@@ -48,6 +80,9 @@ export interface ChecksService {
     detailsUrl?: string;
   }) => Effect.Effect<void>;
 
+  /** Read whether a check-run is completed. Total: an unreadable one is `unknown`. */
+  readonly status: (opts: { repo: string; checkRunId: string }) => Effect.Effect<CheckRunState>;
+
   /** Complete a check-run with a conclusion. */
   readonly update: (opts: {
     repo: string;
@@ -57,6 +92,13 @@ export interface ChecksService {
     /** Optional "Details" link, preserved on completion. */
     detailsUrl?: string;
   }) => Effect.Effect<void>;
+
+  /**
+   * Deliver an execution's verdict: complete `checkRunId`, or create the
+   * check-run already completed when the opening create returned no real id.
+   * Total — the outcome is data the caller records as `executions.delivered_at`.
+   */
+  readonly conclude: (opts: CheckConcludeOptions) => Effect.Effect<CheckDelivery>;
 }
 
 /** Context.Tag — the GitHub check-run dependency a run carries. */
@@ -91,4 +133,5 @@ export const checks = {
     output?: CheckOutput;
     detailsUrl?: string;
   }) => Effect.flatMap(Checks, (c) => c.update(opts)),
+  conclude: (opts: CheckConcludeOptions) => Effect.flatMap(Checks, (c) => c.conclude(opts)),
 } as const;

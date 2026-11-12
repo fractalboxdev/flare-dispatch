@@ -28,6 +28,7 @@ import {
   appendGitNote,
   addIssueLabels,
   closeBotPullRequest,
+  closeBotIssue,
   closeIssueAsDuplicate,
   createIssue,
   createIssueComment,
@@ -45,6 +46,8 @@ import {
   listPullRequests,
   openDraftPullRequest,
   readBranchHead,
+  getPullRequest,
+  listCommitPullRequests,
   readRepoTextFile,
   removeIssueLabel,
   resolveRepoInstallationId,
@@ -52,7 +55,9 @@ import {
 } from "@fractalboxdev/flare-dispatch-github-app";
 import { Effect, Layer, Schedule } from "effect";
 import {
+  type CloseBotIssueResult,
   type CloseDraftPullRequestResult,
+  type CommitPullRequest,
   type DraftPullRequestResult,
   Github,
   GitHubApiError,
@@ -66,7 +71,7 @@ import {
   type WorkflowRunRef,
 } from "@fractalboxdev/flare-dispatch-core";
 import { artifactKey } from "./artifact-r2";
-import { pushGhcrImage } from "./ghcr-push";
+import { classifyGhcrFailure, pushGhcrImageIndex, type GhcrPlatformImage } from "./ghcr-push";
 
 /** The GitHub App credentials the live `pullReview` write needs. */
 export type GithubLiveConfig = {
@@ -297,6 +302,20 @@ export const makeGithubLive = (
         return yield* ghCall(() => readBranchHead({ token, repo, branch }));
       }),
 
+    commitPullRequests: ({ repo, sha, installationId }) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* readNeedsCredentials<readonly CommitPullRequest[]>();
+        const token = yield* mintToken(config, repo, installationId);
+        return yield* ghCall(() => listCommitPullRequests({ token, repo, sha }));
+      }),
+
+    pullRequest: ({ repo, number, installationId }) =>
+      Effect.gen(function* () {
+        if (config === undefined) return yield* readNeedsCredentials<CommitPullRequest>();
+        const token = yield* mintToken(config, repo, installationId);
+        return yield* ghCall(() => getPullRequest({ token, repo, number }));
+      }),
+
     appendMeasureNote: ({ repo, commit, text, installationId }) =>
       Effect.gen(function* () {
         if (config === undefined) return yield* readNeedsCredentials<void>();
@@ -394,6 +413,26 @@ export const makeGithubLive = (
         if (config === undefined) return yield* logSkip(repo, issue, "no GitHub App credentials");
         const token = yield* mintToken(config, repo, installationId);
         yield* ghCall(() => closeIssueAsDuplicate({ token, repo, issue, duplicateOf }));
+      }),
+
+    closeBotIssue: (req): Effect.Effect<CloseBotIssueResult, GitHubApiError> =>
+      Effect.gen(function* () {
+        if (config === undefined) {
+          yield* Effect.logInfo(
+            `github.closeBotIssue skipped (no GitHub App credentials) — ${req.repo}#${req.issue} left open`,
+          );
+          return { closed: false, reason: "uncredentialed", number: req.issue } as const;
+        }
+        const token = yield* mintToken(config, req.repo, req.installationId);
+        return yield* ghCall(() =>
+          closeBotIssue({
+            token,
+            repo: req.repo,
+            issue: req.issue,
+            label: req.label,
+            comment: req.comment,
+          }),
+        );
       }),
 
     pullReview: ({ repo, pr, sha, body, installationId }) =>
@@ -525,7 +564,8 @@ export const makeGithubLive = (
       Effect.gen(function* () {
         if (config === undefined) return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "other" }));
         const token = yield* mintToken(config, req.repo, req.installationId);
-        const release = yield* ghCall(() => publishRelease({ token, repo: req.repo, releaseId: req.releaseId }));
+        const release = yield* ghCall(() => publishRelease({ token, repo: req.repo, releaseId: req.releaseId,
+          ...(req.body === undefined ? {} : { body: req.body }) }));
         return { id: release.id, url: release.htmlUrl, tag: release.tagName, published: true, draft: false };
       }),
     publishReleaseAsset: (req): Effect.Effect<ReleaseAssetResult, GitHubApiError> =>
@@ -541,7 +581,10 @@ export const makeGithubLive = (
           return yield* Effect.fail(new GitHubApiError({ status: 404, reason: "other" }));
         }
         const token = yield* mintToken(config, req.repo, req.installationId);
-        return yield* ghCall(() =>
+        // One attempt, outside `ghCall`'s retry: the R2 body is a stream a
+        // resend finds consumed, and a rate limit's wait belongs to the run's
+        // durable sleep. The caller's step retries re-read the artifact.
+        return yield* Effect.tryPromise({ catch: toGitHubApiError, try: () =>
           uploadReleaseAsset({
             token,
             repo: req.repo,
@@ -552,41 +595,78 @@ export const makeGithubLive = (
             size: source.size,
             ...(req.sha256 !== undefined ? { sha256: req.sha256 } : {}),
           }),
-        );
+        });
       }),
     publishContainerImage: (req): Effect.Effect<void, GitHubApiError> =>
       Effect.gen(function* () {
         if (ghcr === undefined || artifactsBucket === undefined || executionId === undefined || db === undefined) {
           return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "other" }));
         }
+        const arches = ["amd64", "arm64"] as const;
         if (req.repo !== "fractalboxdev/contextful" ||
           !["contextful-control", "contextful-edge", "contextful-full"].includes(req.profile) ||
           !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(req.version) ||
-          req.layerArtifactName !== `${req.profile}-${req.version}-linux-amd64.layer.tar.gz` ||
-          !/^[a-f0-9]{64}$/.test(req.layerDigest) || !/^[a-f0-9]{64}$/.test(req.diffId)) {
+          req.platforms.length !== arches.length ||
+          req.platforms.some((platform, i) =>
+            platform.imageArtifactName !== `${req.profile}-${req.version}-linux-${arches[i]}.image.json`)) {
           return yield* Effect.fail(new GitHubApiError({ status: 400, reason: "other" }));
         }
-        const child = yield* Effect.tryPromise({
-          try: () => db.prepare("SELECT status FROM executions WHERE id = ? AND parent_execution_id = ? AND run = ?")
-            .bind(req.sourceExecutionId, executionId, "contextful-release-cell").first<{ status: string }>(),
-          catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
-        });
-        if (child?.status !== "success") return yield* Effect.fail(new GitHubApiError({ status: 403, reason: "other" }));
-        const source = yield* Effect.tryPromise({
-          try: () => artifactsBucket.get(artifactKey(req.sourceExecutionId, req.layerArtifactName)),
-          catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
-        });
-        if (source === null || source.size !== req.layerSize) {
-          return yield* Effect.fail(new GitHubApiError({ status: 404, reason: "other" }));
+        const platforms: GhcrPlatformImage[] = [];
+        for (const [i, platform] of req.platforms.entries()) {
+          const child = yield* Effect.tryPromise({
+            try: () => db.prepare("SELECT status FROM executions WHERE id = ? AND parent_execution_id = ? AND run = ?")
+              .bind(platform.sourceExecutionId, executionId, "contextful-release-cell").first<{ status: string }>(),
+            catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
+          });
+          if (child?.status !== "success") return yield* Effect.fail(new GitHubApiError({ status: 403, reason: "other" }));
+          const descriptorObject = yield* Effect.tryPromise({
+            try: () => artifactsBucket.get(artifactKey(platform.sourceExecutionId, platform.imageArtifactName)),
+            catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
+          });
+          if (descriptorObject === null) return yield* Effect.fail(new GitHubApiError({ status: 404, reason: "other" }));
+          const descriptor = yield* Effect.tryPromise({
+            try: async () => JSON.parse(await descriptorObject.text()) as {
+              profile?: unknown; version?: unknown; platform?: { os?: unknown; architecture?: unknown };
+              layer?: { digest?: unknown; size?: unknown; path?: unknown };
+              config?: { digest?: unknown; content?: unknown };
+              manifest?: { digest?: unknown; content?: unknown };
+              entry?: Record<string, unknown>;
+            },
+            catch: () => new GitHubApiError({ status: 400, reason: "other" }),
+          });
+          const layerName = `${req.profile}-${req.version}-linux-${arches[i]}.layer.tar.gz`;
+          const { layer, config: imageConfig, manifest, entry } = descriptor;
+          if (descriptor.profile !== req.profile || descriptor.version !== req.version ||
+            descriptor.platform?.os !== "linux" || descriptor.platform.architecture !== arches[i] ||
+            layer?.path !== layerName || typeof layer.digest !== "string" || typeof layer.size !== "number" ||
+            typeof imageConfig?.digest !== "string" || typeof imageConfig.content !== "string" ||
+            typeof manifest?.digest !== "string" || typeof manifest.content !== "string" ||
+            typeof entry !== "object" || entry === null ||
+            (entry.platform as { architecture?: unknown } | undefined)?.architecture !== arches[i]) {
+            return yield* Effect.fail(new GitHubApiError({ status: 400, reason: "other" }));
+          }
+          const sourceExecutionId = platform.sourceExecutionId;
+          const layerSize = layer.size;
+          platforms.push({
+            layerDigest: layer.digest, layerSize,
+            // The layer streams from R2 only when the registry lacks it; a size
+            // that differs from the descriptor's is a staging defect.
+            openLayer: async () => {
+              const source = await artifactsBucket.get(artifactKey(sourceExecutionId, layerName));
+              if (source === null || source.size !== layerSize) throw new TypeError("invalid OCI image name, tag, digest, or size");
+              return source.body;
+            },
+            configDigest: imageConfig.digest, config: new TextEncoder().encode(imageConfig.content),
+            manifestDigest: manifest.digest, manifest: new TextEncoder().encode(manifest.content),
+            entry,
+          });
         }
         return yield* Effect.tryPromise({
-          try: () => pushGhcrImage({
+          try: () => pushGhcrImageIndex({
             username: ghcr.username, token: ghcr.token,
-            name: `${req.repo}/${req.profile}`, tag: req.version,
-            layer: source.body, layerSize: source.size,
-            layerDigest: req.layerDigest, diffId: req.diffId,
+            name: `${req.repo}/${req.profile}`, tag: req.version, platforms,
           }),
-          catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
+          catch: (cause) => new GitHubApiError(classifyGhcrFailure(cause)),
         });
       }),
   };

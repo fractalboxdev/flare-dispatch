@@ -53,15 +53,21 @@ import {
   config,
   defineRun,
   io,
-  sandbox,
-  Sandbox,
-  checkpointSleep,
   step,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
+  compileCacheCommand,
+  compileCacheEnv,
+  COMPILE_CACHE_ENDPOINT_KEY,
+  COMPILE_CACHE_TOKEN_KEY,
+  durableExec,
+  isCompileCacheLane,
   ensureWorkspace,
+  isRestorableEntry,
   loadSecrets,
+  restorePrebuilt,
   workspace,
+  type Workspace,
 } from "@fractalboxdev/flare-dispatch-core/primitives";
 
 const CheckInput = Schema.Struct({
@@ -108,6 +114,35 @@ const CheckInput = Schema.Struct({
   /** Run the R2-cached dependency install after the clone. */
   install: Schema.optionalWith(Schema.Boolean, { default: () => false }),
   /**
+   * R2 cache entries restored into the container after the clone, and again
+   * after a recycled container is re-cloned — e.g. a tool binary a parent run
+   * built once (`prebuildCargoBinary`). Restore-only: a miss or a failed restore
+   * leaves the paths absent, and the command decides what absence means. Each
+   * entry's base lies under `/tmp`, outside the checkout.
+   */
+  restore: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        key: Schema.String,
+        base: Schema.String,
+        paths: Schema.Array(Schema.String),
+      }).pipe(Schema.filter(isRestorableEntry)),
+    ),
+  ),
+  /**
+   * Compile Rust through the shared compile cache: the command runs under
+   * `compileCacheCommand` (sccache as `RUSTC_WRAPPER`, statistics printed at
+   * the end) with the endpoint and token the dispatcher injected. Without an
+   * injected token the command runs unwrapped.
+   */
+  compileCache: Schema.optional(Schema.Boolean),
+  /**
+   * The compile-cache lane the token writes (primitives/compile-cache.ts
+   * `CompileCacheLane`): `base` for a default-branch execution, `pr-<n>` for
+   * pull request `n`'s. Absent, the token reads `base` and writes nothing.
+   */
+  compileCacheLane: Schema.optional(Schema.String.pipe(Schema.filter(isCompileCacheLane))),
+  /**
    * Non-sensitive env only. Dispatch inputs are persisted (executions row +
    * Workflow params) — never put credentials here. Same contract as
    * `offload-test` / `worker-deploy`; see `runs/README.md`.
@@ -143,6 +178,15 @@ const CheckInput = Schema.Struct({
   }),
 });
 
+/** Restore every requested cache entry into a fresh checkout's container. */
+const restoreEntries = (
+  ws: Workspace,
+  entries: Schema.Schema.Type<typeof CheckInput>["restore"],
+) =>
+  Effect.forEach(entries ?? [], (entry) =>
+    restorePrebuilt({ container: ws.container, dir: ws.dir, entry }),
+  ).pipe(Effect.as(ws));
+
 const CheckOutput = Schema.Struct({
   exitCode: Schema.Number,
   durationMs: Schema.Number,
@@ -157,31 +201,6 @@ type CheckI = Schema.Schema.Type<typeof CheckInput>;
 
 /** Default `exec` timeout — lint is usually fast; install + slow tools get headroom via `timeoutSec`. */
 const DEFAULT_TIMEOUT_SEC = 600;
-
-/**
- * Headroom added to the `exec` timeout to derive the Workflow STEP timeout, so
- * `sandbox.exec`'s own deadline fires first (a clean `ExecTimeout` with the
- * log streamed so far) instead of the platform hard-killing the step at the
- * same instant. Unclamped, same reasoning as offload-test's constant.
- */
-const STEP_TIMEOUT_HEADROOM_SEC = 120;
-
-/**
- * Platform-failure retries — see the `exec` step. A verdict is never retried:
- * a command that runs and exits non-zero is a normal `ExecResult`, so no class
- * here can reach one.
- *
- * `StepFailed` is included because a platform kill leaves no Effect `Cause` to
- * read a tag from, and the runner falls back to that name — so listing only
- * `ExecFailed` left the purely-platform failure as the one thing not retried.
- *
- * `CheckoutFailed` is included because `ensureWorkspace` re-clones inside this
- * step, in the same weather that destroyed the checkout. A transient clone
- * failure there would end the step non-retryably, one call short of the
- * recovery it was invoked to perform.
- */
-const PLATFORM_RETRIES = 3;
-const RETRY_ON = ["ExecFailed", "StepFailed", "CheckoutFailed"] as const;
 
 /** CONFIG_KV key — strictly per-repo (see header: no global fallback). */
 const commandKey = (repo: string): string => `check.command:${repo}`;
@@ -215,7 +234,8 @@ const commandKeys = (repo: string, checkLabel: string | undefined): readonly str
  *
  * `offload-test` already resolves `offload-test.timeoutSec:<repo>` for the same
  * reason; this is that key, one run over. A dispatch that passes `timeoutSec`
- * still wins, and the value stays clamped by the run's `maxDurationSec`.
+ * still wins. The run's `maxDurationSec` bounds the whole body, so a timeout
+ * above what remains of it ends as `RunDurationExceeded`, not `ExecTimeout`.
  */
 const timeoutKeys = (repo: string, checkLabel: string | undefined): readonly string[] =>
   checkLabel === undefined
@@ -238,7 +258,11 @@ export const check = defineRun({
   // 1.1.0 — additive: `checkLabel` + the labelled CONFIG_KV rung. An existing
   // unlabelled dispatch resolves the same key, names the same check-run, and
   // gets the same instance id as under 1.0.0.
-  version: "1.1.0",
+  // 1.2.0 — additive: `restore`. A dispatch without it runs as under 1.1.0.
+  // 1.4.0 — additive: `compileCacheLane`. A dispatch without it reads the
+  // compile cache and writes nothing.
+  // 1.3.0 — additive: `compileCache`. A dispatch without it runs as under 1.2.0.
+  version: "1.4.0",
 
   inputs: CheckInput,
   outputs: CheckOutput,
@@ -275,9 +299,24 @@ export const check = defineRun({
     },
   ],
 
+  // The command keys `resolve-config` reads — the receiver skips a repo with
+  // none of them (specs/adr/0007-cost-efficient-execution.md § Dispatch only
+  // work). A webhook dispatch is unlabelled, so it reads `check.command:<repo>`.
+  optIn: ({ input }) =>
+    input.command !== undefined ? [] : commandKeys(input.repo, input.checkLabel),
+
+  compileCache: (input) =>
+    input.compileCache === true
+      ? input.compileCacheLane !== undefined && isCompileCacheLane(input.compileCacheLane)
+        ? input.compileCacheLane
+        : "read-only"
+      : undefined,
+
   limits: {
-    // Wall-time ceiling — headroom for cold install + slow linters.
-    maxDurationSec: 1800,
+    // Run-body wall-time ceiling, enforced by the dispatcher: one full 2700 s
+    // exec (the per-stage ceiling a fan-out gate passes) plus checkout, upload
+    // and the step headroom, with every retry drawing on the same budget.
+    maxDurationSec: 4500,
     admissionMaxQueueAgeSec: (input) =>
       Math.min(90 * 60, Math.max(20 * 60, input.admissionMaxQueueAgeSec ?? 20 * 60)),
   },
@@ -345,6 +384,21 @@ export const check = defineRun({
         required: true,
       });
 
+      // Compile-cache access, read INLINE like the secrets above: the token is
+      // a credential and stays out of checkpointed state. The dispatcher mints
+      // the same token on every invocation, so the command's fingerprint holds.
+      const cacheEndpoint = input.compileCache === true ? yield* config.get(COMPILE_CACHE_ENDPOINT_KEY) : undefined;
+      const cacheToken = input.compileCache === true ? yield* config.get(COMPILE_CACHE_TOKEN_KEY) : undefined;
+      const cache =
+        cacheEndpoint !== undefined && cacheEndpoint !== "" && cacheToken !== undefined && cacheToken !== ""
+          ? { endpoint: cacheEndpoint, token: cacheToken }
+          : undefined;
+      if (input.compileCache === true && cache === undefined) {
+        yield* io.log("warn", "check: compile cache requested but not injected — compiling without it");
+      }
+      const execCommand = cache === undefined ? command : compileCacheCommand(command, input.repo);
+      const cacheEnv = cache === undefined ? {} : compileCacheEnv(cache);
+
       // checkout — container + clone at the SHA (+ optional cached install).
       const { container, dir } = yield* step("checkout", () =>
         workspace({
@@ -352,117 +406,47 @@ export const check = defineRun({
           sha: input.sha,
           image: input.image,
           install: input.install,
-        }),
+        }).pipe(Effect.flatMap((ws) => restoreEntries(ws, input.restore))),
       );
 
       // exec — run the check command. A non-zero exit is a normal ExecResult
       // here; the failOnNonZeroExit branch below decides whether it reds the
-      // check. `result` is the checkpointed step output — replay restores it
-      // identically, which is why `durationMs` is read from it.
-      // The STEP timeout derives from the exec's plus headroom — see the same
-      // note in `offload-test`. Two timeouts that must agree are one timeout
-      // with a bug in it: leave the step's unset and its 600s default silently
-      // wins over a configured `check.timeoutSec`, surfacing as
-      // `WorkflowTimeoutError` from a limit the repo's config never mentions.
-      // A red check is not a transient — but a PLATFORM failure is, and the two
-      // are different channels here. A command that runs and exits non-zero
-      // comes back as a normal `ExecResult` and is decided below; only
-      // `ExecFailed` / `ExecTimeout` fail the Effect. So `retryOn: ExecFailed`
-      // cannot retry a returned verdict. A lost synchronous response leaves
-      // the command outcome uncertain; long checks recover a durable intent.
-      //
-      // Which is not hypothetical. Observed on a consumer's PR: a 40-second
-      // check reported `ExecFailed: exec failed (exit -1): HTTP error! status:
-      // 500` — the container, not the code — and reported it as the repo's
-      // verdict. `retries: 0` made a platform hiccup indistinguishable from a
-      // lint error, on the run whose whole job is to be believed.
-      //
-      // `ExecTimeout` is deliberately NOT retryable: a command that outran its
-      // ceiling will outrun it again, and three more attempts cost the ceiling
-      // three more times.
-      const effectiveTimeoutSec = timeoutSec ?? DEFAULT_TIMEOUT_SEC;
-      const service = yield* Sandbox;
-      const durable = service.checkCommand;
-      const result =
-        durable !== undefined && effectiveTimeoutSec > DEFAULT_TIMEOUT_SEC
-          ? yield* Effect.gen(function* () {
-              const ws = yield* step("exec-workspace", () =>
-                ensureWorkspace({
-                  current: { container, dir },
-                  repo: input.repo,
-                  sha: input.sha,
-                  ...(input.image !== undefined ? { image: input.image } : {}),
-                  install: input.install,
-                }),
-              );
-              const opts = {
-                cwd: ws.dir,
-                container: ws.container,
-                command,
-                env: { ...secretEnv, ...input.env },
-                redactValues: Object.values(secretEnv),
-                timeoutSec: effectiveTimeoutSec,
-              };
-              const handle = yield* step("exec-prepare", () =>
-                durable.prepare({ ...opts, stepName: "exec" }),
-              );
-              // Only the owner intent can authorize launch; retries recover this handle.
-              yield* step("exec-start", () => durable.start(handle, opts), {
-                timeoutSec: 60,
-                retries: PLATFORM_RETRIES,
-                retryOn: RETRY_ON,
-              });
-              const maxPolls = Math.ceil(effectiveTimeoutSec / 5) + 3;
-              for (let i = 0; i < maxPolls; i++) {
-                const status = yield* step(
-                  `exec-observe-${i}`,
-                  () => durable.observe(handle, opts),
-                  { timeoutSec: 60, retries: PLATFORM_RETRIES, retryOn: RETRY_ON },
-                );
-                if (status.state !== "running") break;
-                yield* checkpointSleep(`exec-sleep-${i}`, 5000);
-              }
-              return yield* step("exec-finalize", () => durable.finalize(handle, opts), {
-                timeoutSec: 120,
-                retries: PLATFORM_RETRIES,
-                retryOn: RETRY_ON,
-              });
-            })
-          : yield* step(
-              "exec",
-              () =>
-                // The checkout is re-established INSIDE the retryable step, because a
-                // container recycled between steps takes it with it and the retry
-                // would otherwise re-run the command in a directory that is gone —
-                // three times, reporting the missing directory as the repo's verdict.
-                ensureWorkspace({
-                  current: { container, dir },
-                  repo: input.repo,
-                  sha: input.sha,
-                  ...(input.image !== undefined ? { image: input.image } : {}),
-                  install: input.install,
-                }).pipe(
-                  Effect.flatMap((ws) =>
-                    sandbox.exec({
-                      cwd: ws.dir,
-                      container: ws.container,
-                      command,
-                      // Per-dispatch `env` wins over a same-named Worker secret.
-                      env: { ...secretEnv, ...input.env },
-                      // Defense in depth (header): scrub secret VALUES from the
-                      // captured log before it's persisted, in case the command
-                      // echoes its env.
-                      redactValues: Object.values(secretEnv),
-                      timeoutSec: effectiveTimeoutSec,
-                    }),
-                  ),
-                ),
-              {
-                timeoutSec: effectiveTimeoutSec + STEP_TIMEOUT_HEADROOM_SEC,
-                retries: PLATFORM_RETRIES,
-                retryOn: RETRY_ON,
-              },
-            );
+      // check. `durableExec` retries only platform failures (`ExecFailed`,
+      // `StepFailed`, `CheckoutFailed`), never a returned verdict, and never
+      // `ExecTimeout`: a command that outran its ceiling will outrun it again.
+      // Observed on a consumer's PR: a 40-second check reported `ExecFailed:
+      // exec failed (exit -1): HTTP error! status: 500` — the container, not
+      // the code — as the repo's verdict, because the step did not retry.
+      const { result } = yield* durableExec({
+        name: "exec",
+        workspace: { container, dir },
+        // The checkout is re-established inside the retryable step: a container
+        // recycled between steps takes it with it, and a retry would otherwise
+        // re-run the command in a directory that is gone and report that as the
+        // repo's verdict.
+        ensure: (current) =>
+          ensureWorkspace({
+            current,
+            repo: input.repo,
+            sha: input.sha,
+            ...(input.image !== undefined ? { image: input.image } : {}),
+            install: input.install,
+          }).pipe(
+            // A re-cloned workspace lost what the checkout step restored.
+            Effect.flatMap((ws) => (ws === current ? Effect.succeed(ws) : restoreEntries(ws, input.restore))),
+          ),
+        exec: (ws) => ({
+          cwd: ws.dir,
+          command: execCommand,
+          // Per-dispatch `env` wins over a same-named Worker secret; the
+          // compile-cache endpoint and token win over both.
+          env: { ...secretEnv, ...input.env, ...cacheEnv },
+          // Defense in depth (header): scrub secret VALUES from the captured
+          // log before it's persisted, in case the command echoes its env.
+          redactValues: [...Object.values(secretEnv), ...(cache === undefined ? [] : [cache.token])],
+          timeoutSec: timeoutSec ?? DEFAULT_TIMEOUT_SEC,
+        }),
+      });
 
       // upload-log — push the captured stdout/stderr to R2, get a signed URL.
       // 30-day TTL matches the catalog (`oxlint` / `offload-test` / …); operators

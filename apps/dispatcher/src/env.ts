@@ -38,6 +38,12 @@ export interface Env {
   readonly SUBSTRATE_BACKEND?: string;
 
   /**
+   * `version_metadata` binding — the deployed Worker version, answered to runs
+   * as `io.env(DEPLOYED_VERSION_ENV)`. Absent → `unknown`.
+   */
+  readonly VERSION_METADATA?: WorkerVersionMetadata;
+
+  /**
    * `"off"` stops the container-stop records being written to R2 (the log line
    * is unaffected). Anything else, including absent, leaves them on.
    *
@@ -213,6 +219,14 @@ export interface Env {
   readonly GITHUB_WEBHOOK_SECRET?: string;
 
   /**
+   * Comma-separated GitHub webhook event allowlist. Absent allows every event;
+   * empty allows none. Action-mode deployments can accept only
+   * `check_run,check_suite` for manual reruns while the App retains its broader
+   * subscriptions. Excluded signed deliveries receive 202 without side effects.
+   */
+  readonly GITHUB_WEBHOOK_EVENTS?: string;
+
+  /**
    * Admin bearer token — Worker secret. Gates `POST /v1/admin/events/:wf_id`
    * (the `step.waitForEvent` signalling surface, specs/03-dsl.md
    * § Human-in-the-loop). Production deploys put Cloudflare Access in front
@@ -295,6 +309,14 @@ export interface Env {
   readonly SANDBOX_PREVIEW_HOSTNAME?: string;
 
   /**
+   * The Worker-wide sandbox transport for a repo no `sandbox.transport:<repo>`
+   * key pins: `http`, `websocket` or `rpc`, and `rpc` when unset or not a
+   * transport name. The dispatcher pins the resolved transport onto every
+   * container (`resolveSandboxTransport`). A var, not a secret.
+   */
+  readonly SANDBOX_TRANSPORT?: string;
+
+  /**
    * The dispatcher's own public origin (e.g.
    * `https://flare-dispatch.<account>.workers.dev`, or a custom domain) —
    * prefixed onto the `/v1/artifacts/...` URLs runs upload so the links a
@@ -310,6 +332,17 @@ export interface Env {
    * may differ (e.g. previews on a wildcard subdomain).
    */
   readonly PUBLIC_ORIGIN?: string;
+
+  /**
+   * Compile-cache bounds (routes/compile-cache.ts): one entry's bytes, one
+   * repository's bytes, one execution's written bytes, and the entry age in
+   * days the sweep deletes. Unset or malformed → 100 MiB, 20 GiB, 10 GiB,
+   * 14 days.
+   */
+  readonly COMPILE_CACHE_MAX_OBJECT_BYTES?: string;
+  readonly COMPILE_CACHE_MAX_REPO_BYTES?: string;
+  readonly COMPILE_CACHE_MAX_EXECUTION_BYTES?: string;
+  readonly COMPILE_CACHE_TTL_DAYS?: string;
 
   /**
    * Cloudflare Email Routing `send_email` binding — backs the `email`
@@ -344,7 +377,7 @@ export interface Env {
   /**
    * Where the `mailbox` capability mints disposable test inboxes. Two forms:
    *
-   *   - **Sub-addressing** `base@domain` (e.g. `flare-dispatch-inbox@fractalbox.dev`):
+   *   - **Sub-addressing** `base@domain` (e.g. `flare-dispatch-inbox@example.com`):
    *     mints `base+demo-<rand>@domain`. ONE Email Routing custom-address rule for
    *     `base@domain` → this Worker matches every `base+…@domain` (RFC 5233
    *     sub-addressing must be ON in Email Routing settings), so the zone's
@@ -401,6 +434,14 @@ export interface Env {
   readonly AGENT_BUDGET?: DurableObjectNamespace<import("./agent-budget-do").AgentBudget>;
 
   /**
+   * One compile-cache ledger per repository (compile-cache-ledger.ts): the
+   * byte count every compile-cache PUT reserves against, and each
+   * execution's write budget and end marker. Absent → the compile cache
+   * serves reads and refuses every write.
+   */
+  readonly COMPILE_CACHE_LEDGER?: DurableObjectNamespace<import("./compile-cache-ledger-do").CompileCacheLedger>;
+
+  /**
    * Optional dedicated secret for the agent model-proxy capability token. Falls
    * back to `HMAC_SECRET` (HKDF label keeps them independent). Neither set → the
    * model-proxy route default-denies. `wrangler secret put AGENT_PROXY_SECRET`.
@@ -433,6 +474,60 @@ export interface Env {
    * `CLOUDFLARE_ACCOUNT_ID` below.
    */
   readonly ADMISSION_CAP?: string;
+
+  /**
+   * The release pool's admission slots — a var, carried as a string. The
+   * release pool admits at most the smaller of this and `ADMISSION_CAP`; keep
+   * it ≤ `RunSandboxRelease`'s `max_instances`. Absent / unparsable → 8
+   * (`RELEASE_ADMISSION_CAP_DEFAULT`).
+   */
+  readonly ADMISSION_CAP_RELEASE?: string;
+
+  /**
+   * The agent pool's admission slots — a var, carried as a string. The agent
+   * pool admits at most the smaller of this and `ADMISSION_CAP`; keep it ≤
+   * `RunSandboxAgent`'s `max_instances`. Absent / unparsable → 8
+   * (`AGENT_ADMISSION_CAP_DEFAULT`).
+   */
+  readonly ADMISSION_CAP_AGENT?: string;
+
+  /**
+   * The browser pool's admission slots — a var, carried as a string. The
+   * browser pool admits at most the smaller of this and `ADMISSION_CAP`; keep
+   * it ≤ `RunSandboxBrowser`'s `max_instances`. Absent / unparsable → 16
+   * (`BROWSER_ADMISSION_CAP_DEFAULT`).
+   */
+  readonly ADMISSION_CAP_BROWSER?: string;
+
+  /**
+   * The monthly spend budget in USD (specs/adr/0006-spend-guard.md) — a var.
+   * At or over it, admission skips every run with a neutral check. Unset or
+   * unparsable → 50; `unlimited` disables it. CONFIG_KV
+   * `spend.budgetMonthlyUsd` overrides it without a deploy. The default lives
+   * in code (core spend.ts), because an operator overlay replaces the
+   * committed wrangler.jsonc.
+   */
+  readonly SPEND_BUDGET_MONTHLY_USD?: string;
+
+  /**
+   * The burn ceiling in USD per hour — a var. The summed hourly rate of every
+   * admitted execution, across all pools, stays at or under it. Unset or
+   * unparsable → 1.50; `unlimited` disables it. CONFIG_KV
+   * `spend.burnMaxUsdPerHour` overrides it.
+   */
+  readonly SPEND_BURN_MAX_USD_PER_HOUR?: string;
+
+  /**
+   * Multiplier on metered container + model spend for Workflow steps and
+   * Durable Objects — a var. Unset or outside [1, 10] → 1.10.
+   */
+  readonly SPEND_OVERHEAD_FACTOR?: string;
+
+  /**
+   * Fraction of the monthly budget whose crossing sends the month's one
+   * warning on the notice path — a var. Unset or outside (0, 1] → 0.8.
+   */
+  readonly SPEND_WARN_RATIO?: string;
 
   /**
    * Cloudflare account id (the 32-hex id in the dashboard URL) — a var, not a

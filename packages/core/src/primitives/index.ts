@@ -10,10 +10,42 @@
 // See specs/03-dsl.md § Primitives and ./README.md.
 
 export { ensureWorkspace, workspace, type Workspace } from "./workspace";
+export {
+  durableExec,
+  pollDelayMs,
+  DURABLE_EXEC_MIN_TIMEOUT_SEC,
+  DURABLE_EXEC_RETRY_ON,
+  type DurableExecCommand,
+  type DurableExecOpts,
+  type DurableExecResult,
+} from "./durable-exec";
 export { installCached } from "./install-cached";
+export {
+  isRestorableEntry,
+  keyMaterialCommand,
+  parsePathPackages,
+  prebuildCargoBinary,
+  prebuiltCommand,
+  prebuiltEntry,
+  prebuiltKey,
+  restorePrebuilt,
+  KEY_FILES,
+  PREBUILT_ROOT,
+  type CacheEntry,
+  type PrebuiltBinary,
+} from "./prebuilt-binary";
+export {
+  compileCacheCommand,
+  compileCacheEnv,
+  COMPILE_CACHE_ENDPOINT_KEY,
+  COMPILE_CACHE_TOKEN_KEY,
+  isCompileCacheLane,
+  type CompileCacheAccess,
+  type CompileCacheLane,
+} from "./compile-cache";
 export { sharded, type Shard } from "./sharded";
 export { fanOut, type FanOutShard } from "./fan-out";
-export { waitForChildren, waitForChildrenDurably } from "./wait-for-children";
+export { waitForAnyChildDurably, waitForChildren, waitForChildrenDurably } from "./wait-for-children";
 export { bootApp } from "./boot-app";
 export { probeHttp, type ProbeResult } from "./probe-http";
 export { loadSecrets } from "./load-secrets";
