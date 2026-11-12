@@ -13,6 +13,7 @@ import { GithubApp } from "./app.ts";
 import { classify, InstallationDirectory } from "./applier.ts";
 import { GithubHttpError, GithubNetworkError, type GithubError } from "./client.ts";
 import { commentWriteReceipt, commentWriteResource } from "./comment-writes.ts";
+import { JobRecordPayload, VerdictRecordPayload } from "./records.ts";
 import {
   BlobStore,
   EmailSender,
@@ -113,6 +114,8 @@ export const SidePayloads = {
   }),
   "canary.push": Schema.Struct({ branch: Schema.String, tick_time: Schema.String }),
   "delivery.redeliver": Schema.Struct({ delivery_id: Schema.Number }),
+  "job.record": JobRecordPayload,
+  "verdict.record": VerdictRecordPayload,
 } as const;
 
 export type SideKind = keyof typeof SidePayloads;
@@ -198,7 +201,10 @@ const deliveryAnswer = (a: DeliveryAnswer): Effect.Effect<ApplyAnswer, Refusal |
 const hex = (bytes: ArrayBuffer) =>
   Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
 
-/** `v1=<hex HMAC-SHA256 over "<timestamp>.<body>">`, the signature a Slack verdict POST carries (FD-GH-079). */
+/**
+ * `v1=<hex HMAC-SHA256 over "<timestamp>.<body>">`, the signature a Slack verdict POST (FD-GH-079) and a job or verdict
+ * record POST (FD-GH-098) carry.
+ */
 export const slackSignature = (secret: string, timestamp: string, body: string) =>
   Effect.promise(async () => {
     const key = await crypto.subtle.importKey(
@@ -338,6 +344,57 @@ const orderedComment = (ctx: Ctx, p: PayloadOf<"comment"> & { readonly marker: s
       ),
     );
   });
+
+/**
+ * The delivery id of a `job.record` or `verdict.record` row, `<execution_id>/<intent_key>` or `ops/<intent_key>` for an
+ * ops row. It derives from the row's key alone, so every repeat of the row sends the first attempt's id (FD-GH-100).
+ */
+export const recordDeliveryId = (row: Pick<IntentRow, "executionId" | "intentKey">) =>
+  `${row.executionId ?? "ops"}/${row.intentKey}`;
+
+/**
+ * The `verdictRecord` actuator's apply: one signed `POST` of the record to `records.url`, with the timestamp, the
+ * signature over `<timestamp>.<body>` and the row's delivery id (FD-GH-098). It calls no GitHub API, so it holds no
+ * installation and takes no `InstallationQuota` permit (FD-GH-101). A `2xx` applies the row; a `429` or a `5xx` retries
+ * it; any other status refuses it; a request whose answer is lost leaves the row ambiguous, which the drainer sends
+ * again as the replay-safe kind it is.
+ */
+const deliverRecord = <K extends "job.record" | "verdict.record">(): Handler<K> => ({
+  github: false,
+  apply: (ctx, p) =>
+    Effect.gen(function* () {
+      const { records, fetch } = yield* SideOutputConfig.use((s) => Effect.succeed(s));
+      if (records === undefined)
+        return yield* refuse(`${ctx.row.kind}: no records endpoint is configured`);
+      const body = JSON.stringify(p);
+      const timestamp = String(Math.floor((yield* Clock.currentTimeMillis) / 1000));
+      const signature = yield* slackSignature(records.secret, timestamp, body);
+      const deliveryId = recordDeliveryId(ctx.row);
+      const response = yield* Effect.tryPromise({
+        try: (signal) =>
+          fetch(records.url, {
+            method: "POST",
+            // A redirect would carry the signed record to an endpoint the overlay does not name.
+            redirect: "manual",
+            signal,
+            headers: {
+              "content-type": "application/json",
+              "x-flare-dispatch-timestamp": timestamp,
+              "x-flare-dispatch-signature": signature,
+              "x-flare-dispatch-delivery": deliveryId,
+            },
+            body,
+          }),
+        catch: (e) => new GithubNetworkError({ sent: true, message: String(e) }),
+      });
+      if (response.ok) return applied(deliveryId);
+      const reason = `${ctx.row.kind}: records ${response.status}`;
+      return response.status === 429 || response.status >= 500
+        ? yield* Effect.fail(new Retry({ reason }))
+        : yield* refuse(reason);
+    }),
+  lookup: notLooked,
+});
 
 const handlers: { readonly [K in SideKind]: Handler<K> } = {
   comment: {
@@ -745,6 +802,8 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
       }),
     lookup: notLooked,
   },
+  "job.record": deliverRecord(),
+  "verdict.record": deliverRecord(),
 };
 
 const httpFailure = (status: number, json: unknown) =>

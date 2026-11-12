@@ -1,7 +1,7 @@
 // The actuators the control plane runs, one per actuator binding the profile names: the check-run applier under
-// `checkRun` and the side-output applier under every other GitHub binding. The drainer sends each row to the binding
-// its kind names (mameko specs/outbox.md § The actuator port and the actuator rate limit; specs/github-output.md
-// § Scope).
+// `checkRun` and the side-output applier under every other binding, `verdictRecord` included. The drainer sends each
+// row to the binding its kind names (mameko specs/outbox.md § The actuator port and the actuator rate limit;
+// specs/github-output.md § Scope).
 import { type Actuator, Actuators, actuatorRegistry } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { makeCheckRunApplier } from "./applier.ts";
@@ -21,6 +21,7 @@ export const SIDE_OUTPUT_BINDINGS = [
   "notifyEmail",
   "notifySlack",
   "notice",
+  "verdictRecord",
 ] as const;
 
 /** Every GitHub binding's actuator, keyed by binding name. */

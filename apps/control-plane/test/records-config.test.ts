@@ -1,5 +1,6 @@
 // The control plane's records configuration: the rendered `RECORDS_URL` decides whether the profile it serves declares
 // the record kinds (specs/github-output.md § Job and verdict records).
+import { SideOutputConfig } from "@fractalboxdev/flare-dispatch-github";
 import { ConfigurationSource } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
@@ -9,6 +10,7 @@ import {
   recordsUrlOf,
   type ControlPlaneEnv,
 } from "../src/config.ts";
+import { recordsEndpointOf, sideOutputLayer } from "../src/github.ts";
 
 const env = (vars: Partial<ControlPlaneEnv>) => vars as ControlPlaneEnv;
 
@@ -47,5 +49,35 @@ describe("records configuration", () => {
     expect(loaded(env({ RECORDS_URL: "https://records.example.com/hook" })).policyVersion).toBe(
       "flare-dispatch.v2.0-phase2-records",
     );
+  });
+
+  it("[FD-GH-098] the side-output applier signs records with RECORDS_SIGNING_KEY and posts them to RECORDS_URL, and has no endpoint without both", () => {
+    const app = { appId: "1", privateKeyPem: "pem", fetch };
+    const recordsOf = (e: ControlPlaneEnv) =>
+      Effect.runSync(
+        SideOutputConfig.use((s) => Effect.succeed(s.records)).pipe(
+          Effect.provide(sideOutputLayer(e, app)),
+        ),
+      );
+    const set = env({
+      RECORDS_URL: " https://records.example.com/hook ",
+      RECORDS_SIGNING_KEY: "records-key",
+    });
+    expect(recordsEndpointOf(set)).toEqual({
+      url: "https://records.example.com/hook",
+      secret: "records-key",
+    });
+    expect(recordsOf(set)).toEqual({
+      url: "https://records.example.com/hook",
+      secret: "records-key",
+    });
+    for (const unset of [
+      env({ RECORDS_URL: "https://records.example.com/hook" }),
+      env({ RECORDS_URL: "https://records.example.com/hook", RECORDS_SIGNING_KEY: " " }),
+      env({ RECORDS_URL: "", RECORDS_SIGNING_KEY: "records-key" }),
+    ]) {
+      expect(recordsEndpointOf(unset)).toBeUndefined();
+      expect(recordsOf(unset)).toBeUndefined();
+    }
   });
 });

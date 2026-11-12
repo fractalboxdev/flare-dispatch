@@ -97,7 +97,7 @@ const statement = (
 });
 
 /** A D1 over Node's SQLite whose `batch` runs in one transaction, as D1 runs it atomically. */
-const sqliteD1 = (): D1Like & { readonly sqlite: DatabaseSync } => {
+export const sqliteD1 = (): D1Like & { readonly sqlite: DatabaseSync } => {
   const db = new DatabaseSync(":memory:");
   return {
     sqlite: db,
