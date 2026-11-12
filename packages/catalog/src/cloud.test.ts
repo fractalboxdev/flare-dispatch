@@ -5,10 +5,10 @@ import {
 } from "@fractalboxdev/flare-dispatch-agentic/executor";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
-import { buildProfile, credentialedGrantLabels } from "@fractalboxdev/flare-dispatch-profile";
+import { buildProfile, deploymentSecretGrantLabels } from "@fractalboxdev/flare-dispatch-profile";
 import {
   attachGrants,
-  carriesCredential,
+  attachesDeploymentSecret,
   executionGrantRules,
   MODEL_GATEWAY_PATH,
 } from "./egress.ts";
@@ -78,16 +78,20 @@ describe("the model-gateway grant", () => {
   });
 });
 
-describe("credentialed grants", () => {
-  it("[FD-ISO-022] cf-api carries a credential and no base grant does, so only a run declaring one loses gha", () => {
-    expect(carriesCredential("cf-api")).toBe(true);
+describe("grants that attach a deployment secret", () => {
+  it("[FD-ISO-022] cf-api attaches a deployment secret and no base grant does, so only a run declaring one loses gha", () => {
+    expect(attachesDeploymentSecret("cf-api")).toBe(true);
     for (const grant of ["package-registries", "git-remote", "model-gateway", "unknown"])
-      expect(carriesCredential(grant)).toBe(false);
+      expect(attachesDeploymentSecret(grant)).toBe(false);
     const profile = buildProfile("production", 4);
-    expect(credentialedGrantLabels(profile, undefined, carriesCredential)).toEqual([]);
+    expect(deploymentSecretGrantLabels(profile, undefined, attachesDeploymentSecret)).toEqual([]);
     expect(
-      credentialedGrantLabels(profile, { setup: ["cf-api"], agent: [] }, carriesCredential),
-    ).toEqual(["credentialed-grant"]);
+      deploymentSecretGrantLabels(
+        profile,
+        { setup: ["cf-api"], agent: [] },
+        attachesDeploymentSecret,
+      ),
+    ).toEqual(["deployment-secret-grant"]);
   });
 });
 

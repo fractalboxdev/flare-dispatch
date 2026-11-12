@@ -23,12 +23,14 @@ export const GATE_GRANTS: Readonly<Record<string, GrantRule>> = {
 };
 
 /**
- * Whether a grant carries a credential: the egress proxy attaches a secret the deployment holds, as `cf-api` attaches
- * the operator's Cloudflare API token. The base grants carry none: `package-registries` and `git-remote` attach
- * nothing, and `model-gateway` attaches the execution's per-lease token, minted for one lease and revoked with it
- * (MAMEKO-ISO-053). An execution with a grant that carries a credential is never placed on `gha` (FD-ISO-022).
+ * Whether a grant attaches a deployment secret: a secret the deployment holds beyond any one lease, as `cf-api` attaches
+ * the operator's Cloudflare API token. No base grant does: `package-registries` and `git-remote` attach nothing, and
+ * `model-gateway` attaches the execution's per-lease token, a credential the control plane mints for one lease and
+ * revokes within 30 s of its end (MAMEKO-ISO-052, MAMEKO-ISO-053). An execution with a grant that attaches a deployment
+ * secret is never placed on `gha` (FD-ISO-022).
  */
-export const carriesCredential = (grant: string): boolean => Object.hasOwn(GATE_GRANTS, grant);
+export const attachesDeploymentSecret = (grant: string): boolean =>
+  Object.hasOwn(GATE_GRANTS, grant);
 
 /** The control plane's model route (specs/interfaces.md § Surfaces and their identity gates). */
 export const MODEL_GATEWAY_PATH = "/v1/model/";

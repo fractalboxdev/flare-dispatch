@@ -16,8 +16,8 @@ import {
   cloudEligibleAt,
   configurationSourceLayer,
   ConfigurationSourceLive,
-  CREDENTIALED_GRANT,
-  credentialedGrantLabels,
+  DEPLOYMENT_SECRET_GRANT,
+  deploymentSecretGrantLabels,
   deliveryOrder,
   deviceSlotDefaults,
   GateDecisionSourceLive,
@@ -630,7 +630,7 @@ describe("placement", () => {
     expect(r.requiresPosture).toBe("attested-dedicated");
   });
 
-  it("[FD-ISO-022] a run whose egress profiles hold a credentialed grant never keeps gha", () => {
+  it("[FD-ISO-022] a run whose egress profiles hold a grant that attaches a deployment secret never keeps gha", () => {
     const shapes = [
       { class: "required", labels: ["apple-build"] },
       ...CLASSES.map((c) => ({ class: c, labels: ["release-matrix"] })),
@@ -638,24 +638,27 @@ describe("placement", () => {
     ];
     for (const shape of shapes) {
       expect(kinds4(shape)).toContain("gha");
-      const r = eligibleKinds(phase4, { ...shape, labels: [...shape.labels, CREDENTIALED_GRANT] });
+      const r = eligibleKinds(phase4, {
+        ...shape,
+        labels: [...shape.labels, DEPLOYMENT_SECRET_GRANT],
+      });
       expect(r.kinds).not.toContain("gha");
-      expect(r.constraints).toContain("credentialed-grant");
+      expect(r.constraints).toContain("deployment-secret-grant");
     }
-    expect(kinds4({ class: "required", labels: ["apple-build", CREDENTIALED_GRANT] })).toEqual([
-      "device",
-    ]);
+    expect(kinds4({ class: "required", labels: ["apple-build", DEPLOYMENT_SECRET_GRANT] })).toEqual(
+      ["device"],
+    );
   });
 
   it("[FD-ISO-022] class resolution labels an execution by every grant of its egress profiles", () => {
-    const credentialed = (g: string) => g === "cf-api";
-    expect(credentialedGrantLabels(phase4, undefined, credentialed)).toEqual([]);
-    expect(credentialedGrantLabels(phase4, { setup: ["cf-api"], agent: [] }, credentialed)).toEqual(
-      [CREDENTIALED_GRANT],
-    );
-    expect(credentialedGrantLabels(phase4, { setup: [], agent: ["cf-api"] }, credentialed)).toEqual(
-      [CREDENTIALED_GRANT],
-    );
+    const attachesSecret = (g: string) => g === "cf-api";
+    expect(deploymentSecretGrantLabels(phase4, undefined, attachesSecret)).toEqual([]);
+    expect(
+      deploymentSecretGrantLabels(phase4, { setup: ["cf-api"], agent: [] }, attachesSecret),
+    ).toEqual([DEPLOYMENT_SECRET_GRANT]);
+    expect(
+      deploymentSecretGrantLabels(phase4, { setup: [], agent: ["cf-api"] }, attachesSecret),
+    ).toEqual([DEPLOYMENT_SECRET_GRANT]);
     // A base grant counts as much as the run's own: a profile whose `setup` holds one labels every execution.
     const based = {
       ...phase4,
@@ -664,8 +667,8 @@ describe("placement", () => {
         setup: { ...phase4.egress_profiles.setup, grants: ["git-remote", "cf-api"] },
       },
     };
-    expect(credentialedGrantLabels(based, { setup: [], agent: [] }, credentialed)).toEqual([
-      CREDENTIALED_GRANT,
+    expect(deploymentSecretGrantLabels(based, { setup: [], agent: [] }, attachesSecret)).toEqual([
+      DEPLOYMENT_SECRET_GRANT,
     ]);
   });
 

@@ -93,6 +93,13 @@ def requestPlacement (run : String) (publish : Bool) : List String × List Strin
   let labels := if run == "sandbox-image" && publish then sandboxImagePublish.labels else []
   ((own ++ extra).eraseDups, labels.eraseDups)
 
+/-- The label intake adds for a run whose egress profiles hold a grant that attaches a deployment secret
+(`deploymentSecretGrantLabels` in packages/profile/src/placement.ts, FD-ISO-022): `worker-deploy` declares `cf-api`,
+which attaches the operator's Cloudflare API token; `sandbox-image` declares no grant, and no base grant of the profile
+attaches a deployment secret. -/
+def deploymentSecretLabels (run : String) : List String :=
+  if run == "worker-deploy" then ["deployment-secret-grant"] else []
+
 /-- A profile placement predicate (mameko's `Predicate`): one single-key object, recursive through `not`, `all` and
 `any`. -/
 inductive Pred where

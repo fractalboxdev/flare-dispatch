@@ -50,10 +50,10 @@ export interface EligibleSet {
 }
 
 /**
- * The placement label of an execution whose egress profiles hold a grant that carries a credential. The declared
- * constraint `credentialed-grant` holds for it and removes `gha` (FD-ISO-022).
+ * The placement label of an execution whose egress profiles hold a grant that attaches a deployment secret. The declared
+ * constraint `deployment-secret-grant` holds for it and removes `gha` (FD-ISO-022).
  */
-export const CREDENTIALED_GRANT = "credentialed-grant";
+export const DEPLOYMENT_SECRET_GRANT = "deployment-secret-grant";
 
 /** A run's own grants per egress phase. */
 export interface RunGrants {
@@ -62,10 +62,7 @@ export interface RunGrants {
 }
 
 /** The grants of an execution's egress profiles: the profile's base grants of both phases and the run's own. */
-export const egressGrantsOf = (
-  profile: Profile,
-  grants: RunGrants | undefined,
-): readonly string[] => [
+const egressGrantsOf = (profile: Profile, grants: RunGrants | undefined): readonly string[] => [
   ...new Set([
     ...profile.egress_profiles.setup.grants,
     ...profile.egress_profiles.agent.grants,
@@ -75,15 +72,15 @@ export const egressGrantsOf = (
 ];
 
 /**
- * `credentialed-grant` when any grant of the execution's egress profiles carries a credential, by the grant
- * catalogue's `carriesCredential`, else no label (FD-ISO-022).
+ * `deployment-secret-grant` when any grant of the execution's egress profiles attaches a deployment secret, by the
+ * grant catalogue's `attachesDeploymentSecret`, else no label (FD-ISO-022).
  */
-export const credentialedGrantLabels = (
+export const deploymentSecretGrantLabels = (
   profile: Profile,
   grants: RunGrants | undefined,
-  carriesCredential: (grant: string) => boolean,
+  attachesDeploymentSecret: (grant: string) => boolean,
 ): readonly string[] =>
-  egressGrantsOf(profile, grants).some(carriesCredential) ? [CREDENTIALED_GRANT] : [];
+  egressGrantsOf(profile, grants).some(attachesDeploymentSecret) ? [DEPLOYMENT_SECRET_GRANT] : [];
 
 const holds = (p: Predicate, r: PlacementRequest): boolean => {
   if ("class" in p) return r.class === p.class;

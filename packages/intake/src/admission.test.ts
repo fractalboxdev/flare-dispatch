@@ -189,7 +189,7 @@ describe("placement at admission", () => {
     expect(h.recorded.started).toEqual([]);
   });
 
-  it("[FD-ISO-022] a run whose egress profiles hold a credentialed grant is never placed on gha", async () => {
+  it("[FD-ISO-022] a run whose egress profiles hold a grant that attaches a deployment secret is never placed on gha", async () => {
     const runs: typeof CATALOG = {
       ...CATALOG,
       deploy: testRun("deploy", { grants: { setup: ["cf-api"], agent: [] } }),
@@ -215,7 +215,7 @@ describe("placement at admission", () => {
       ) as string[];
 
     const deploy = await dispatch(h, "deploy", { inputs: { sha: HEAD } });
-    expect(labels(deploy.executionId)).toEqual(["apple-build", "credentialed-grant"]);
+    expect(labels(deploy.executionId)).toEqual(["apple-build", "deployment-secret-grant"]);
     expect(placementKinds(h, deploy.executionId)).toBe(JSON.stringify(["device"]));
 
     const agent = await dispatch(h, "agent", { inputs: { sha: HEAD } });
