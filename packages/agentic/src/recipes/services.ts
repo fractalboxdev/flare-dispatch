@@ -178,8 +178,48 @@ export const modelFailureVerdict = (
       ? { _tag: "failure", reason: "capacity: context overflow" }
       : { _tag: "failure", reason: `infra: model ${e.kind}` };
 
+/**
+ * One edit-loop run. `started` is false when the executable could not start; `exitCode` is null when the process
+ * started and a signal ended it, such as the loop's timeout.
+ */
+export interface EditLoopResult {
+  readonly started: boolean;
+  readonly exitCode: number | null;
+}
+
 /** The edit loop: the coding agent that edits the checkout in the job sandbox under the `agent` egress profile. */
 export class EditLoop extends Context.Service<
   EditLoop,
-  { readonly run: (prompt: string) => Effect.Effect<{ readonly exitCode: number | null }> }
+  { readonly run: (prompt: string) => Effect.Effect<EditLoopResult> }
 >()("@fractalboxdev/flare-dispatch-agentic/EditLoop") {}
+
+/**
+ * Whether the edit loop is unavailable: its executable did not start, or exited 126 (not executable) or 127 (not
+ * found). A loop that started and was killed, or exited any other code, leaves the verdict to the recipe's check.
+ */
+export const editLoopUnavailable = (loop: EditLoopResult) =>
+  !loop.started || loop.exitCode === 126 || loop.exitCode === 127;
+
+/** A suppression ledger row: the proposal's key, declined for good, or the matching pull request's close time. */
+export interface SuppressionEntry {
+  readonly key: string;
+  readonly declined: boolean;
+  /** When the matching pull request closed unmerged, epoch ms; null when none did. */
+  readonly closedAt: number | null;
+}
+
+export class SuppressionReadFailed extends Schema.TaggedError<SuppressionReadFailed>()(
+  "SuppressionReadFailed",
+  { key: Schema.String, detail: Schema.String },
+) {}
+
+/**
+ * The suppression ledger, read by a proposal's exact suppression key (specs/runs/agentic.md § Suppression ledger). A
+ * key with no row answers null; a read that fails is `SuppressionReadFailed`, never null (FD-AGT-042, FD-AGT-044).
+ */
+export class SuppressionLedger extends Context.Service<
+  SuppressionLedger,
+  {
+    readonly lookup: (key: string) => Effect.Effect<SuppressionEntry | null, SuppressionReadFailed>;
+  }
+>()("@fractalboxdev/flare-dispatch-agentic/SuppressionLedger") {}

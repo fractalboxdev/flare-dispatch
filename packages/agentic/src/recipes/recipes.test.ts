@@ -429,23 +429,27 @@ describe("improve-pr", () => {
   const run = (scores: number[], verifyExit = 0, rec = recorder()) => {
     let measured = 0;
     return Effect.runPromise(
-      improvePrRun.workflow.execute(payload("improve-pr", { baseBranch: "main", dimension })).pipe(
-        Effect.provide(
-          Layer.provideMerge(
-            improvePrRun.layer,
-            fakeServices(rec, {
-              shell: (c) =>
-                c === dimension.measure
-                  ? {
-                      exitCode: 0,
-                      stdout: `size: ${scores[measured++]} KiB\nsecret-internal-detail`,
-                      stderr: "",
-                    }
-                  : { exitCode: verifyExit, stdout: "", stderr: "" },
-            }),
+      improvePrRun.workflow
+        .execute(
+          payload("improve-pr", { repo: { owner: "o", name: "r" }, baseBranch: "main", dimension }),
+        )
+        .pipe(
+          Effect.provide(
+            Layer.provideMerge(
+              improvePrRun.layer,
+              fakeServices(rec, {
+                shell: (c) =>
+                  c === dimension.measure
+                    ? {
+                        exitCode: 0,
+                        stdout: `size: ${scores[measured++]} KiB\nsecret-internal-detail`,
+                        stderr: "",
+                      }
+                    : { exitCode: verifyExit, stdout: "", stderr: "" },
+              }),
+            ),
           ),
         ),
-      ),
     ).then((result) => ({ result, rec }));
   };
 
@@ -462,10 +466,11 @@ describe("improve-pr", () => {
     const entries = [{ dimension }, { dimension: lint }].map((p) =>
       Schema.decodeUnknownSync(ImprovePrParams)(p),
     );
-    const inputs = entries.map((p, i) => improvePrRequest(p, i === 0 ? "main" : "develop"));
+    const inputs = entries.map((p, i) => improvePrRequest(p, "o/r", i === 0 ? "main" : "develop"));
+    const repo = { owner: "o", name: "r" };
     expect(inputs).toEqual([
-      { baseBranch: "main", dimension },
-      { baseBranch: "develop", dimension: lint },
+      { repo, baseBranch: "main", dimension },
+      { repo, baseBranch: "develop", dimension: lint },
     ]);
     const outputs: Record<string, string> = {
       [dimension.measure]: "size: 120 KiB",
@@ -513,17 +518,21 @@ describe("improve-pr", () => {
   it("improve-pr concludes infra: edit loop unavailable when the edit loop exits 127", async () => {
     const rec = recorder();
     const result = await Effect.runPromise(
-      improvePrRun.workflow.execute(payload("improve-pr", { baseBranch: "main", dimension })).pipe(
-        Effect.provide(
-          Layer.provideMerge(
-            improvePrRun.layer,
-            fakeServices(rec, {
-              shell: () => ({ exitCode: 0, stdout: "1", stderr: "" }),
-              editLoop: () => 127,
-            }),
+      improvePrRun.workflow
+        .execute(
+          payload("improve-pr", { repo: { owner: "o", name: "r" }, baseBranch: "main", dimension }),
+        )
+        .pipe(
+          Effect.provide(
+            Layer.provideMerge(
+              improvePrRun.layer,
+              fakeServices(rec, {
+                shell: () => ({ exitCode: 0, stdout: "1", stderr: "" }),
+                editLoop: () => 127,
+              }),
+            ),
           ),
         ),
-      ),
     );
     expect(result).toEqual({ _tag: "failure", reason: "infra: edit loop unavailable" });
   });

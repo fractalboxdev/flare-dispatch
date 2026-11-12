@@ -90,7 +90,7 @@ const improvePrDecoder =
   (params: ImprovePrParams): RequestDecoder =>
   (event) =>
     Match.value(event).pipe(
-      Match.tag("cron", (c) => Option.some(improvePrRequest(params, c.branch))),
+      Match.tag("cron", (c) => Option.some(improvePrRequest(params, c.repo, c.branch))),
       Match.orElse(() => Option.none()),
     );
 

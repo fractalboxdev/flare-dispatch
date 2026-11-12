@@ -23,6 +23,7 @@ import {
   RecipeIntents,
   Shell,
   StagedWrites,
+  SuppressionLedger,
   writebackRecordsLayer,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import {
@@ -363,6 +364,9 @@ const answering = (text: string) =>
 
 const noArtifacts = Layer.succeed(Artifacts, { put: () => Effect.void });
 
+/** A suppression ledger with no row, so every proposal stays open. */
+const noSuppressions = Layer.succeed(SuppressionLedger, { lookup: () => Effect.succeed(null) });
+
 /** The executor's lease of a spec-drift-pr execution: the run in the checkout, the staged write to R2, its intents. */
 const runSpecDrift = async (
   plane: { db: D1Like; bucket: Bucket },
@@ -395,6 +399,7 @@ const runSpecDrift = async (
     executorIntents(plane.db, lease),
     recording,
     noArtifacts,
+    noSuppressions,
     WorkflowEngine.layerMemory,
   );
   const [owner, name] = lease.scope.split("/") as [string, string];

@@ -9,11 +9,14 @@ import {
   bodyOf,
   harness,
   HEAD,
+  manifest,
   pullRequestPayload,
   REPO,
   refusal,
+  repoWithManifest,
   signedWebhook,
 } from "./harness.test-support.ts";
+import { catalogRuns } from "./catalog.ts";
 import { handleIntake } from "./routes.ts";
 
 describe("dispatch validation", () => {
@@ -94,6 +97,55 @@ describe("dispatch validation", () => {
       long.push(await refusal(h, authenticated({ signals: [s] })));
     expect([many, ...long]).toEqual(Array(5).fill({ status: 400, code: "invalid_signals" }));
     expect(h.executions()).toEqual([]);
+  });
+});
+
+describe("a self-heal-pr dispatch", () => {
+  const incident = (over: Record<string, unknown> = {}) => ({
+    contractVersion: "v1",
+    incidentId: "ci-acme-app-1",
+    class: "ci",
+    repo: REPO,
+    repro: { kind: "command", command: "pnpm test" },
+    ...over,
+  });
+  const selfHeal = async () =>
+    harness({
+      settings: { catalog: catalogRuns("production") },
+      repos: {
+        [REPO]: repoWithManifest(manifest([{ recipe: "self-heal-pr", triggers: ["dispatch"] }])),
+      },
+    });
+  const dispatch = (inputs: unknown) =>
+    authenticated({ run: "self-heal-pr", label: null, sha: HEAD, inputs });
+
+  it("[FD-AGT-063] without an incident/v1 pack of class ci with a command repro answers 400 before any read or row", async () => {
+    const h = await selfHeal();
+    const refused = [
+      {},
+      { incident: incident({ class: "application" }) },
+      { incident: incident({ class: "demo" }) },
+      { incident: incident({ repro: { kind: "derived", command: "pnpm test" } }) },
+      { incident: incident({ repro: { kind: "none" } }) },
+      { incident: incident({ repro: { kind: "command" } }) },
+      { incident: incident({ repro: { kind: "command", command: "  " } }) },
+      { incident: incident({ repro: undefined }) },
+    ];
+    for (const inputs of refused)
+      expect(await refusal(h, dispatch(inputs)), JSON.stringify(inputs)).toEqual({
+        status: 400,
+        code: "invalid_inputs",
+      });
+    expect(h.reads.calls).toEqual([]);
+    expect(h.executions()).toEqual([]);
+    expect(h.records()).toEqual([]);
+  });
+
+  it("[FD-AGT-063] with a ci pack whose repro is a command is admitted", async () => {
+    const h = await selfHeal();
+    const admitted = await admit(h, dispatch({ incident: incident() }));
+    expect(admitted.duplicate).toBe(false);
+    expect(h.executions()).toMatchObject([{ id: admitted.executionId, run: "self-heal-pr" }]);
   });
 });
 

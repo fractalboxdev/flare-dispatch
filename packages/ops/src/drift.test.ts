@@ -6,12 +6,17 @@ import {
   APP_PERMISSIONS,
   appManifest,
   appRegistrationCheck,
+  awsBudgetCheck,
+  awsBudgetUnset,
   bindingCheck,
   failed,
   MERGE_GATE_CHECKS,
   profileCheck,
   rulesetCheck,
   settingsDrift,
+  type AwsBudget,
+  type AwsBudgetAction,
+  type AwsPolicyStatement,
   type DeployedSettings,
 } from "./index.ts";
 import { validationContext } from "@fractalboxdev/flare-dispatch-profile";
@@ -155,5 +160,170 @@ describe("drift check", () => {
       expect(default_permissions.administration).toBe("read");
       expect(Object.values(default_permissions)).not.toContain("admin");
     }
+  });
+});
+
+const ACCOUNT = "111122223333";
+const budget: AwsBudget = {
+  name: "fd-aws",
+  type: "COST",
+  limitAmount: 400,
+  limitUnit: "USD",
+  timeUnit: "MONTHLY",
+  costFilters: {},
+};
+const budgets = [budget];
+const DENY_LAUNCH: AwsPolicyStatement = {
+  effect: "Deny",
+  actions: ["ecs:RunTask", "ecs:StartTask"],
+  resources: ["*"],
+  conditional: false,
+};
+const denyAction = (over: Partial<AwsBudgetAction> = {}): AwsBudgetAction => ({
+  id: "act-1",
+  budgetName: "fd-aws",
+  notificationType: "ACTUAL",
+  actionType: "APPLY_IAM_POLICY",
+  approvalModel: "AUTOMATIC",
+  thresholdType: "PERCENTAGE",
+  thresholdValue: 100,
+  policy: {
+    id: `arn:aws:iam::${ACCOUNT}:policy/fd-deny-launch`,
+    targets: ["fd-launcher"],
+    statements: [DENY_LAUNCH],
+  },
+  ...over,
+});
+const scpAction = (targets: string[], statements: AwsPolicyStatement[] = [DENY_LAUNCH]) =>
+  denyAction({ actionType: "APPLY_SCP_POLICY", policy: { id: "p-deny", targets, statements } });
+const withStatements = (...statements: AwsPolicyStatement[]) =>
+  denyAction({ policy: { ...denyAction().policy!, statements } });
+const check = (limitUsd: number, actions: AwsBudgetAction[], read = budgets) =>
+  awsBudgetCheck(limitUsd, { account: ACCOUNT, budgets: read, actions });
+/** The reason the one action read falls short, from the check's failure line. */
+const gapOf = (actions: AwsBudgetAction[], read = budgets) =>
+  check(400, actions, read)[0]?.detail.split(": ").slice(1).join(": ");
+
+describe("AWS budget check", () => {
+  it("[FD-EXEC-083] passes on a Budgets action that applies a deny-launch policy without approval once actual spend reaches the AWS limit", () => {
+    expect(check(400, [denyAction()])).toEqual([]);
+    expect(check(400, [scpAction([ACCOUNT])])).toEqual([]);
+    expect(check(400, [scpAction(["r-abcd"])])).toEqual([]);
+    expect(
+      check(400, [denyAction({ thresholdType: "ABSOLUTE_VALUE", thresholdValue: 400 })]),
+    ).toEqual([]);
+    // 100% of a 400 USD budget runs above a 300 USD limit; 75% of it runs at the limit.
+    expect(failed(check(300, [denyAction()]))).toBe(true);
+    expect(check(300, [denyAction({ thresholdValue: 75 })])).toEqual([]);
+    // `ecs:*` and `*` cover both launch calls, as do two statements that each deny one; action names ignore case.
+    for (const statements of [
+      [{ ...DENY_LAUNCH, actions: ["ecs:*"] }],
+      [{ ...DENY_LAUNCH, actions: ["*"] }],
+      [
+        { ...DENY_LAUNCH, actions: ["ECS:runtask"] },
+        { ...DENY_LAUNCH, actions: ["ecs:Start*"] },
+      ],
+    ])
+      expect(check(400, [withStatements(...statements)])).toEqual([]);
+    // A budget that resets monthly or less often, unfiltered or filtered to the ECS service, measures the AWS spend.
+    for (const measured of [
+      { timeUnit: "QUARTERLY" },
+      {
+        costFilters: {
+          Service: ["Amazon Elastic Container Service", "Amazon EC2 Container Registry (ECR)"],
+        },
+      },
+    ])
+      expect(check(400, [denyAction()], [{ ...budget, ...measured }])).toEqual([]);
+  });
+
+  it("[FD-EXEC-083] fails when the account carries no Budgets action, or none that qualifies", () => {
+    expect(check(400, [])).toEqual([
+      {
+        check: "aws-budget",
+        path: "aws.budgetAction",
+        detail:
+          "AWS account 111122223333 carries no Budgets action that denies new task launches when actual spend reaches aws.budgetUsd 400 USD: it carries no Budgets action",
+        severity: "failure",
+      },
+    ]);
+    for (const over of [
+      { notificationType: "FORECASTED" },
+      { actionType: "RUN_SSM_DOCUMENTS", policy: null },
+      { approvalModel: "MANUAL" },
+      { thresholdValue: 101 },
+      { budgetName: "other" },
+      { policy: null },
+    ]) {
+      const findings = check(400, [denyAction(over)]);
+      expect(findings.map((f) => [f.path, f.severity])).toEqual([["aws.budgetAction", "failure"]]);
+    }
+    expect(
+      check(400, [denyAction()], [{ ...budget, limitUnit: "EUR" }]).map((f) => f.path),
+    ).toEqual(["aws.budgetAction"]);
+  });
+
+  it("[FD-EXEC-083] fails on an action whose policy does not deny both launch calls on every resource, unconditionally", () => {
+    const denies = (statement: Partial<AwsPolicyStatement>) =>
+      withStatements({ ...DENY_LAUNCH, ...statement });
+    const line = `action act-1 applies policy arn:aws:iam::${ACCOUNT}:policy/fd-deny-launch, which does not deny ecs:RunTask and ecs:StartTask on every resource under no condition`;
+    for (const action of [
+      denies({ actions: ["s3:PutObject"] }),
+      denies({ actions: ["ecs:RunTask"] }),
+      denies({ effect: "Allow" }),
+      denies({ resources: [`arn:aws:ecs:us-east-1:${ACCOUNT}:task-definition/web:*`] }),
+      denies({ conditional: true }),
+      // A `NotAction` statement reads as no `Action` patterns.
+      denies({ actions: [] }),
+      withStatements(),
+    ])
+      expect(gapOf([action])).toBe(line);
+  });
+
+  it("[FD-EXEC-083] fails on an action whose policy targets no principal, or an SCP that targets neither the account nor the root", () => {
+    expect(gapOf([denyAction({ policy: { ...denyAction().policy!, targets: [] } })])).toBe(
+      `action act-1 attaches policy arn:aws:iam::${ACCOUNT}:policy/fd-deny-launch to no role, user or group`,
+    );
+    for (const targets of [[], ["444455556666"], ["ou-abcd-11111111"]])
+      expect(gapOf([scpAction(targets)])).toBe(
+        `action act-1 attaches policy p-deny to neither account ${ACCOUNT} nor the organization root`,
+      );
+  });
+
+  it("[FD-EXEC-083] fails on an action whose budget resets daily, or whose cost filters measure less than the ECS spend", () => {
+    expect(gapOf([denyAction()], [{ ...budget, timeUnit: "DAILY" }])).toBe(
+      "action act-1 belongs to budget fd-aws, which resets daily and lets a month's spend run past its limit",
+    );
+    expect(
+      gapOf(
+        [denyAction()],
+        [{ ...budget, costFilters: { Service: ["Amazon Simple Storage Service"] } }],
+      ),
+    ).toBe(
+      "action act-1 belongs to budget fd-aws, whose Service cost filter leaves out Amazon Elastic Container Service",
+    );
+    expect(
+      gapOf(
+        [denyAction()],
+        [
+          {
+            ...budget,
+            costFilters: { Service: ["Amazon Elastic Container Service"], Region: ["eu-west-1"] },
+          },
+        ],
+      ),
+    ).toBe(
+      "action act-1 belongs to budget fd-aws, whose Region cost filter measures only part of the account's spend",
+    );
+  });
+
+  it("[FD-EXEC-083] a deploy that sets no aws.budgetUsd fails on the overlay", () => {
+    expect(awsBudgetUnset).toEqual({
+      check: "aws-budget",
+      path: "aws.budgetUsd",
+      detail:
+        "the overlay carries the aws kind and sets no AWS limit for the Budgets action to enforce",
+      severity: "failure",
+    });
   });
 });
