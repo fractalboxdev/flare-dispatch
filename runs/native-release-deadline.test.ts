@@ -31,6 +31,7 @@ for (const late of ["before observation", "during observation"]) {
       target,
       mode: "release",
       executor_ref: "b".repeat(40),
+      dispatch_ref: "refs/tags/native-executor-v1",
       nonce: "c".repeat(64),
       command_sha256: "d".repeat(64),
     };

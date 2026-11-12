@@ -11,7 +11,7 @@ import { makeFakeEnv, makeFakeR2, makeFakeWorkflow } from "./test-helpers";
 import type { Env } from "./env";
 
 const source = { executionId: "fixture-release-cell", repo: "owner/project", head: "1".repeat(40) };
-const policy = { repo: source.repo, executor_ref: "3".repeat(40), timeoutSec: 600, pollIntervalSec: 30 };
+const policy = { repo: source.repo, executor_ref: "3".repeat(40), dispatch_ref: "refs/tags/native-executor-v1", timeoutSec: 600, pollIntervalSec: 30 };
 const input = { head: source.head, target: "aarch64-pc-windows-msvc" as const, profile: "contextful-edge" as const };
 const fixture = () => {
   const workflow = makeFakeWorkflow();
@@ -23,9 +23,9 @@ const credential = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKe
 const fetchFor = (repo: string): typeof fetch => async (url) => {
   const path = new URL(String(url)).pathname;
   if (path === "/app") return Response.json({ id: 42, slug: "native-controller" });
-  if (path.endsWith("/installation")) return Response.json({ id: 10, app_id: 42, account: { login: repo.split("/")[0] }, suspended_at: null, permissions: { actions: "write" } });
+  if (path.endsWith("/installation")) return Response.json({ id: 10, app_id: 42, account: { login: repo.split("/")[0] }, suspended_at: null, permissions: { actions: "write", contents: "read" } });
   if (path.endsWith("/access_tokens")) return Response.json({ token: "fixture-not-live", expires_at: new Date(Math.floor(Date.now() / 1000) * 1000 + 600000).toISOString(),
-    repository_selection: "selected", repositories: [{ name: repo.split("/")[1], full_name: repo }], permissions: { actions: "write", metadata: "read" } }, { status: 201 });
+    repository_selection: "selected", repositories: [{ name: repo.split("/")[1], full_name: repo }], permissions: { actions: "write", contents: "read", metadata: "read" } }, { status: 201 });
   throw new Error("fixture refuses any undeclared provider request");
 };
 
@@ -91,7 +91,7 @@ describe("native release owner", () => {
       const handle = yield* owner.admitRelease(input);
       expect(handle.request).toMatchObject({ mode: "release", base: source.head, head: source.head });
       for (const patch of [{ head: "2".repeat(40) }, { base: "2".repeat(40) }, { mode: "gate", profile: "" },
-        { nonce: "f".repeat(64) }, { executor_ref: "4".repeat(40) }, { command_sha256: "f".repeat(64) },
+        { nonce: "f".repeat(64) }, { dispatch_ref: "refs/tags/foreign-executor" }, { executor_ref: "4".repeat(40) }, { command_sha256: "f".repeat(64) },
         { profile: "contextful-full" }, { target: "x86_64-pc-windows-msvc" }]) {
         const forged = { request: { ...handle.request, ...patch } };
         expect(Exit.isFailure(yield* Effect.exit(owner.observeRelease(forged as typeof handle)))).toBe(true);
@@ -163,7 +163,10 @@ describe("native release owner", () => {
         const manifest = JSON.stringify({ ...cell, archive: `${name}.tar.gz`, sha256, sbom: `${name}.cdx.json` });
         if (!cell.target.endsWith("-pc-windows-msvc")) {
           summaries.push({ ...cell, manifest, assets: [`${name}.tar.gz`, `${name}.tar.gz.sha256`, `${name}.cdx.json`],
-            ...(cell.target === "x86_64-unknown-linux-musl" ? { imageLayer: { archiveName: `${cell.profile}-0.5.0-linux-amd64.oci.tar` } } : {}) });
+            ...(cell.target.endsWith("-linux-musl") ? { imageLayer: {
+              arch: cell.target.startsWith("x86_64") ? "amd64" : "arm64",
+              imageName: `${cell.profile}-0.5.0-linux-${cell.target.startsWith("x86_64") ? "amd64" : "arm64"}.image.json`,
+            } } : {}) });
           continue;
         }
         const f = fixture();
@@ -194,13 +197,18 @@ describe("native release owner", () => {
         expect(new Uint8Array(await archived!.arrayBuffer())).toEqual(bytes);
         expect(base.handles.sandbox.execs.some(exec => exec.command.includes("zigbuild"))).toBe(false);
       }
+      let spawned: ReturnType<typeof makeCFRuntimeTest>["handles"]["childRuns"]["spawned"] = [];
       const parent = makeCFRuntimeTest({
         github: { files: { [`${repo}:Cargo.toml`]: '[workspace.package]\nversion = "0.5.0"\n' } },
         sandboxProgram: { "release --plan": { exitCode: 0, stdout: plan } },
         childRuns: { pollFn: ids => ids.map(id => ({ executionId: id, status: "success", summaryJson: JSON.stringify(
           id.startsWith("contextful-release-formula") ? { assets: ["control.rb", "edge.rb", "full.rb", "default.rb", "SHA256SUMS", "install.sh"] }
-            : summaries[Number(id.split(":").at(-1))]) })) },
+            : summaries.find(summary => {
+              const cell = spawned.find(child => child.instanceId === id)!.input as { profile: string; target: string };
+              return summary.profile === cell.profile && summary.target === cell.target;
+            })) })) },
       });
+      spawned = parent.handles.childRuns.spawned;
       const result = await Effect.runPromise(contextfulRelease.run({ repo, tag, sha: head, dryRun: true }).pipe(Effect.provide(parent.layer)));
       expect(result.cells).toBe(14); expect(result.assets).toBe(48); expect(nativeCreates).toBe(4);
       expect(parent.handles.childRuns.spawned.filter(child => child.run === contextfulReleaseCell.name)).toHaveLength(14);

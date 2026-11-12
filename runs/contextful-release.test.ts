@@ -59,7 +59,7 @@ describe("contextful-release", () => {
         expect(fixture.handles.sandbox.execs.some(exec => exec.command.includes("formula --manifest"))).toBe(false);
       }
       const fixture = makeCFRuntimeTest({ sandboxProgram: {
-        "release --plan": { exitCode: 0, stdout: planText(cells) }, "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  fixture\n` },
+        "release --plan": { exitCode: 0, stdout: planText(cells) }, "test -f": { exitCode: 1 }, "sha256sum": { exitCode: 0, stdout: `${"a".repeat(64)}  fixture\n` },
       } });
       const output = yield* contextfulReleaseFormula.run({ repo, tag: "v0.5.0", sha, releaseId: 0, dryRun: true,
         manifests: JSON.stringify(cells) }).pipe(Effect.provide(fixture.layer));
@@ -637,7 +637,7 @@ describe("contextful-release", () => {
     // The parent queues behind other releases, never behind lean-pool gates.
     expect(contextfulRelease.sandboxImage).toBe("release");
     expect(contextfulReleaseCell.sandboxImage).toBe("release");
-    expect(contextfulRelease.version).toBe("1.4.0");
+    expect(contextfulRelease.version).toBe("1.5.0");
   });
 
   it.effect("window steps share no name with the fixed batches a release in flight checkpointed", () => {

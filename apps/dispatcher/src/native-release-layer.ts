@@ -21,9 +21,9 @@ export const makeNativeReleaseLayer = (env: Env, source: Source,
       || source.executionId.length === 0 || input.head !== source.head || policy.repo !== source.repo)
       return yield* Effect.fail(refused());
     yield* Effect.try({ try: () => parseNativeControllerAppId(env.GITHUB_APP_ID!), catch: refused });
-    const nonce = createHash("sha256").update(JSON.stringify([source.executionId, "release", input.profile, input.target, policy.executor_ref])).digest("hex");
+    const nonce = createHash("sha256").update(JSON.stringify([source.executionId, "release", input.profile, input.target, policy.executor_ref, policy.dispatch_ref])).digest("hex");
     const unsigned: NativeRequest = { repo: source.repo, head: source.head, base: source.head,
-      executor_ref: policy.executor_ref, nonce, target: input.target, mode: "release", profile: input.profile,
+      executor_ref: policy.executor_ref, dispatch_ref: policy.dispatch_ref, nonce, target: input.target, mode: "release", profile: input.profile,
       command_sha256: "0".repeat(64) };
     const request = yield* admitNativeRequest({ ...unsigned, command_sha256: yield* nativeCommandDigest(unsigned) });
     return { request, policy };

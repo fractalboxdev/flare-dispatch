@@ -37,6 +37,7 @@ it("propagates an authenticated annotated tag's resolved commit through the real
     NATIVE_EXECUTION_POLICY: JSON.stringify({
       repo,
       executor_ref: "c".repeat(40),
+      dispatch_ref: "refs/tags/native-executor-v1",
       timeoutSec: 600,
       pollIntervalSec: 30,
     }),
