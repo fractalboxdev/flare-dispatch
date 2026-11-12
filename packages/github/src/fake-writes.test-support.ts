@@ -20,7 +20,7 @@ interface FakeCommit {
 }
 
 export interface FakeSide {
-  readonly comments: Map<number, { id: number; body: string }[]>;
+  readonly comments: Map<number, { id: number; body: string; user?: { login: string } }[]>;
   readonly reviews: Map<number, { id: number; body: string }[]>;
   readonly issues: (IssueRef & { title: string; labels: string[] })[];
   readonly labels: Map<number, Set<string>>;
@@ -116,9 +116,24 @@ export const fakeWritesLayer = (s: FakeSide) => {
       call(
         "createComment",
         () => {
-          const c = { id: id(), body };
+          const c = { id: id(), body, user: { login: BOT.login } };
           s.comments.set(issue, [...(s.comments.get(issue) ?? []), c]);
           return c;
+        },
+        true,
+      ),
+    updateComment: ({ comment, body }) =>
+      call(
+        "updateComment",
+        () => {
+          for (const list of s.comments.values()) {
+            const c = list.find((x) => x.id === comment);
+            if (c !== undefined) {
+              c.body = body;
+              return { ...c };
+            }
+          }
+          throw new Error(`no comment ${comment}`);
         },
         true,
       ),

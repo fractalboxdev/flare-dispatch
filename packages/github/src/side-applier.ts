@@ -29,7 +29,15 @@ export const WRITE_BRANCH_PREFIX = "flare-dispatch/";
 const Mode = Schema.Literals(["100644", "100755"]);
 
 export const SidePayloads = {
-  comment: Schema.Struct({ issue_number: Schema.Number, body: Schema.String }),
+  comment: Schema.Struct({
+    issue_number: Schema.Number,
+    body: Schema.String,
+    /**
+     * A marker the run keeps on one comment per issue or pull request: the comment carrying it is updated in place
+     * instead of a new one being created (FD-AGT-053).
+     */
+    marker: Schema.optionalKey(Schema.NonEmptyString),
+  }),
   review: Schema.Struct({
     pull_number: Schema.Number,
     body: Schema.String,
@@ -112,6 +120,12 @@ export const intentMarker = (row: Pick<IntentRow, "executionId" | "intentKey">) 
   `<!-- flare-dispatch:intent ${row.executionId ?? "ops"}/${row.intentKey} -->`;
 
 const withMarker = (body: string, marker: string) => `${body}\n\n${marker}`;
+
+/** The execution id in the intent marker a body carries, or null when it carries none or an operator's. */
+const markedExecution = (body: string | null) => {
+  const id = body?.match(/<!-- flare-dispatch:intent ([^\s/]+)\//)?.[1];
+  return id === undefined || id === "ops" ? null : id;
+};
 
 /** The row ends `refused` with this reason and no further GitHub call. */
 export class Refusal extends Schema.TaggedError<Refusal>()("Refusal", { reason: Schema.String }) {}
@@ -242,13 +256,33 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
       Effect.gen(function* () {
         const w = yield* writes;
         const marker = intentMarker(ctx.row);
+        const comments = yield* w.listComments({ ...ctx, issue: p.issue_number });
         const existing = yield* single(
-          (yield* w.listComments({ ...ctx, issue: p.issue_number })).filter((c) =>
-            c.body?.includes(marker),
-          ),
+          comments.filter((c) => c.body?.includes(marker)),
           (c) => c.id,
         );
         if (Option.isSome(existing)) return applied(existing.value);
+        if (p.marker !== undefined) {
+          const runMarker = p.marker;
+          const body = withMarker(
+            p.body.includes(runMarker) ? p.body : withMarker(p.body, runMarker),
+            marker,
+          );
+          // The earliest comment the App wrote carrying the run's marker is the one kept (FD-AGT-053); a marker in
+          // anyone else's comment is ignored, since the marker is public and the App can edit others' comments.
+          const { appBot } = yield* SideOutputConfig.use((s) => Effect.succeed(s));
+          const kept = comments.find(
+            (c) => c.user?.login === appBot.login && c.body?.includes(runMarker),
+          );
+          if (kept !== undefined) {
+            // Execution ids sort by time: a newer execution's write stays, and an older row adopts it.
+            const holder = markedExecution(kept.body);
+            const self = ctx.row.executionId;
+            if (holder !== null && self !== null && holder > self) return applied(kept.id);
+            return applied((yield* w.updateComment({ ...ctx, comment: kept.id, body })).id);
+          }
+          return applied((yield* w.createComment({ ...ctx, issue: p.issue_number, body })).id);
+        }
         return applied(
           (yield* w.createComment({
             ...ctx,
