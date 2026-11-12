@@ -19,9 +19,12 @@ import {
   EmailSender,
   FollowOnSubmitter,
   NoticeChannel,
+  ReleaseProvenance,
+  RELEASE_STATEMENT_MISSING,
   SideOutputConfig,
   StagedWriteGate,
   type DeliveryAnswer,
+  type ReleasePublishArtifact,
 } from "./side-ports.ts";
 import { GithubWrites, type CommitAuthor, type IssueRef } from "./writes.ts";
 
@@ -90,7 +93,16 @@ export const SidePayloads = {
       ),
     ),
   }),
-  "release.publish": Schema.Struct({ tag: Schema.String }),
+  "release.publish": Schema.Struct({
+    tag: Schema.String,
+    /**
+     * The artifacts the release publishes, by asset name and the `sha256:<hex>` digest of their bytes. Each asset the
+     * draft holds must be one of them, with the digest GitHub computed over the asset's bytes (FD-PROV-062).
+     */
+    artifacts: Schema.optionalKey(
+      Schema.Array(Schema.Struct({ name: Schema.String, digest: Schema.String })),
+    ),
+  }),
   "dispatch.followOn": Schema.Struct({
     run: Schema.String,
     label: Schema.optionalKey(Schema.String),
@@ -235,6 +247,48 @@ const releaseFor = (ctx: Ctx, tag: string) =>
   Effect.gen(function* () {
     const w = yield* writes;
     return (yield* w.releases(ctx)).find((r) => r.tag_name === tag) ?? null;
+  });
+
+/**
+ * The provenance gate before a draft release is published (FD-PROV-062, FD-PROV-063). A draft that holds no asset
+ * publishes nothing to attest. Otherwise each asset must be one of the intent's artifacts, and the digest GitHub
+ * computed over the asset's bytes must be the one the intent names; the deploy's gate then checks the release
+ * execution's logged statements against those digests, so the bytes GitHub publishes are the bytes the gate checks.
+ * A refusal ends the row `refused` with its `provenance:` reason and publishes nothing, a deploy without the gate
+ * publishes nothing either, and a gate that cannot read its records retries.
+ */
+const gateRelease = (
+  ctx: Ctx,
+  assets: readonly { readonly name: string; readonly digest?: string | null }[],
+  artifacts: readonly { readonly name: string; readonly digest: string }[],
+) =>
+  Effect.gen(function* () {
+    if (assets.length === 0) return;
+    const provenance = yield* optional(ReleaseProvenance, "release.publish");
+    const refused = (artifact: string, reason: string) =>
+      Effect.andThen(
+        Effect.logWarning("release publish refused", {
+          repo: ctx.repo,
+          intentKey: ctx.row.intentKey,
+          artifact,
+          reason,
+        }),
+        refuse(reason),
+      );
+    const checked: ReleasePublishArtifact[] = [];
+    for (const { name, digest } of assets) {
+      if (digest == null || !artifacts.some((a) => a.name === name && a.digest === digest))
+        return yield* refused(name, RELEASE_STATEMENT_MISSING);
+      // An ops row names no execution, so no statement can admit an artifact it does not attribute.
+      checked.push({ name, digest, executionId: ctx.row.executionId ?? "" });
+    }
+    const answer = yield* provenance.gate({ artifacts: checked });
+    return yield* Match.value(answer).pipe(
+      Match.tag("admitted", () => Effect.void),
+      Match.tag("refused", ({ reason, artifact }) => refused(artifact, reason)),
+      Match.tag("unavailable", ({ reason }) => Effect.fail(new Retry({ reason }))),
+      Match.exhaustive,
+    );
   });
 
 /** Issue list pages the marker search reads before it stops without an answer. */
@@ -670,6 +724,7 @@ const handlers: { readonly [K in SideKind]: Handler<K> } = {
         if (release === null) return yield* refuse(`release: no draft release for ${p.tag}`);
         // A published release stays as it is (FD-GH-086).
         if (!release.draft) return applied(release.id);
+        yield* gateRelease(ctx, release.assets, p.artifacts ?? []);
         return applied((yield* w.publishRelease({ ...ctx, release: release.id })).id);
       }),
     lookup: (ctx, p) =>

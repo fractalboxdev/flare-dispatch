@@ -1,6 +1,7 @@
 // An in-memory repository for the side-output appliers: comments, reviews,
 // issues, labels, git objects and branches, pull requests and releases, with a
 // scripted failure queue and a record of every call.
+import { createHash } from "node:crypto";
 import { Effect, Layer } from "effect";
 import { GithubHttpError, type GithubError } from "./client.ts";
 import {
@@ -36,7 +37,12 @@ export interface FakeSide {
   readonly trees: Map<string, readonly TreeEntry[]>;
   readonly pulls: PullRef[];
   readonly pullCommits: Map<number, CommitAuthor[]>;
-  readonly releases: { id: number; tag_name: string; draft: boolean; assets: { name: string }[] }[];
+  readonly releases: {
+    id: number;
+    tag_name: string;
+    draft: boolean;
+    assets: { name: string; digest?: string | null }[];
+  }[];
   readonly calls: string[];
   /** Failures the next calls take, in order; a `null` entry lets that call through. */
   readonly failures: (GithubError | null)[];
@@ -292,7 +298,7 @@ export const fakeWritesLayer = (s: FakeSide) => {
       call(
         "createDraftRelease",
         () => {
-          const r = { id: id(), tag_name: tag, draft: true, assets: [] as { name: string }[] };
+          const r = { id: id(), tag_name: tag, draft: true, assets: [] as { name: string; digest?: string | null }[] };
           s.releases.push(r);
           return r;
         },
@@ -308,10 +314,15 @@ export const fakeWritesLayer = (s: FakeSide) => {
         },
         true,
       ),
-    uploadAsset: ({ release, name }) =>
+    uploadAsset: ({ release, name, bytes }) =>
       call(
         "uploadAsset",
-        () => void s.releases.find((x) => x.id === release)!.assets.push({ name }),
+        () =>
+          void s.releases.find((x) => x.id === release)!.assets.push({
+            name,
+            // GitHub digests the bytes it stores.
+            digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+          }),
         true,
       ),
     refreshToken: () =>

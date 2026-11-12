@@ -1,7 +1,7 @@
 import { testCommentWrites } from "./comment-writes.test-support.ts";
 // The side-output appliers over an in-memory repository: each kind's write, its idempotency marker, its refusals
 // and its lookup.
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { deliveryLimitKey, RECORD_KINDS } from "@fractalboxdev/flare-dispatch-profile";
@@ -34,9 +34,12 @@ import {
   EmailSender,
   FollowOnSubmitter,
   NoticeChannel,
+  ReleaseProvenance,
   SideOutputConfig,
   StagedWriteGate,
   type GateResult,
+  type ReleaseGateAnswer,
+  type ReleasePublishArtifact,
 } from "./side-ports.ts";
 import { GithubClient } from "./client.ts";
 
@@ -64,6 +67,10 @@ interface World {
   readonly followOns: unknown[];
   readonly appCalls: string[];
   gate: GateResult;
+  /** What the release provenance gate answers; absent on a deploy without the gate. */
+  releaseGate: ReleaseGateAnswer | undefined;
+  /** Each release the provenance gate was asked about. */
+  readonly releaseGated: { artifacts: readonly ReleasePublishArtifact[] }[];
   readonly blobs: Map<string, Uint8Array>;
   /** The App's webhook deliveries, for `delivery.redeliver`. */
   readonly deliveries: { id: number; guid: string; redelivery: boolean }[];
@@ -81,6 +88,8 @@ const world = (): World => ({
   followOns: [],
   appCalls: [],
   gate: { _tag: "accepted" },
+  releaseGate: { _tag: "admitted" },
+  releaseGated: [],
   blobs: new Map(),
   deliveries: [{ id: 10, guid: "g-1", redelivery: false }],
 });
@@ -146,6 +155,15 @@ const layers = (w: World, installations: Record<string, number> = { [REPO]: 7 },
       ? Layer.succeed(StagedWriteGate, { check: () => Effect.sync(() => w.gate) })
       : Layer.empty,
     Layer.succeed(BlobStore, { read: (d) => Effect.succeed(w.blobs.get(d) ?? null) }),
+    w.releaseGate === undefined
+      ? Layer.empty
+      : Layer.succeed(ReleaseProvenance, {
+          gate: (release) =>
+            Effect.sync(() => {
+              w.releaseGated.push(release);
+              return w.releaseGate!;
+            }),
+        }),
     Layer.succeed(FollowOnSubmitter, {
       submit: (i) =>
         Effect.sync(() => {
@@ -736,7 +754,12 @@ describe("releases", () => {
     await apply(w, r);
     await apply(w, r);
     expect(w.side.releases).toEqual([
-      { id: expect.any(Number), tag_name: "v1.2.0", draft: true, assets: [{ name: "fd.tgz" }] },
+      {
+        id: expect.any(Number),
+        tag_name: "v1.2.0",
+        draft: true,
+        assets: [{ name: "fd.tgz", digest: `sha256:${createHash("sha256").update(new Uint8Array([1, 2])).digest("hex")}` }],
+      },
     ]);
     expect(await lookup(w, r)).toMatchObject({ _tag: "found" });
   });
@@ -767,6 +790,89 @@ describe("releases", () => {
       _tag: "found",
       externalRef: "1",
     });
+  });
+});
+
+describe("the release provenance gate", () => {
+  const ARTIFACT = { name: "fd.tgz", digest: `sha256:${"a".repeat(64)}` };
+  const drafted = (w: World, digest: string | null = ARTIFACT.digest) =>
+    void w.side.releases.push({
+      id: 1,
+      tag_name: "v1.2.0",
+      draft: true,
+      assets: [{ name: ARTIFACT.name, digest }],
+    });
+  const publish = (artifacts: unknown[] = [ARTIFACT]) => row("release.publish", { tag: "v1.2.0", artifacts });
+  const published = (w: World) => w.side.calls.filter((c) => c === "publishRelease").length;
+
+  it("asks the gate about each asset by the digest GitHub holds, attributed to the row's execution, before it publishes", async () => {
+    const w = world();
+    drafted(w);
+    expect(await apply(w, publish())).toEqual({ _tag: "applied", externalRef: "1" });
+    expect(w.releaseGated).toEqual([{ artifacts: [{ ...ARTIFACT, executionId: "exec-1" }] }]);
+    expect(published(w)).toBe(1);
+  });
+
+  it("refuses an asset whose bytes GitHub digests differently from the intent's artifact, without asking the gate", async () => {
+    const w = world();
+    drafted(w, `sha256:${"b".repeat(64)}`);
+    expect(await apply(w, publish())).toEqual({
+      _tag: "refused",
+      reason: "provenance: release statement missing",
+    });
+    expect(w.releaseGated).toEqual([]);
+    expect(published(w)).toBe(0);
+  });
+
+  it("refuses an asset GitHub holds no digest of, or one the intent names no artifact for", async () => {
+    for (const [digest, artifacts] of [
+      [null, [ARTIFACT]],
+      [ARTIFACT.digest, [{ ...ARTIFACT, name: "other.tgz" }]],
+      [ARTIFACT.digest, []],
+    ] as const) {
+      const w = world();
+      drafted(w, digest);
+      expect(await apply(w, publish([...artifacts]))).toEqual({
+        _tag: "refused",
+        reason: "provenance: release statement missing",
+      });
+      expect(w.releaseGated).toEqual([]);
+      expect(published(w)).toBe(0);
+    }
+  });
+
+  it("ends the row refused with the gate's provenance reason and leaves the release a draft", async () => {
+    for (const reason of ["provenance: release statement missing", "provenance: release built warm"]) {
+      const w = world();
+      drafted(w);
+      w.releaseGate = { _tag: "refused", reason, artifact: "fd.tgz" };
+      expect(await apply(w, publish())).toEqual({ _tag: "refused", reason });
+      expect(published(w)).toBe(0);
+      expect(w.side.releases[0]!.draft).toBe(true);
+    }
+  });
+
+  it("retries while the gate cannot read its records, and publishes nothing on a deploy without the gate", async () => {
+    const w = world();
+    drafted(w);
+    w.releaseGate = { _tag: "unavailable", reason: "statements: D1 unavailable" };
+    expect(await apply(w, publish())).toEqual({ _tag: "retryable", reason: "statements: D1 unavailable" });
+    const bare = world();
+    drafted(bare);
+    bare.releaseGate = undefined;
+    expect(await apply(bare, publish())).toEqual({
+      _tag: "refused",
+      reason: "applier: release.publish is not configured on this deployment",
+    });
+    expect(published(w) + published(bare)).toBe(0);
+  });
+
+  it("publishes a draft that holds no asset without asking the gate", async () => {
+    const w = world();
+    w.releaseGate = undefined;
+    w.side.releases.push({ id: 1, tag_name: "v1.2.0", draft: true, assets: [] });
+    expect(await apply(w, row("release.publish", { tag: "v1.2.0" }))).toEqual({ _tag: "applied", externalRef: "1" });
+    expect(published(w)).toBe(1);
   });
 });
 
