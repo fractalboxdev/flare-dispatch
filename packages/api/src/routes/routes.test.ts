@@ -9,6 +9,7 @@ import {
   type MemoryPolicyStores,
 } from "@fractalboxdev/flare-dispatch-cache/provenance-policy-test-support";
 import { Context, Effect, Layer } from "effect";
+import { APP_LIST_MAX_PAGES, GithubApp } from "@fractalboxdev/flare-dispatch-github";
 import { HttpApi } from "effect/http-api";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -25,8 +26,9 @@ import { FlareDispatchApi, INCIDENT_CAPS } from "../declaration.ts";
 import { provenanceGroup } from "../groups.ts";
 import type { StatementRecord } from "../ports.ts";
 import { apiError } from "../errors.ts";
+import { appDeliveryKeys, deliveryKeysWithoutApp } from "../live/delivery-keys.ts";
 import { provenancePolicies } from "../live/provenance-policy.ts";
-import { ProvenancePolicies } from "../ports.ts";
+import { DeliveryKeys, ProvenancePolicies } from "../ports.ts";
 
 let h: Harness;
 beforeAll(async () => {
@@ -403,6 +405,7 @@ describe("operator routes", () => {
       .sort();
     expect(paths).toEqual(
       [
+        "GET /v1/ops/delivery-keys",
         "GET /v1/ops/health",
         "POST /v1/ops/drain",
         "POST /v1/ops/force-admit",
@@ -415,6 +418,109 @@ describe("operator routes", () => {
         "POST /v1/ops/top-up",
       ].sort(),
     );
+  });
+});
+
+/** A GitHub App whose `GET /app/installations` answers each page from `pages`, by path, and records each path read. */
+const recordedApp = (
+  pages: Readonly<
+    Record<string, { readonly status: number; readonly json: unknown; readonly link?: string }>
+  >,
+  read: string[],
+) =>
+  Layer.succeed(GithubApp)({
+    jwt: Effect.die("unused"),
+    token: () => Effect.die("unused"),
+    installationFor: () => Effect.die("unused"),
+    evictInstallation: () => Effect.void,
+    evictRepositories: () => Effect.void,
+    installations: Effect.die("unused"),
+    rest: (_method, path) =>
+      Effect.sync(() => {
+        read.push(path);
+        return pages[path] ?? { status: 404, json: { message: "Not Found" } };
+      }),
+  });
+
+const deliveryKeysOver = (app: Layer.Layer<GithubApp>) =>
+  Effect.runSync(Effect.scoped(Layer.build(appDeliveryKeys.pipe(Layer.provide(app))))).pipe(
+    Context.get(DeliveryKeys),
+  );
+
+const FIRST = "/app/installations?per_page=100";
+const pageOf = (n: number) => `/app/installations?per_page=100&page=${n}`;
+const nextLink = (n: number) => `<https://api.github.com${pageOf(n)}>; rel="next"`;
+const installation = (id: number) => ({ id, account: { login: `org-${id}` }, suspended_at: null });
+
+describe("delivery keys", () => {
+  it("[FD-IFC-094]: answers the id of every installation, following every page of GET /app/installations", async () => {
+    const read: string[] = [];
+    h.doubles.deliveryKeys = deliveryKeysOver(
+      recordedApp(
+        {
+          [FIRST]: { status: 200, json: [installation(11), installation(12)], link: nextLink(2) },
+          [pageOf(2)]: { status: 200, json: [installation(21)], link: nextLink(3) },
+          [pageOf(3)]: { status: 200, json: [installation(31)] },
+        },
+        read,
+      ),
+    );
+    const response = await h.fetch("/v1/ops/delivery-keys", await h.asAccess(OPERATOR));
+    expect(response.status).toBe(200);
+    expect(await json(response)).toEqual({ installations: ["11", "12", "21", "31"] });
+    expect(read).toEqual([FIRST, pageOf(2), pageOf(3)]);
+  });
+
+  it("only an operator reads the delivery keys", async () => {
+    h.doubles.deliveryKeys = { list: Effect.succeed(["11"]) };
+    const response = await h.fetch("/v1/ops/delivery-keys", await h.asAccess(MEMBER));
+    expect(response.status).toBe(403);
+    expect((await json(response))["error"]).toBe("forbidden");
+  });
+
+  it("[FD-IFC-099]: a failed page answers 503 unavailable and no list, though earlier pages listed installations", async () => {
+    for (const failed of [500, 403, 404]) {
+      h.doubles.deliveryKeys = deliveryKeysOver(
+        recordedApp(
+          {
+            [FIRST]: { status: 200, json: [installation(11)], link: nextLink(2) },
+            [pageOf(2)]: { status: failed, json: { message: "failed" } },
+          },
+          [],
+        ),
+      );
+      const response = await h.fetch("/v1/ops/delivery-keys", await h.asAccess(OPERATOR));
+      expect(response.status).toBe(503);
+      const body = await json(response);
+      expect(body["error"]).toBe("unavailable");
+      expect(body).not.toHaveProperty("installations");
+    }
+  });
+
+  it("[FD-IFC-099]: a listing that never reaches its last page answers 503 unavailable and no list", async () => {
+    const endless = Object.fromEntries(
+      Array.from({ length: APP_LIST_MAX_PAGES + 1 }, (_, i) => [
+        i === 0 ? FIRST : pageOf(i + 1),
+        { status: 200, json: [installation(i + 1)], link: nextLink(i + 2) },
+      ]),
+    );
+    h.doubles.deliveryKeys = deliveryKeysOver(recordedApp(endless, []));
+    const response = await h.fetch("/v1/ops/delivery-keys", await h.asAccess(OPERATOR));
+    expect(response.status).toBe(503);
+    const body = await json(response);
+    expect(body["error"]).toBe("unavailable");
+    expect(body).not.toHaveProperty("installations");
+  });
+
+  it("[FD-IFC-094]: a deploy with no App key answers 503 unavailable rather than an empty list", async () => {
+    h.doubles.deliveryKeys = Effect.runSync(
+      Effect.scoped(Layer.build(deliveryKeysWithoutApp)),
+    ).pipe(Context.get(DeliveryKeys));
+    const response = await h.fetch("/v1/ops/delivery-keys", await h.asAccess(OPERATOR));
+    expect(response.status).toBe(503);
+    const body = await json(response);
+    expect(body["error"]).toBe("unavailable");
+    expect(body).not.toHaveProperty("installations");
   });
 });
 

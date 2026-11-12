@@ -5,11 +5,13 @@ import {
   ApiConfig,
   apiConfigFromEnv,
   apiError,
+  appDeliveryKeys,
   appleAttestationVerifier,
   artifactsGroup,
   ConfigInvalid,
   d1DeviceRegistry,
   d1Executions,
+  deliveryKeysWithoutApp,
   dispatchGroup,
   errorBody,
   executionsGroup,
@@ -47,7 +49,7 @@ import {
   PolicyStore,
   PolicyTransparencyLog,
 } from "@fractalboxdev/flare-dispatch-cache/provenance-policy";
-import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
+import { type GithubApp, GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { handleIntake, WEBHOOK_MAX_BYTES } from "@fractalboxdev/flare-dispatch-intake";
 import {
   livenessReport,
@@ -61,6 +63,7 @@ import { ArtifactsHandlers, cacheReads, LogsHandlers } from "./cache.ts";
 import { isolateServices, type IsolateServices } from "./composition.ts";
 import { apiEnvOf, deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { failureSummaries } from "./failure-summary.ts";
+import { appOptionsOf } from "./github.ts";
 import { intakeCancellation, intakePort } from "./intake-port.ts";
 import { spendViewOf } from "./spend.ts";
 
@@ -138,6 +141,18 @@ const operations = (env: ControlPlaneEnv) =>
       >;
     }),
   });
+
+/**
+ * `GET /v1/ops/delivery-keys` over the isolate's GitHub App, across every page of `GET /app/installations`
+ * (FD-IFC-094). A deploy with no App key answers `unavailable`, so a containment caller never reads an empty list as
+ * "no key to pause" (FD-IFC-099).
+ */
+const deliveryKeys = (env: ControlPlaneEnv, isolate: Context.Context<IsolateServices>) =>
+  appOptionsOf(env) === undefined
+    ? deliveryKeysWithoutApp
+    : appDeliveryKeys.pipe(
+        Layer.provide(Layer.succeedContext(isolate as unknown as Context.Context<GithubApp>)),
+      );
 
 /**
  * The verification policy's versions in D1, the control plane's key history beside them, and the private log the
@@ -252,6 +267,7 @@ const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateS
     oidcKeyFromSecret(apiEnvOf(env).OIDC_SIGNING_JWK),
     failureSummaries(env),
     operations(env),
+    deliveryKeys(env, isolate),
     cacheReads(env),
     Layer.succeed(OpsStore)({ db: env.DB, now: Date.now }),
     spendViewOf(env),

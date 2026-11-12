@@ -13,6 +13,7 @@ import { ACTIONS_ISSUER, ACTIONS_JWKS, accessIssuer } from "./identity.ts";
 import { JwksSource, JwksUnavailable, type Jwk } from "./jwt.ts";
 import {
   Cancellation,
+  DeliveryKeys,
   DeviceRegistry,
   Executions,
   FailureSummaries,
@@ -171,6 +172,8 @@ export interface Doubles {
   opsFailure: ReturnType<typeof apiError> | undefined;
   /** Each repository's confidentiality mode; a repository absent here is `unclassified`. */
   readonly confidentiality: Map<string, ConfidentialityMode>;
+  /** The GitHub App's installations; a suite sets the live listing over a recorded `GET /app/installations`. */
+  deliveryKeys: DeliveryKeys["Service"];
   /** The verification policy's versions; a suite sets the publisher over in-memory stores. */
   provenancePolicies: ProvenancePolicies["Service"];
   /** The recorded statements the provenance lookups read; the subject lookup matches any digest a statement names. */
@@ -194,6 +197,9 @@ export const makeDoubles = (): Doubles => {
     oidcKeys: undefined,
     opsFailure: undefined,
     confidentiality: new Map(),
+    deliveryKeys: {
+      list: Effect.fail(apiError("unavailable", "this harness reads no installations")),
+    },
     provenancePolicies: {
       served: () => Effect.fail(apiError("not_found", "no verification policy is published")),
       publish: () => Effect.fail(apiError("unavailable", "this harness publishes no policy")),
@@ -286,6 +292,7 @@ export const portsContext = (doubles: Doubles) =>
               }),
       health: Effect.succeed({ liveness: "ok" }),
     }),
+    Context.add(DeliveryKeys, { list: Effect.suspend(() => doubles.deliveryKeys.list) }),
     Context.add(DeviceRegistry, {
       register: (body) =>
         Effect.succeed({ executorId: body.executor_id, postureTier: "unmanaged" }),

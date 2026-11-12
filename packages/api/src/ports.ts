@@ -154,6 +154,16 @@ export class Operations extends Context.Service<
   }
 >()("@fractalboxdev/flare-dispatch-api/Operations") {}
 
+/**
+ * The GitHub App's installations, read under the App JWT across every page of `GET /app/installations` (FD-IFC-094).
+ * A failed or truncated listing fails `unavailable` with no list (FD-IFC-099), and so does a deploy with no App key: an
+ * empty answer would read as "no key to pause".
+ */
+export class DeliveryKeys extends Context.Service<
+  DeliveryKeys,
+  { readonly list: Effect.Effect<readonly string[], ApiError> }
+>()("@fractalboxdev/flare-dispatch-api/DeliveryKeys") {}
+
 // --- Enrollment ------------------------------------------------------------------------------------------------------
 
 /** mameko's `registerDevice` under the profile's `registration` (FD-IFC-086, FD-IFC-087). */
