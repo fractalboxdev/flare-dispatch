@@ -7,6 +7,7 @@ import {
   LogsGroup,
   OperabilityGroup,
   OpsGroup,
+  ProvenancePolicyGroup,
   WellKnownGroup,
 } from "./declaration.ts";
 import type { Layer } from "effect";
@@ -16,6 +17,7 @@ import { DispatchHandlers } from "./routes/dispatch.ts";
 import { ExecutionsHandlers } from "./routes/executions.ts";
 import { ExecutorsHandlers } from "./routes/executors.ts";
 import { OpsHandlers } from "./routes/ops.ts";
+import { ProvenancePolicyHandlers } from "./routes/provenance-policy.ts";
 import { WellKnownHandlers } from "./routes/well-known.ts";
 
 const member: Surface = { _tag: "Access", group: "any" };
@@ -64,8 +66,18 @@ export const executorsGroup = apiGroup({
 
 export const wellKnownGroup = apiGroup({
   group: WellKnownGroup,
-  surfaces: { openidConfiguration: pub, jwks: pub, health: pub },
+  surfaces: { openidConfiguration: pub, jwks: pub, provenancePolicy: pub, health: pub },
   handlers: WellKnownHandlers,
+});
+
+/**
+ * Only an operator publishes a verification-policy version or reads the key history it carries; the well-known route
+ * serves a published version to anyone.
+ */
+export const provenancePolicyGroup = apiGroup({
+  group: ProvenancePolicyGroup,
+  surfaces: { publish: operator, keyHistory: operator },
+  handlers: ProvenancePolicyHandlers,
 });
 
 const logLink: Surface = { _tag: "Link", purpose: "logs", param: "id" };
@@ -127,4 +139,5 @@ export const declaredGroups = [
   executionsGroup,
   opsGroup,
   executorsGroup,
+  provenancePolicyGroup,
 ] as const;

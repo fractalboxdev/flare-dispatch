@@ -10,7 +10,7 @@ import {
   type SpendUnreadable,
 } from "@fractalboxdev/flare-dispatch-ops";
 import type { Effect } from "effect";
-import type { R2PresignerConfig } from "@fractalboxdev/flare-dispatch-cache";
+import type { AppendOutcome, R2PresignerConfig } from "@fractalboxdev/flare-dispatch-cache";
 import type { CacheEnv } from "./cache.ts";
 import {
   buildProfile,
@@ -97,6 +97,11 @@ export interface ControlPlaneEnv extends CacheEnv {
    */
   readonly R2_PRESIGN_ACCESS_KEY_ID?: string;
   readonly R2_PRESIGN_SECRET_ACCESS_KEY?: string;
+  /** The one `TransparencyLog` object, `idFromName("private")`: the private log's only writer (FD-PROV-074). */
+  readonly TRANSPARENCY_LOG?: {
+    idFromName(name: string): unknown;
+    get(id: unknown): { append(entry: Uint8Array): Promise<AppendOutcome> };
+  };
 }
 
 const set = (value: string | undefined): value is string => value !== undefined && value !== "";

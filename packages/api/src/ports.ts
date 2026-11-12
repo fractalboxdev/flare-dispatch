@@ -8,6 +8,9 @@ import type {
   DispatchBody,
   ExecutionView,
   IncidentV1,
+  KeyHistoryView,
+  PolicyPublished,
+  ProvenancePolicyEnvelope,
   RegisterBody,
   VerdictName,
 } from "./declaration.ts";
@@ -173,5 +176,27 @@ export class OidcKey extends Context.Service<
   OidcKey,
   { readonly keys: Effect.Effect<OidcKeys | undefined> }
 >()("@fractalboxdev/flare-dispatch-api/OidcKey") {}
+
+// --- Verification policy ---------------------------------------------------------------------------------------------
+
+/**
+ * The verification policy's versions (specs/provenance.md § Verification policy and key history). `served` answers the
+ * current version, or the one `policyVersion` names, once it is logged (FD-PROV-044, FD-PROV-046); `not_found` for none.
+ * `publish` checks a version (FD-PROV-047, FD-PROV-052) and appends it to the transparency log before it is served.
+ * `keyHistory` answers the key history the control plane recorded, which a version must carry (FD-PROV-047).
+ */
+export class ProvenancePolicies extends Context.Service<
+  ProvenancePolicies,
+  {
+    readonly served: (
+      policyVersion: string | undefined,
+    ) => Effect.Effect<ProvenancePolicyEnvelope, ApiError>;
+    readonly publish: (
+      envelope: ProvenancePolicyEnvelope,
+      now: number,
+    ) => Effect.Effect<typeof PolicyPublished.Type, ApiError>;
+    readonly keyHistory: Effect.Effect<KeyHistoryView, ApiError>;
+  }
+>()("@fractalboxdev/flare-dispatch-api/ProvenancePolicies") {}
 
 export type { VerdictName };

@@ -172,7 +172,9 @@ Every error response is a JSON object `{ "error": <code>, "message": <text>, "re
 | `GET /v1/ops/fleet` | Each executor's kind, heartbeat age, drain and quarantine flags and slots per class ([operability.md](operability.md) FD-OPS-071) | 1 |
 | `GET /v1/github/install/new`, `GET /v1/github/install/callback` | The GitHub App manifest flow and the new App's credentials ([operability.md](operability.md) FD-OPS-072 to FD-OPS-075) | 0 |
 | `GET /.well-known/openid-configuration`, `GET /.well-known/jwks.json` | OIDC discovery and keys | 0 |
-| `GET /.well-known/flare-dispatch/provenance-policy.json` | The verification policy | 4 |
+| `GET /.well-known/flare-dispatch/provenance-policy.json` | The current verification policy; `?policy_version=<v>` an earlier version ([provenance.md](provenance.md) FD-PROV-044) | 4 |
+| `PUT /v1/provenance-policy` | Publish one verification-policy version, signed by the policy root key; an operator's route, served once the transparency log holds it ([provenance.md](provenance.md) FD-PROV-046) | 4 |
+| `GET /v1/provenance-policy/key-history` | The provenance keys and private-log keys the control plane has used, each with the window it recorded, which a policy version must carry; an operator's route ([provenance.md](provenance.md) FD-PROV-047) | 4 |
 | `GET /v1/provenance/executions/:id`, `GET /v1/provenance/subjects/sha256:<hex>` | Statements with inclusion proofs | 4 |
 | `GET /v1/provenance/log/checkpoint`, `/proof/inclusion`, `/proof/consistency` | Private-log checkpoint and proofs | 4 |
 

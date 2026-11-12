@@ -12,7 +12,9 @@
     "./log-names": "./src/log-names.ts",
     "./oidc": "./src/oidc.ts",
     "./provenance": "./src/provenance/index.ts",
-    "./transparency-log": "./src/provenance/log-object.ts"
+    "./transparency-log": "./src/provenance/log-object.ts",
+    "./provenance-policy": "./src/provenance/policy.ts",
+    "./provenance-policy-test-support": "./src/provenance/policy.test-support.ts"
   },
   "scripts": {
     "test": "vitest run"
