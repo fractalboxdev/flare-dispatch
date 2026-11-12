@@ -43,7 +43,7 @@ const settingsOf = (worker: string): DeployedSettings =>
 
 const fakeTarget = (calls: string[], opts: { probe?: boolean } = {}) =>
   Layer.succeed(DeployTarget, {
-    readScanBundle: () => Effect.succeed(null),
+    readLocalFile: () => Effect.succeed(null),
     deployedSettings: (r) => Effect.succeed(settingsOf(r.worker)),
     lastRecord: (r) => Effect.succeed(settingsOf(r.worker)),
     appRegistration: Effect.succeed(APP_PERMISSIONS),

@@ -20,8 +20,14 @@ RUN apt-get update && \
     git --version
 
 # The security gate's scanners (specs/runs/gate.md § Security gate), each a release download checked against its
-# SHA-256 for the architecture buildx targets. A scan bundle's `scanners.<name>.versions` must accept these versions.
+# SHA-256 for the architecture buildx targets. Each `ARG <SCANNER>_VERSION` declares the version the image installs:
+# `fd deploy`'s drift check reads it and fails where the pinned scan bundle's `scanners.<name>.versions` does not
+# accept it (specs/operability.md FD-OPS-098), and the build fails where the binary reports another version. A new
+# version needs new SHA-256s.
 ARG TARGETARCH
+ARG GITLEAKS_VERSION=8.30.1
+ARG ZIZMOR_VERSION=1.32.0
+ARG OSV_SCANNER_VERSION=2.7.0
 RUN set -eu; \
     case "${TARGETARCH}" in \
       arm64) \
@@ -35,9 +41,9 @@ RUN set -eu; \
       *) echo "no scanner build for ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     tmp=$(mktemp -d); \
-    curl -fsSL -o "$tmp/gitleaks.tar.gz" "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_${gitleaks_asset}.tar.gz"; \
-    curl -fsSL -o "$tmp/zizmor.tar.gz" "https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-${zizmor_asset}.tar.gz"; \
-    curl -fsSL -o "$tmp/osv-scanner" "https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_${osv_asset}"; \
+    curl -fsSL -o "$tmp/gitleaks.tar.gz" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_${gitleaks_asset}.tar.gz"; \
+    curl -fsSL -o "$tmp/zizmor.tar.gz" "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-${zizmor_asset}.tar.gz"; \
+    curl -fsSL -o "$tmp/osv-scanner" "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_${osv_asset}"; \
     printf '%s  %s\n' "$gitleaks_sha256" "$tmp/gitleaks.tar.gz" "$zizmor_sha256" "$tmp/zizmor.tar.gz" \
       "$osv_sha256" "$tmp/osv-scanner" | sha256sum -c -; \
     tar -xzf "$tmp/gitleaks.tar.gz" -C "$tmp" gitleaks; \
@@ -45,7 +51,9 @@ RUN set -eu; \
     install -m 0755 "$tmp/gitleaks" "$tmp/osv-scanner" /usr/local/bin/; \
     install -m 0755 "$(find "$tmp" -type f -name zizmor | head -n 1)" /usr/local/bin/zizmor; \
     rm -rf "$tmp"; \
-    gitleaks version && zizmor --version && osv-scanner --version
+    gitleaks version | grep -F "${GITLEAKS_VERSION}"; \
+    zizmor --version | grep -F "${ZIZMOR_VERSION}"; \
+    osv-scanner --version | grep -F "${OSV_SCANNER_VERSION}"
 
 # The binaries a baseline check may run (FD-GATE-109), and the fixtures the image's smoke commands scan
 # (FD-GATE-114, FD-GATE-115).
