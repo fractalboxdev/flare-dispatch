@@ -121,6 +121,28 @@ export const cronCheck = (worker: string, crons: readonly string[]): readonly Fi
         ),
       ];
 
+/**
+ * The deployed Worker's cron set against the one its template must declare: the single minute tick, or none on a
+ * static-assets Worker (FD-INT-050). It runs whether or not a record exists, so a cron trigger changed out of band
+ * fails the drift check before the first record as well as after it.
+ */
+export const deployedCronCheck = (
+  worker: string,
+  config: WorkerConfig,
+  crons: readonly string[],
+): readonly Finding[] => {
+  const expected = isStaticAssets(config) ? [] : [MINUTE_TICK];
+  return crons.length === expected.length && crons.every((c, i) => c === expected[i])
+    ? []
+    : [
+        fail(
+          "cron",
+          `${worker}.crons`,
+          `deployed cron set ${JSON.stringify(crons)} is not ${JSON.stringify(expected)}`,
+        ),
+      ];
+};
+
 /** Every binding name a configuration declares. */
 export const bindingsOf = (c: WorkerConfig): ReadonlySet<string> => {
   const names = new Set<string>();

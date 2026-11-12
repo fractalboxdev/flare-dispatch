@@ -17,6 +17,7 @@ import {
   appRegistrationCheck,
   awsBudgetCheck,
   awsBudgetUnset,
+  deployedCronCheck,
   failed,
   modelRegistryCheck,
   policyRootKeyCheck,
@@ -308,6 +309,8 @@ export const driftFindings = (
       const deployed = yield* target.deployedSettings(r);
       findings.push(...unrenderedCheck(r.worker, r.text), ...extra(r.worker, r.config, deployed));
       findings.push(...policyRootKeyCheck(r.worker, r.config, deployed));
+      if (deployed !== null)
+        findings.push(...deployedCronCheck(r.worker, r.config, deployed.crons));
       const record = yield* target.lastRecord(r);
       if (deployed !== null && record !== null)
         findings.push(...settingsDrift(r.worker, record, deployed));

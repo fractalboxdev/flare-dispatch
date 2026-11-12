@@ -37,10 +37,14 @@ const settings: DeployedSettings = {
   containers: [],
 };
 
+/** The docs Worker serves static assets and runs no cron trigger. */
+const settingsOf = (worker: string): DeployedSettings =>
+  worker === "docs" ? { ...settings, crons: [] } : settings;
+
 const fakeTarget = (calls: string[], opts: { probe?: boolean } = {}) =>
   Layer.succeed(DeployTarget, {
-    deployedSettings: () => Effect.succeed(settings),
-    lastRecord: () => Effect.succeed(settings),
+    deployedSettings: (r) => Effect.succeed(settingsOf(r.worker)),
+    lastRecord: (r) => Effect.succeed(settingsOf(r.worker)),
     appRegistration: Effect.succeed(APP_PERMISSIONS),
     requiredChecks: Effect.succeed([...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
     awsBudgets: Effect.succeed({ account: "", observedAt: 0, budgets: [], actions: [] }),

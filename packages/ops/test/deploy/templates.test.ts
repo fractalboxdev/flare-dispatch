@@ -13,11 +13,23 @@ import {
   type OverlayValues,
 } from "../../src/index.ts";
 import { staticDrift, V2_WORKERS, type WorkerSpec } from "../../src/cli/index.ts";
-import { deploy, isWrite, OVERLAY, ROOT, world } from "./support.ts";
+import {
+  CONTROL_PLANE,
+  deploy,
+  fd,
+  isWrite,
+  OVERLAY,
+  ROOT,
+  SCRIPT,
+  since,
+  world,
+} from "./support.ts";
 
 const DOCS = V2_WORKERS.find((w) => w.worker === "docs")!;
 const templateOf = (spec: WorkerSpec) => readFileSync(join(ROOT, spec.templatePath), "utf8");
 const DOCS_TEMPLATE = templateOf(DOCS);
+const CONTROL_PLANE_TEMPLATE = templateOf(CONTROL_PLANE);
+const MINUTE_TICK_LINE = '"triggers": { "crons": ["* * * * *"] },';
 
 /** The committed docs template with one edit, which must apply. */
 const editedDocs = (from: string | RegExp, to: string): string => {
@@ -49,6 +61,14 @@ const workersWithDocs = (template: string, built = true): readonly WorkerSpec[] 
   return V2_WORKERS.map((s) =>
     s.worker === "docs" ? { ...s, templatePath: relative(ROOT, path) } : s,
   );
+};
+
+/** The control-plane template with its cron trigger replaced by `triggers`, written beside the other harness files. */
+const controlPlaneWith = (triggers: string): readonly WorkerSpec[] => {
+  expect(CONTROL_PLANE_TEMPLATE).toContain(MINUTE_TICK_LINE);
+  const path = join(dir, `control-plane-${++n}.jsonc`);
+  writeFileSync(path, CONTROL_PLANE_TEMPLATE.replace(MINUTE_TICK_LINE, triggers));
+  return [{ ...CONTROL_PLANE, templatePath: relative(ROOT, path) }];
 };
 
 const driftStage = (report: {
@@ -148,5 +168,100 @@ describe("the committed Worker templates", () => {
       expect(driftStage(report)!.detail).toContain("docs.keep_vars");
       expect(w.calls.filter(isWrite)).toEqual([]);
     }
+  });
+});
+
+describe("the cron set of each committed template and deployed Worker", () => {
+  it("[FD-INT-050] the dispatcher's template declares only the minute tick and the docs template none, and fd deploy stops at the drift stage on a rendered configuration with any other cron set", async () => {
+    const crons = (text: string) =>
+      (parseJsonc(text)["triggers"] as { crons?: unknown } | undefined)?.crons;
+    expect(crons(CONTROL_PLANE_TEMPLATE)).toEqual(["* * * * *"]);
+    expect(crons(DOCS_TEMPLATE)).toBeUndefined();
+
+    for (const [triggers, set] of [
+      ['"triggers": { "crons": ["*/5 * * * *"] },', '["*/5 * * * *"]'],
+      ['"triggers": { "crons": ["* * * * *", "0 * * * *"] },', '["* * * * *","0 * * * *"]'],
+      ['"triggers": { "crons": [] },', "[]"],
+      ["", "[]"],
+    ] as const) {
+      const [spec] = controlPlaneWith(triggers);
+      expect(
+        Effect.runSync(staticDrift(spec!, templateOf(spec!), placeholderOverlay)).findings,
+        triggers,
+      ).toEqual([
+        {
+          check: "cron",
+          path: "control-plane.triggers.crons",
+          detail: `cron set ${set} is not ["* * * * *"]`,
+          severity: "failure",
+        },
+      ]);
+      const w = world();
+      const report = await deploy(w, OVERLAY, { workers: [spec!] });
+      expect(report.ok, triggers).toBe(false);
+      expect(report.stages.at(-1), triggers).toEqual({
+        stage: "drift",
+        ok: false,
+        detail: `control-plane.triggers.crons: cron set ${set} is not ["* * * * *"]`,
+      });
+      expect(w.calls.filter(isWrite), triggers).toEqual([]);
+    }
+
+    // A static-assets Worker runs no scheduled handler: a cron trigger on the docs template fails the check.
+    const docsWithCron = editedDocs(
+      '"keep_vars": false,',
+      '"keep_vars": false,\n  "triggers": { "crons": ["* * * * *"] },',
+    );
+    expect(docsFindings(docsWithCron)).toEqual([
+      {
+        check: "cron",
+        path: "docs.triggers.crons",
+        detail: 'cron set ["* * * * *"] on a Worker with no script',
+        severity: "failure",
+      },
+    ]);
+    const w = world();
+    const report = await deploy(w, OVERLAY, { workers: workersWithDocs(docsWithCron) });
+    expect(report.ok).toBe(false);
+    expect(driftStage(report)).toMatchObject({ ok: false });
+    expect(driftStage(report)!.detail).toContain("docs.triggers.crons");
+    expect(w.calls.filter(isWrite)).toEqual([]);
+  });
+
+  it("[FD-INT-050] fd deploy and fd doctor fail a deployed Worker whose live cron set differs from its template's, with or without a record of the last deploy", async () => {
+    const w = world();
+    const workers = workersWithDocs(DOCS_TEMPLATE);
+    expect((await deploy(w, OVERLAY, { workers })).ok).toBe(true);
+    expect(w.scripts.get(SCRIPT)!.crons).toEqual(["* * * * *"]);
+    expect(w.scripts.get("flare-dispatch-docs")!.crons).toEqual([]);
+
+    // The cron triggers change out of band, and the records of the last deploy are gone.
+    w.scripts.get(SCRIPT)!.crons = ["*/5 * * * *"];
+    w.scripts.get("flare-dispatch-docs")!.crons = ["0 * * * *"];
+    w.objects.clear();
+    const expected = [
+      'control-plane.crons: deployed cron set ["*/5 * * * *"] is not ["* * * * *"]',
+      'docs.crons: deployed cron set ["0 * * * *"] is not []',
+    ];
+
+    const doctor = await Effect.runPromise(fd(w, { workers }).doctor(OVERLAY));
+    expect(doctor.ok).toBe(false);
+    expect(doctor.stages.at(-1)).toMatchObject({ stage: "drift", ok: false });
+    expect(doctor.stages.at(-1)!.detail.split("\n").sort()).toEqual(
+      expected.map((line) => `failure ${line}`),
+    );
+
+    const from = w.calls.length;
+    const report = await deploy(w, OVERLAY, { workers });
+    expect(report.ok).toBe(false);
+    expect(driftStage(report)).toMatchObject({ ok: false });
+    expect(driftStage(report)!.detail.split("\n").sort()).toEqual(expected);
+    expect(report.stages.map((s) => s.stage)).not.toContain("deploy");
+    expect(since(w, from).filter(isWrite)).toEqual([]);
+
+    // The minute tick restored, the deploy goes out again.
+    w.scripts.get(SCRIPT)!.crons = ["* * * * *"];
+    w.scripts.get("flare-dispatch-docs")!.crons = [];
+    expect((await deploy(w, OVERLAY, { workers })).ok).toBe(true);
   });
 });
