@@ -16,6 +16,8 @@ import {
   cloudEligibleAt,
   configurationSourceLayer,
   ConfigurationSourceLive,
+  CREDENTIALED_GRANT,
+  credentialedGrantLabels,
   deliveryOrder,
   deviceSlotDefaults,
   GateDecisionSourceLive,
@@ -626,6 +628,45 @@ describe("placement", () => {
     const r = eligibleKinds(phase4, { class: "required", labels: ["reproduction"] });
     expect(r.kinds).toEqual(["device"]);
     expect(r.requiresPosture).toBe("attested-dedicated");
+  });
+
+  it("[FD-ISO-022] a run whose egress profiles hold a credentialed grant never keeps gha", () => {
+    const shapes = [
+      { class: "required", labels: ["apple-build"] },
+      ...CLASSES.map((c) => ({ class: c, labels: ["release-matrix"] })),
+      { class: "interactive", labels: ["apple-build", "release-matrix"] },
+    ];
+    for (const shape of shapes) {
+      expect(kinds4(shape)).toContain("gha");
+      const r = eligibleKinds(phase4, { ...shape, labels: [...shape.labels, CREDENTIALED_GRANT] });
+      expect(r.kinds).not.toContain("gha");
+      expect(r.constraints).toContain("credentialed-grant");
+    }
+    expect(kinds4({ class: "required", labels: ["apple-build", CREDENTIALED_GRANT] })).toEqual([
+      "device",
+    ]);
+  });
+
+  it("[FD-ISO-022] class resolution labels an execution by every grant of its egress profiles", () => {
+    const credentialed = (g: string) => g === "cf-api";
+    expect(credentialedGrantLabels(phase4, undefined, credentialed)).toEqual([]);
+    expect(credentialedGrantLabels(phase4, { setup: ["cf-api"], agent: [] }, credentialed)).toEqual(
+      [CREDENTIALED_GRANT],
+    );
+    expect(credentialedGrantLabels(phase4, { setup: [], agent: ["cf-api"] }, credentialed)).toEqual(
+      [CREDENTIALED_GRANT],
+    );
+    // A base grant counts as much as the run's own: a profile whose `setup` holds one labels every execution.
+    const based = {
+      ...phase4,
+      egress_profiles: {
+        ...phase4.egress_profiles,
+        setup: { ...phase4.egress_profiles.setup, grants: ["git-remote", "cf-api"] },
+      },
+    };
+    expect(credentialedGrantLabels(based, { setup: [], agent: [] }, credentialed)).toEqual([
+      CREDENTIALED_GRANT,
+    ]);
   });
 
   it("[FD-PROF-064] phase 0 registers no launcher and declares no constraint", () => {

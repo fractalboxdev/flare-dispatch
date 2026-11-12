@@ -13,6 +13,7 @@ import {
   type ProfileDocument,
 } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
+import { CREDENTIALED_GRANT } from "./placement.ts";
 import type { Predicate, Profile } from "./schema.ts";
 
 /**
@@ -330,8 +331,9 @@ const anyShape = {
 const withLabels = (...labels: string[]) => ({ ...anyShape, labels });
 
 /**
- * From phase 4: the `gha` launcher and five declared constraints. Every class lists `gha` last, so a macOS
- * release-matrix job of any class keeps `gha`; the constraints remove `gha` from every other run.
+ * From phase 4: the `gha` launcher and six declared constraints. Every class lists `gha` last, so a macOS
+ * release-matrix job of any class keeps `gha`; the constraints remove `gha` from every other run, and from any run whose
+ * egress profiles hold a grant that carries a credential (FD-ISO-022).
  */
 const ghaPlacement = {
   launcher_kinds: ["gha"],
@@ -358,6 +360,7 @@ const ghaPlacement = {
       removes: ["cloudflare", "aws", "gha"],
       requires_posture: "attested-dedicated",
     },
+    { name: "credentialed-grant", holds_for: label(CREDENTIALED_GRANT), removes: ["gha"] },
   ],
   required: [withLabels("release-matrix")],
   unreachable: [

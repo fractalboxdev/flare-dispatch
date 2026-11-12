@@ -5,7 +5,13 @@ import {
 } from "@fractalboxdev/flare-dispatch-agentic/executor";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
-import { attachGrants, executionGrantRules, MODEL_GATEWAY_PATH } from "./egress.ts";
+import { buildProfile, credentialedGrantLabels } from "@fractalboxdev/flare-dispatch-profile";
+import {
+  attachGrants,
+  carriesCredential,
+  executionGrantRules,
+  MODEL_GATEWAY_PATH,
+} from "./egress.ts";
 import { runsFor } from "./runs.ts";
 
 const HOST = "cp.example.com";
@@ -69,6 +75,19 @@ describe("the model-gateway grant", () => {
         rules,
       ).headers.get("authorization"),
     ).toBe("Bearer cf");
+  });
+});
+
+describe("credentialed grants", () => {
+  it("[FD-ISO-022] cf-api carries a credential and no base grant does, so only a run declaring one loses gha", () => {
+    expect(carriesCredential("cf-api")).toBe(true);
+    for (const grant of ["package-registries", "git-remote", "model-gateway", "unknown"])
+      expect(carriesCredential(grant)).toBe(false);
+    const profile = buildProfile("production", 4);
+    expect(credentialedGrantLabels(profile, undefined, carriesCredential)).toEqual([]);
+    expect(
+      credentialedGrantLabels(profile, { setup: ["cf-api"], agent: [] }, carriesCredential),
+    ).toEqual(["credentialed-grant"]);
   });
 });
 

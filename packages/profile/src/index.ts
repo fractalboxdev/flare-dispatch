@@ -57,8 +57,11 @@ export {
   classNamed,
   classPlacement,
   cloudEligibleAt,
+  CREDENTIALED_GRANT,
+  credentialedGrantLabels,
   deliveryOrder,
   drawsReserve,
+  egressGrantsOf,
   eligibleKinds,
   isolationOf,
   placementInputs,
@@ -67,6 +70,7 @@ export {
   type EligibleSet,
   type IsolationRequest,
   type PlacementRequest,
+  type RunGrants,
 } from "./placement.ts";
 export {
   ProfileRejected,

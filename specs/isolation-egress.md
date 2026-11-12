@@ -19,7 +19,7 @@ The decision behind the mechanism is mameko's [ADR-0011](https://github.com/frac
 
 ### Egress on `gha`
 
-A `gha` job runs on a GitHub-hosted runner VM, which the deploying organization does not operate, and the runner shares that VM with the repository's commands. The runner job applies an egress firewall for the execution's current egress profile before the run program starts, and checks it with a probe to a host outside that profile. An execution whose egress profiles hold a grant that carries a credential is never placed on `gha`.
+A `gha` job runs on a GitHub-hosted runner VM, which the deploying organization does not operate, and the runner shares that VM with the repository's commands. The runner job applies an egress firewall for the execution's current egress profile before the run program starts, and checks it with a probe to a host outside that profile. An execution whose egress profiles hold a grant that carries a credential is never placed on `gha`. A grant carries a credential when the egress proxy attaches a secret the deployment holds, as `cf-api` attaches the operator's Cloudflare API token. The base grants carry none: `package-registries` and `git-remote` attach nothing, and `model-gateway` attaches the execution's per-lease token, minted for one lease and revoked with it ([MAMEKO-ISO-053](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/isolation-egress.md)). Intake labels such an execution `credentialed-grant`, and the profile's constraint of that name removes `gha` ([profile.md](profile.md) § Placement).
 
 **The runner job closes egress before the run program starts, or does not start it**
 

@@ -150,7 +150,7 @@ The generic constraints of [admission-qos.md](https://github.com/fractalboxdev/m
 | `local_only` | A run that declares no class |
 | `launcher_kinds` | None before phase 4; `gha`, the GitHub Actions launcher, from phase 4 |
 
-From phase 4 the profile declares five constraints; before phase 4 it declares none, and `placement.required` and `placement.unreachable` are empty:
+From phase 4 the profile declares six constraints; before phase 4 it declares none, and `placement.required` and `placement.unreachable` are empty:
 
 | Constraint | Holds for | Removes | Posture |
 | --- | --- | --- | --- |
@@ -159,8 +159,11 @@ From phase 4 the profile declares five constraints; before phase 4 it declares n
 | `apple-build-gha` | Label `apple-build`, class not `required`, no label `release-matrix` | `gha` | — |
 | `gha-apple-only` | Neither label `apple-build` nor label `release-matrix` | `gha` | — |
 | `reproduction` | Label `reproduction`: a reproduction execution ([provenance.md](provenance.md) FD-PROV-064) | `cloudflare`, `aws`, `gha` | `attested-dedicated` |
+| `credentialed-grant` | Label `credentialed-grant`: a run whose egress profiles hold a grant that carries a credential ([isolation-egress.md](isolation-egress.md) FD-ISO-022) | `gha` | — |
 
 A release-matrix job that declares `macos-arm64` keeps exactly `gha` at every class: `release-matrix` removes every other kind and `cloud-pinned` does not hold for it. An `apple-build` run of class `required` keeps `gha` and `device`; at every other class it keeps `device` alone. `placement.required` lists the release-matrix job, so the profile validator rejects a profile that leaves it unplaceable. `placement.unreachable` lists a reproduction run with `untrusted-input`, `cloud-only` or `expose-port`, and an `apple-build` run with `expose-port`: FlareDispatch creates a reproduction execution from the release, never from a fork pull request or the tag push.
+
+Intake adds the label `credentialed-grant` to the labels class resolution returns when a grant of the execution's egress profiles, the base grants of both phases and the run's own, carries a credential. `cf-api` carries one; the base grants carry none ([isolation-egress.md](isolation-egress.md) § Egress on `gha`). A run with that label keeps no `gha`, a release-matrix job included.
 
 ### Outcome mapping
 
@@ -276,8 +279,9 @@ mameko's [profiles.md](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc
 | `idempotency-key` recipe | No `digest`; `on_mismatch` defaults to `duplicate` | `digest` over the dispatch body; `on_mismatch: conflict` |
 | `aws` in `required`'s cloud kinds | From phase 2 | From phase 3 (FD-PROF-064) |
 | The `gha` launcher kind and `gha` in every class's cloud kinds | From phase 3 | From phase 4 (FD-PROF-064) |
+| Constraint `credentialed-grant` | None | From phase 4: removes `gha` from a run whose egress profiles hold a grant that carries a credential ([isolation-egress.md](isolation-egress.md) FD-ISO-022) |
 
-FlareDispatch's phase n document is compared with the reference profile's form for phase n ([MAMEKO-PROF-023](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/profiles.md)), so `registration.attestation` agrees in every phase and only the two rows above differ by phase.
+FlareDispatch's phase n document is compared with the reference profile's form for phase n ([MAMEKO-PROF-023](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/profiles.md)), so `registration.attestation` agrees in every phase and only the last three rows above differ by phase.
 
 ## Requirements
 

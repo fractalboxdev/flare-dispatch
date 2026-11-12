@@ -49,6 +49,42 @@ export interface EligibleSet {
   readonly requiresPosture: PostureTier | null;
 }
 
+/**
+ * The placement label of an execution whose egress profiles hold a grant that carries a credential. The declared
+ * constraint `credentialed-grant` holds for it and removes `gha` (FD-ISO-022).
+ */
+export const CREDENTIALED_GRANT = "credentialed-grant";
+
+/** A run's own grants per egress phase. */
+export interface RunGrants {
+  readonly setup: readonly string[];
+  readonly agent: readonly string[];
+}
+
+/** The grants of an execution's egress profiles: the profile's base grants of both phases and the run's own. */
+export const egressGrantsOf = (
+  profile: Profile,
+  grants: RunGrants | undefined,
+): readonly string[] => [
+  ...new Set([
+    ...profile.egress_profiles.setup.grants,
+    ...profile.egress_profiles.agent.grants,
+    ...(grants?.setup ?? []),
+    ...(grants?.agent ?? []),
+  ]),
+];
+
+/**
+ * `credentialed-grant` when any grant of the execution's egress profiles carries a credential, by the grant
+ * catalogue's `carriesCredential`, else no label (FD-ISO-022).
+ */
+export const credentialedGrantLabels = (
+  profile: Profile,
+  grants: RunGrants | undefined,
+  carriesCredential: (grant: string) => boolean,
+): readonly string[] =>
+  egressGrantsOf(profile, grants).some(carriesCredential) ? [CREDENTIALED_GRANT] : [];
+
 const holds = (p: Predicate, r: PlacementRequest): boolean => {
   if ("class" in p) return r.class === p.class;
   if ("label" in p) return r.labels.includes(p.label);
