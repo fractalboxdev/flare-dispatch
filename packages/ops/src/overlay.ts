@@ -58,6 +58,19 @@ export const SpendValues = Schema.Struct({
 });
 export type SpendValues = typeof SpendValues.Type;
 
+/**
+ * One `dispatch.scoped` entry: an automated caller of read-only scan runs, the runs and repositories it may name and
+ * the class ceiling its dispatches resolve under (specs/interfaces.md FD-IFC-089 to FD-IFC-093). The ceiling stays a
+ * string here: the drift check names an entry whose ceiling is neither `interactive` nor `batch` (FD-OPS-092).
+ */
+export const ScopedDispatchEntry = Schema.Struct({
+  identity: NonEmpty,
+  runs: Schema.Array(NonEmpty).check(Schema.isMinLength(1)),
+  repositories: Schema.Array(NonEmpty).check(Schema.isMinLength(1)),
+  classCeiling: NonEmpty,
+});
+export type ScopedDispatchEntry = typeof ScopedDispatchEntry.Type;
+
 /** Every value path the overlay may hold; nothing else (FD-OPS-002). */
 export const OverlayValues = Schema.Struct({
   accountId: NonEmpty,
@@ -73,9 +86,16 @@ export const OverlayValues = Schema.Struct({
   access: Schema.Struct({ teamDomain: NonEmpty, aud: NonEmpty }),
   operators: Schema.Array(NonEmpty).check(Schema.isMinLength(1)),
   dispatchers: opt(Schema.Array(NonEmpty)),
+  /** The Access identities the tightening operator routes admit (specs/interfaces.md FD-IFC-095). */
+  containment: opt(Schema.Array(NonEmpty)),
   github: Schema.Struct({ appId: NonEmpty, fixtureRepo: NonEmpty }),
   intake: opt(Schema.Struct({ webhookEvents: opt(Schema.Array(NonEmpty)) })),
-  dispatch: opt(Schema.Struct({ oidcAudience: NonEmpty })),
+  dispatch: opt(
+    Schema.Struct({
+      oidcAudience: opt(NonEmpty),
+      scoped: opt(Schema.Array(ScopedDispatchEntry)),
+    }),
+  ),
   executors: Schema.Struct({ planeId: NonEmpty }),
   alerts: Schema.Struct({ sink: AlertSink, webhookSilentHours: opt(Count) }),
   spend: opt(SpendValues),

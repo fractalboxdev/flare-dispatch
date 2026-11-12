@@ -1,5 +1,11 @@
+import { AGENTIC_CATALOG } from "@fractalboxdev/flare-dispatch-agentic";
+import {
+  readOnlyScanRunsOf,
+  RUN_CATALOG,
+  type RunDeclaration,
+} from "@fractalboxdev/flare-dispatch-catalog";
 import { profileDocumentFor } from "@fractalboxdev/flare-dispatch-profile";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   admissionCapCheck,
@@ -11,8 +17,12 @@ import {
   bindingCheck,
   failed,
   MERGE_GATE_CHECKS,
+  decodeOverlay,
+  placeholderOverlay,
   profileCheck,
+  readOnlyScanCheck,
   rulesetCheck,
+  scopedIdentityCheck,
   settingsDrift,
   type AwsBudget,
   type AwsBudgetAction,
@@ -516,5 +526,195 @@ describe("AWS budget check", () => {
         "the overlay carries the aws kind and sets no AWS limit for the Budgets action to enforce",
       severity: "failure",
     });
+  });
+});
+
+/** A read-only scan declaration: commit inputs only, no model call site, only `check.*` intent kinds. */
+const ScanInput = Schema.Struct({
+  repo: Schema.String,
+  sha: Schema.String,
+  baseRef: Schema.optionalKey(Schema.String),
+});
+const scan: RunDeclaration = {
+  spec: { needsModel: false, intentKinds: ["check.open", "check.conclude"], readOnlyScan: true },
+  input: ScanInput,
+};
+const withCommand: RunDeclaration = {
+  ...scan,
+  input: Schema.Struct({
+    ...ScanInput.fields,
+    steps: Schema.Array(Schema.Struct({ label: Schema.String, command: Schema.String })),
+  }),
+};
+const withCallSite: RunDeclaration = {
+  ...scan,
+  agentic: {
+    declaration: { callSites: [{ name: "reviewer" }], intentKinds: ["check.open"] },
+  },
+};
+const withModel: RunDeclaration = { ...scan, spec: { ...scan.spec, needsModel: true } };
+const withKind: RunDeclaration = {
+  ...scan,
+  spec: { ...scan.spec, intentKinds: ["check.open", "dispatch.followOn"] },
+};
+const notReadOnly = (d: RunDeclaration): RunDeclaration => {
+  const { readOnlyScan: _r, ...spec } = d.spec;
+  return { ...d, spec };
+};
+
+describe("the registry validator over read-only scan declarations", () => {
+  it("[FD-GATE-113] rejects a readOnlyScan declaration holding a command input, a model call site or a non-check.* intent kind, naming the run", () => {
+    expect(readOnlyScanCheck(RUN_CATALOG)).toEqual([]);
+    expect(readOnlyScanCheck({ "security-rescan": scan })).toEqual([]);
+
+    const rejected = (d: RunDeclaration) =>
+      readOnlyScanCheck({ "security-rescan": d }).map((f) => [
+        f.check,
+        f.path,
+        f.detail,
+        f.severity,
+      ]);
+    const at = ["read-only-scan", "runs.security-rescan.readOnlyScan"] as const;
+    expect(rejected(withCommand)).toEqual([
+      [...at, "readOnlyScan: command input steps[].command", "failure"],
+    ]);
+    expect(rejected(withCallSite)).toEqual([
+      [...at, "readOnlyScan: model call site reviewer", "failure"],
+    ]);
+    expect(rejected(withModel)).toEqual([[...at, "readOnlyScan: needsModel", "failure"]]);
+    expect(rejected(withKind)).toEqual([
+      [...at, "readOnlyScan: intent kind dispatch.followOn", "failure"],
+    ]);
+
+    // The catalogue's own command-taking and model-calling runs, declared read-only, are each rejected.
+    const check = {
+      ...RUN_CATALOG["check"]!,
+      spec: { ...RUN_CATALOG["check"]!.spec, readOnlyScan: true },
+    };
+    expect(readOnlyScanCheck({ check }).map((f) => f.detail)).toEqual([
+      "readOnlyScan: command input steps[].command",
+    ]);
+    const image = RUN_CATALOG["sandbox-image"]!;
+    expect(
+      readOnlyScanCheck({
+        "sandbox-image": { ...image, spec: { ...image.spec, readOnlyScan: true } },
+      }).map((f) => f.detail),
+    ).toEqual(["readOnlyScan: command input entry.images[].smoke"]);
+    const review = RUN_CATALOG["pr-review"]!;
+    expect(
+      readOnlyScanCheck({
+        "pr-review": { ...review, spec: { ...review.spec, readOnlyScan: true } },
+      }).map((f) => f.detail),
+    ).toEqual(
+      expect.arrayContaining(
+        AGENTIC_CATALOG["pr-review"]!.declaration.callSites.map(
+          (c) => `readOnlyScan: model call site ${c.name}`,
+        ),
+      ),
+    );
+
+    // The rule binds only a declaration that sets readOnlyScan.
+    for (const d of [withCommand, withCallSite, withModel, withKind])
+      expect(readOnlyScanCheck({ run: notReadOnly(d) })).toEqual([]);
+    expect([
+      ...readOnlyScanRunsOf({
+        "security-rescan": scan,
+        bad: withCommand,
+        check: notReadOnly(scan),
+      }),
+    ]).toEqual(["security-rescan"]);
+  });
+});
+
+const SCAN_RUNS: ReadonlySet<string> = new Set(["security-rescan"]);
+const scopedEntry = (identity: string, over: Record<string, unknown> = {}) => ({
+  identity,
+  runs: ["security-rescan"],
+  repositories: ["acme/app"],
+  classCeiling: "batch",
+  ...over,
+});
+const identities = {
+  operators: ["operator@example.com"],
+  dispatchers: ["dispatcher@example.com"],
+  containment: ["responder@example.com"],
+};
+const scopedFindings = (scoped: readonly ReturnType<typeof scopedEntry>[], lists = identities) =>
+  scopedIdentityCheck({ ...lists, dispatch: { scoped } }, SCAN_RUNS).map((f) => [
+    f.check,
+    f.path,
+    f.detail,
+  ]);
+
+describe("the drift check over the overlay's scoped and containment identities", () => {
+  it("[FD-OPS-090] fails a dispatch.scoped identity that is also in dispatchers, operators or containment, naming the identity", () => {
+    const overlay = Effect.runSync(
+      decodeOverlay(
+        JSON.stringify({
+          ...placeholderOverlay,
+          ...identities,
+          dispatch: { scoped: [scopedEntry("scanner@example.com")] },
+        }),
+      ),
+    );
+    expect(scopedIdentityCheck(overlay, SCAN_RUNS)).toEqual([]);
+
+    for (const [list, identity] of [
+      ["dispatchers", "dispatcher@example.com"],
+      ["operators", "Operator@Example.com"],
+      ["containment", "responder@example.com"],
+    ] as const)
+      expect(scopedFindings([scopedEntry(identity)])).toEqual([
+        ["scoped-identity", "dispatch.scoped.0.identity", `${identity} is also in ${list}`],
+      ]);
+  });
+
+  it("[FD-OPS-091] fails a dispatch.scoped entry that names a run that is not a read-only scan run, naming the run", () => {
+    expect(scopedFindings([scopedEntry("scanner@example.com")])).toEqual([]);
+    expect(
+      scopedFindings([
+        scopedEntry("scanner@example.com", { runs: ["security-rescan", "check", "pr-review"] }),
+      ]),
+    ).toEqual([
+      ["scoped-identity", "dispatch.scoped.0.runs", "run check is not a read-only scan run"],
+      ["scoped-identity", "dispatch.scoped.0.runs", "run pr-review is not a read-only scan run"],
+    ]);
+    // With no read-only scan run in the catalogue, every scoped run fails.
+    expect(
+      scopedIdentityCheck(
+        { ...identities, dispatch: { scoped: [scopedEntry("scanner@example.com")] } },
+        new Set(),
+      ).map((f) => f.detail),
+    ).toEqual(["run security-rescan is not a read-only scan run"]);
+  });
+
+  it("[FD-OPS-092] fails a dispatch.scoped entry whose classCeiling is neither interactive nor batch, naming the identity", () => {
+    for (const ceiling of ["interactive", "batch"])
+      expect(
+        scopedFindings([scopedEntry("scanner@example.com", { classCeiling: ceiling })]),
+      ).toEqual([]);
+    for (const ceiling of ["required", "release", "Batch"])
+      expect(
+        scopedFindings([scopedEntry("scanner@example.com", { classCeiling: ceiling })]),
+      ).toEqual([
+        [
+          "scoped-identity",
+          "dispatch.scoped.0.classCeiling",
+          `scanner@example.com: classCeiling ${ceiling} is neither interactive nor batch`,
+        ],
+      ]);
+  });
+
+  it("[FD-OPS-093] fails a containment identity that is also in operators or dispatchers, naming the identity", () => {
+    expect(scopedFindings([])).toEqual([]);
+    expect(
+      scopedFindings([], {
+        ...identities,
+        containment: ["responder@example.com", "operator@example.com", " DISPATCHER@example.com"],
+      }),
+    ).toEqual([
+      ["containment-identity", "containment.1", "operator@example.com is also in operators"],
+      ["containment-identity", "containment.2", " DISPATCHER@example.com is also in dispatchers"],
+    ]);
   });
 });

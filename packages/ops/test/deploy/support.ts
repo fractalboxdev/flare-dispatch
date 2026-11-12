@@ -10,11 +10,16 @@
 // `acme/runner` serves its workflow files to a contents-scoped token of the App's installation there. The deploy host's
 // local files, such as a scan bundle envelope, are a map by absolute path, and each read of one is a recorded call.
 import type { AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
+import {
+  RUN_CATALOG,
+  type RunDeclaration,
+  type RunRegistry,
+} from "@fractalboxdev/flare-dispatch-catalog";
 import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import {
   APP_PERMISSIONS,
   committedAccess,
@@ -44,6 +49,21 @@ import {
 } from "../../src/cli/index.ts";
 
 export const ROOT = repositoryRoot(import.meta.dirname);
+
+/**
+ * A read-only scan run's declaration (specs/runs/gate.md § Terms): commit inputs only, no model call site, only
+ * `check.*` intent kinds.
+ */
+export const READ_ONLY_SCAN: RunDeclaration = {
+  spec: { needsModel: false, intentKinds: ["check.open", "check.conclude"], readOnlyScan: true },
+  input: Schema.Struct({ repo: Schema.String, sha: Schema.String }),
+};
+
+/** The committed run catalogue with `security-rescan` declared as `declaration`. */
+export const withRescan = (declaration: RunDeclaration = READ_ONLY_SCAN): RunRegistry => ({
+  ...RUN_CATALOG,
+  "security-rescan": declaration,
+});
 export const ACCOUNT = placeholderOverlay.accountId;
 export const API = `/client/v4/accounts/${ACCOUNT}`;
 export const CONTROL_PLANE = V2_WORKERS.find((w) => w.worker === "control-plane")!;
@@ -748,6 +768,8 @@ export const fd = (
     profile?: ProfileDocument;
     /** The agentic recipes the run catalogue carries; `AGENTIC_CATALOG` by default. */
     agenticRegistry?: AgenticRegistry;
+    /** The run declarations the run catalogue carries; `RUN_CATALOG` by default. */
+    runRegistry?: RunRegistry;
   } = {},
 ) =>
   makeOperability({
@@ -757,6 +779,7 @@ export const fd = (
     target: targetOn(w, opts.canary ?? "passes"),
     ...(opts.profile === undefined ? {} : { profile: opts.profile }),
     ...(opts.agenticRegistry === undefined ? {} : { agenticRegistry: opts.agenticRegistry }),
+    ...(opts.runRegistry === undefined ? {} : { runRegistry: opts.runRegistry }),
   });
 
 export const deploy = (w: World, overlay = OVERLAY, opts: Parameters<typeof fd>[1] = {}) =>
