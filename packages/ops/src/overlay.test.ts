@@ -69,6 +69,41 @@ describe("operator overlay", () => {
     expect(s.reserves["release-reserve"]).toBe(15_000_000);
     expect(s.overhead_factor).toBe(1.1);
   });
+
+  it("[FD-PROV-077] an overlay whose attestation_max_age is below reattest_interval plus 48 h is refused, each value at its default where the overlay sets none", () => {
+    const provenance = (p: Record<string, number>) => overlay({ provenance: p });
+    const accepted = (text: string) => Effect.runSync(decodeOverlay(text)).provenance;
+    // Defaults: 10 days against 7 days plus 48 h.
+    expect(Effect.runSync(decodeOverlay(overlay())).accountId).toBe(placeholderOverlay.accountId);
+    // Exactly the interval plus 48 h is the floor.
+    expect(accepted(provenance({ attestationMaxAgeDays: 9, reattestIntervalDays: 7 }))).toEqual({
+      attestationMaxAgeDays: 9,
+      reattestIntervalDays: 7,
+    });
+    expect(rejected(provenance({ attestationMaxAgeDays: 8, reattestIntervalDays: 7 }))).toEqual([
+      "provenance.attestationMaxAgeDays",
+    ]);
+    expect(rejected(provenance({ attestationMaxAgeDays: 7, reattestIntervalDays: 7 }))).toEqual([
+      "provenance.attestationMaxAgeDays",
+    ]);
+    // One value set, the other at its default.
+    expect(rejected(provenance({ attestationMaxAgeDays: 8 }))).toEqual([
+      "provenance.attestationMaxAgeDays",
+    ]);
+    expect(rejected(provenance({ reattestIntervalDays: 9 }))).toEqual([
+      "provenance.attestationMaxAgeDays",
+    ]);
+    expect(accepted(provenance({ reattestIntervalDays: 8 }))).toEqual({ reattestIntervalDays: 8 });
+    expect(
+      accepted(provenance({ attestationMaxAgeDays: 16, reattestIntervalDays: 14 })),
+    ).toBeDefined();
+    const issue = Effect.runSync(
+      Effect.flip(decodeOverlay(provenance({ attestationMaxAgeDays: 8, reattestIntervalDays: 7 }))),
+    ).issues[0];
+    expect(issue?.message).toBe(
+      "attestation_max_age (8 d) is below reattest_interval (7 d) plus 48 h",
+    );
+  });
 });
 
 describe("renderer", () => {

@@ -52,9 +52,13 @@ export interface ApiEnv {
   /** The secrets the link key must differ from (FD-IFC-023). */
   readonly WEBHOOK_SECRET?: string;
   readonly OIDC_SIGNING_JWK?: string;
+  /** The provenance key, which countersigns accepted statements (specs/provenance.md § Keys). */
   readonly PROVENANCE_KEY?: string;
+  /** The log key, which signs the private log's checkpoints (specs/provenance.md § Keys). */
+  readonly LOG_KEY?: string;
   /** The other capability secrets: compile-cache tokens (FD-CACHE-057) and install states (FD-OPS-073). */
   readonly COMPILE_CACHE_SECRET?: string;
+  readonly CACHE_TOKEN_SECRET?: string;
   readonly INSTALL_STATE_KEY?: string;
 }
 
@@ -99,6 +103,56 @@ export const distinctLinkKey = (env: ApiEnv): ConfigInvalid | undefined => {
     : new ConfigInvalid({ path: "LINK_KEY", message: `the link key equals ${same[0]}` });
 };
 
+/**
+ * The key material a secret holds: its text, and the private scalar `d` of every JWK it holds, so an OIDC key set
+ * whose current or retired key is the provenance key matches it however each secret is formatted.
+ */
+const keyMaterial = (secret: string): ReadonlySet<string> => {
+  const out = new Set<string>([secret]);
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) for (const x of v) walk(x);
+    else if (typeof v === "object" && v !== null)
+      for (const [k, x] of Object.entries(v)) {
+        if (k === "d" && typeof x === "string" && x !== "") out.add(`jwk.d:${x}`);
+        else walk(x);
+      }
+  };
+  try {
+    walk(JSON.parse(secret));
+  } catch {
+    // Not JSON: the text alone is the key material.
+  }
+  return out;
+};
+
+/** The bindings the provenance key must differ from: the OIDC key, the log key and every capability-token key. */
+export const PROVENANCE_KEY_DISTINCT_FROM = [
+  "OIDC_SIGNING_JWK",
+  "LOG_KEY",
+  "LINK_KEY",
+  "COMPILE_CACHE_SECRET",
+  "CACHE_TOKEN_SECRET",
+  "INSTALL_STATE_KEY",
+] as const satisfies ReadonlyArray<keyof ApiEnv>;
+
+/**
+ * The provenance key must differ from the OIDC key, the log key and every capability-token key (FD-PROV-033), so a
+ * key one purpose reveals never countersigns a statement. A secret that holds the same private JWK in another form
+ * matches too. The refusal names the binding, never a value.
+ */
+export const distinctProvenanceKey = (env: ApiEnv): ConfigInvalid | undefined => {
+  const provenance = present(env.PROVENANCE_KEY);
+  if (provenance === undefined) return undefined;
+  const mine = keyMaterial(provenance);
+  const same = PROVENANCE_KEY_DISTINCT_FROM.find((name) => {
+    const other = present(env[name]);
+    return other !== undefined && [...keyMaterial(other)].some((m) => mine.has(m));
+  });
+  return same === undefined
+    ? undefined
+    : new ConfigInvalid({ path: "PROVENANCE_KEY", message: `the provenance key equals ${same}` });
+};
+
 /** Reads the API's configuration from the Worker's bindings; a value it cannot use answers `ConfigInvalid`. */
 export const apiConfigFromEnv = (
   env: ApiEnv,
@@ -112,6 +166,8 @@ export const apiConfigFromEnv = (
   if (dispatchers instanceof ConfigInvalid) return dispatchers;
   const distinct = distinctLinkKey(env);
   if (distinct !== undefined) return distinct;
+  const provenance = distinctProvenanceKey(env);
+  if (provenance !== undefined) return provenance;
   const lifetimeRaw = present(env.LINK_LIFETIME_S);
   const linkLifetimeS = lifetimeRaw === undefined ? DEFAULT_LINK_LIFETIME_S : Number(lifetimeRaw);
   if (!Number.isInteger(linkLifetimeS) || linkLifetimeS < 1 || linkLifetimeS > MAX_LINK_LIFETIME_S)
