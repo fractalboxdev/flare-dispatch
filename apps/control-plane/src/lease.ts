@@ -1,6 +1,8 @@
-// The application's lease fields: which image an execution of a run runs in, by digest, and what names the execution.
+// The application's lease fields: which image an execution of a run runs in, by digest, what names the execution, and
+// the nonce bound to the execution and epoch (specs/provenance.md § Nonce and epoch).
 import type { CatalogEntry } from "@fractalboxdev/flare-dispatch-catalog";
 import { requestContextOf, type IntakeRecord } from "@fractalboxdev/flare-dispatch-intake";
+import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Effect, Schema } from "effect";
 
 /** The image a host execution names: it runs in no image, and a lease must carry the field. */
@@ -58,3 +60,142 @@ export const requestLeaseFields = (
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
+
+/** A lease nonce's length: 128 random bits (FD-PROV-010). */
+export const LEASE_NONCE_BYTES = 16;
+
+/** 128 random bits from the Web Crypto CSPRNG, as 32 lowercase hex characters. */
+export const freshLeaseNonce = (): string =>
+  Array.from(crypto.getRandomValues(new Uint8Array(LEASE_NONCE_BYTES)), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+
+/**
+ * The nonce each execution lease carries, one row per (`execution_id`, epoch) (FD-PROV-010). `invalidated_at` is set
+ * when the epoch's lease is reclaimed or a later epoch's lease is granted (FD-PROV-011); an invalidated nonce binds no
+ * statement.
+ */
+export const LEASE_NONCE_SCHEMA = [
+  `create table if not exists lease_nonces (
+    execution_id text not null,
+    epoch integer not null,
+    nonce text not null unique,
+    issued_at integer not null,
+    invalidated_at integer,
+    primary key (execution_id, epoch))`,
+];
+
+const migrated = new WeakMap<D1Like, Promise<unknown>>();
+
+/** Creates the lease-nonce table once per database handle. */
+export const migrateLeaseNonces = (db: D1Like): Promise<unknown> => {
+  const existing = migrated.get(db);
+  if (existing !== undefined) return existing;
+  const run = (async () => {
+    for (const sql of LEASE_NONCE_SCHEMA) await db.prepare(sql).run();
+  })().catch((e: unknown) => {
+    migrated.delete(db);
+    throw e;
+  });
+  migrated.set(db, run);
+  return run;
+};
+
+/** A lease grant at an epoch whose nonce a reclaim already invalidated. */
+export class LeaseNonceInvalidated extends Schema.TaggedError<LeaseNonceInvalidated>()(
+  "LeaseNonceInvalidated",
+  {
+    executionId: Schema.String,
+    epoch: Schema.Number,
+  },
+) {}
+
+/**
+ * The nonce a lease grant carries (FD-PROV-010, FD-PROV-011): 128 random bits, stored against the execution and the
+ * epoch. A grant at a new epoch invalidates every earlier epoch's nonce of the execution in the same batch; a repeated
+ * grant at the same epoch (a launch-bound socket's lease) answers the nonce already issued for it. A grant at an epoch
+ * whose nonce is invalidated fails.
+ */
+export const leaseNonce = (
+  db: D1Like,
+  executionId: string,
+  epoch: number,
+  now: number,
+): Effect.Effect<string, LeaseNonceInvalidated> =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() => migrateLeaseNonces(db));
+    const results = yield* Effect.promise(() =>
+      db.batch([
+        db
+          .prepare(
+            `update lease_nonces set invalidated_at = ?
+             where execution_id = ? and epoch < ? and invalidated_at is null`,
+          )
+          .bind(now, executionId, epoch),
+        db
+          .prepare(
+            `insert into lease_nonces (execution_id, epoch, nonce, issued_at) values (?, ?, ?, ?)
+             on conflict (execution_id, epoch) do nothing`,
+          )
+          .bind(executionId, epoch, freshLeaseNonce(), now),
+        db
+          .prepare(
+            "select nonce, invalidated_at from lease_nonces where execution_id = ? and epoch = ?",
+          )
+          .bind(executionId, epoch),
+      ]),
+    );
+    const row = results[2]?.results?.[0] as
+      | { readonly nonce: string; readonly invalidated_at: number | null }
+      | undefined;
+    if (row === undefined || row.invalidated_at !== null)
+      return yield* new LeaseNonceInvalidated({ executionId, epoch });
+    return row.nonce;
+  });
+
+/**
+ * Invalidates the nonce of the execution's lease at `epoch` and of every earlier epoch, as the lease is reclaimed
+ * (FD-PROV-011). The channel and the liveness monitor call it while they revoke the epoch's credentials, before the
+ * reclaim frees the placement.
+ */
+export const invalidateLeaseNonce = (
+  db: D1Like,
+  executionId: string,
+  epoch: number,
+  now: number,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() => migrateLeaseNonces(db));
+    yield* Effect.promise(() =>
+      db
+        .prepare(
+          `update lease_nonces set invalidated_at = ?
+           where execution_id = ? and epoch <= ? and invalidated_at is null`,
+        )
+        .bind(now, executionId, epoch)
+        .run(),
+    );
+  });
+
+/**
+ * The nonce issued for the execution's lease at `epoch` while it is still valid, else null: the nonce a statement for
+ * that execution and epoch must carry (FD-PROV-020).
+ */
+export const issuedLeaseNonce = (
+  db: D1Like,
+  executionId: string,
+  epoch: number,
+): Effect.Effect<string | null> =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() => migrateLeaseNonces(db));
+    const { results } = yield* Effect.promise(() =>
+      db
+        .prepare(
+          `select nonce from lease_nonces
+           where execution_id = ? and epoch = ? and invalidated_at is null`,
+        )
+        .bind(executionId, epoch)
+        .all(),
+    );
+    return (results[0] as { readonly nonce: string } | undefined)?.nonce ?? null;
+  });

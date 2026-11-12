@@ -195,7 +195,7 @@ describe("local registration port", () => {
     expect(answer._tag).toBe("accepted");
     const { executionId, nonce } = answer as { executionId: string; nonce: string };
     expect(executionId).toBe("exec:L1:check:t1:sha256:in");
-    expect(nonce).toMatch(/^[0-9a-f]{64}$/);
+    expect(nonce).toMatch(/^[0-9a-f]{32}$/);
     const record = await go(
       Effect.gen(function* () {
         return yield* (yield* LocalStore).byExecution(executionId);
@@ -279,6 +279,33 @@ describe("local registration port", () => {
     await go(registerVia("check", { ...registration, wants: { reuse: false, writeback: false } }));
     await go(registerVia("check", { ...registration, ref: undefined }));
     expect(submitted).toEqual([]);
+  });
+
+  it("[FD-PROV-012] issues a nonce of 128 random bits stored with the execution id, the capacity lease id and its epoch", async () => {
+    const { go } = harness();
+    const nonces = new Set<string>();
+    for (let i = 0; i < 32; i++) {
+      const lease = { leaseId: `L${i % 4}`, epoch: 2 + (i % 3) };
+      const answer = await go(registerVia("check", { ...registration, treeHash: `t${i}` }, lease));
+      expect(answer._tag).toBe("accepted");
+      const { executionId, nonce } = answer as { executionId: string; nonce: string };
+      // 16 bytes as hex: exactly 128 bits.
+      expect(nonce).toMatch(/^[0-9a-f]{32}$/);
+      nonces.add(nonce);
+      const record = await go(
+        Effect.gen(function* () {
+          return yield* (yield* LocalStore).byExecution(executionId);
+        }),
+      );
+      expect(record).toMatchObject({
+        executionId,
+        leaseId: lease.leaseId,
+        epoch: lease.epoch,
+        nonce,
+      });
+    }
+    // Each registration draws its own random nonce.
+    expect(nonces.size).toBe(32);
   });
 
   it("a repeated registration that intake deduplicates receives the nonce the first one did", async () => {

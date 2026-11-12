@@ -65,6 +65,9 @@ export class LocalSubmit extends Context.Service<
 
 const hex = (bytes: Uint8Array) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 
+/** A registration nonce's length: 128 random bits (FD-PROV-012). */
+export const REGISTRATION_NONCE_BYTES = 16;
+
 const decodeRegistration = Schema.decodeUnknownExit(RegistrationPayload);
 
 /**
@@ -92,7 +95,8 @@ const recordMatches = (prior: RegistrationRecord, r: RegistrationPayload): boole
 /**
  * Registers one rehearsal: submits it through intake, records its environment names beside the tree hash, base
  * commit, run-definition digest, image digest, platform and inputs digest under the admitted execution id
- * (FD-LOCAL-072), and issues a 256-bit nonce. A registration that requests neither reuse nor writeback, fails to
+ * (FD-LOCAL-072), and issues a nonce of 128 random bits stored with that execution id, the capacity lease id and the
+ * capacity-lease epoch (FD-PROV-012). A registration that requests neither reuse nor writeback, fails to
  * decode or that intake refuses is rejected, so the execution runs unregistered (MAMEKO-LOCAL-070). A repeated
  * registration that intake deduplicates to an already registered execution receives that record's nonce only when the
  * record holds exactly its provenance, scope, reuse key, environment names and wants; any other repeat is rejected, so
@@ -125,7 +129,7 @@ export const registerRehearsal = (
         ? ({ _tag: "accepted", executionId, nonce: prior.nonce } as const)
         : ({ _tag: "rejected" } as const);
     const now = yield* Clock.currentTimeMillis;
-    const nonce = hex(crypto.getRandomValues(new Uint8Array(32)));
+    const nonce = hex(crypto.getRandomValues(new Uint8Array(REGISTRATION_NONCE_BYTES)));
     yield* store.insert({
       executionId,
       scopeId: r.scopeId,
