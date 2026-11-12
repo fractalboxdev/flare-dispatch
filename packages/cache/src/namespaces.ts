@@ -72,9 +72,13 @@ export const isProtectedTrigger = (trigger: CacheTrigger): boolean =>
     Match.orElse(() => false),
   );
 
-/** `release` builds cold and `cloud-only` restores nothing (FD-CACHE-028). */
+/** A reproduction execution runs with caches off: it restores and writes nothing (specs/provenance.md FD-PROV-064). */
+export const cachesOff = (execution: Pick<CacheExecution, "constraints">) =>
+  execution.constraints.includes("reproduction");
+
+/** `release` builds cold and `cloud-only` restores nothing (FD-CACHE-028); nor does a reproduction (FD-PROV-064). */
 export const restoresNothing = (execution: Pick<CacheExecution, "class" | "constraints">) =>
-  execution.class === "release" || execution.constraints.includes("cloud-only");
+  execution.class === "release" || execution.constraints.includes("cloud-only") || cachesOff(execution);
 
 const writable = (execution: CacheExecution, repo: string, kind: ExecutorKind): string | null => {
   // FD-CACHE-021: a rehearsal or a `gha` execution writes at most its own execution namespace.
@@ -113,11 +117,12 @@ const readable = (execution: CacheExecution, repo: string, kind: ExecutorKind): 
 /**
  * The profile's `cacheNamespaces` binding (FD-CACHE-015): the namespaces an execution reads, in lookup order, and the
  * one it writes, from the execution row and the claiming executor's kind. An execution whose repository is not a
- * slug gets no namespace, so a malformed row reads and writes no cache.
+ * slug gets no namespace, so a malformed row reads and writes no cache; nor does a reproduction, which runs with caches
+ * off (FD-PROV-064).
  */
 export const cacheNamespaces = (execution: CacheExecution, kind: ExecutorKind): CacheNamespaces => {
   const repo = repoSlug(execution.repo);
-  if (repo === undefined) return { read: [], write: null };
+  if (repo === undefined || cachesOff(execution)) return { read: [], write: null };
   return { read: readable(execution, repo, kind), write: writable(execution, repo, kind) };
 };
 

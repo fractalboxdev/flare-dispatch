@@ -2,9 +2,11 @@
 // application ports mameko's validation counts (MAMEKO-HOST-046). A cache or token held here outlives one request.
 import {
   CacheClock,
+  isReproduction,
   ObjectStorePresignerLive,
   R2Presigner,
   R2PresignerLive,
+  reproductionGuardedActuators,
 } from "@fractalboxdev/flare-dispatch-cache";
 import { FollowOnSubmitter } from "@fractalboxdev/flare-dispatch-github";
 import { catalogRuns, followOnSubmitterLayer } from "@fractalboxdev/flare-dispatch-intake";
@@ -205,6 +207,28 @@ export const followOnActuators = Layer.effect(
 ).pipe(Layer.provide(followOnSubmitterLayer));
 
 /**
+ * The actuators with every outbox row of a reproduction execution refused: the control plane applies no intent of it
+ * other than its statement's log append, which is no outbox row (FD-PROV-065). Intake's record names a reproduction by
+ * its `reproduction` placement constraint.
+ */
+export const reproductionGuard = Layer.effect(
+  Actuators,
+  Effect.gen(function* () {
+    const base = yield* Actuators;
+    const store = yield* IntakeStore;
+    return reproductionGuardedActuators(base, (executionId) =>
+      store.get(executionId).pipe(
+        Effect.map(
+          (record) =>
+            record !== null &&
+            isReproduction(record.placementConstraint === null ? [] : [record.placementConstraint]),
+        ),
+      ),
+    );
+  }),
+);
+
+/**
  * Intake's record of a verified webhook delivery reaches the operability record of a registered installation too,
  * which the canary's stage read and `webhook-silent` take (FD-INT-031, FD-OPS-040). A write that fails is logged, and
  * the webhook still answers.
@@ -287,8 +311,11 @@ const servicesLayer = (env: ControlPlaneEnv) => {
       Layer.provideMerge(applier),
       Layer.provideMerge(common),
     );
-    // The follow-on wrapper wins the `Actuators` tag over the agentic appliers underneath.
-    return followOnActuators.pipe(Layer.provideMerge(services));
+    // The follow-on wrapper wins the `Actuators` tag over the agentic appliers underneath, and the reproduction guard
+    // wins it over both.
+    return reproductionGuard.pipe(
+      Layer.provideMerge(followOnActuators.pipe(Layer.provideMerge(services))),
+    );
   }
   const intake = Layer.mergeAll(
     Layer.succeed(IntakeConfig, settings),

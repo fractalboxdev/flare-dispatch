@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@fractalboxdev/flare-dispatch-agentic": "workspace:*",
+    "@fractalboxdev/flare-dispatch-cache": "workspace:*",
     "@fractalboxdev/flare-dispatch-catalog": "workspace:*",
     "@fractalboxdev/flare-dispatch-github": "workspace:*",
     "@fractalboxdev/flare-dispatch-profile": "workspace:*",
