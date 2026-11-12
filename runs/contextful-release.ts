@@ -291,10 +291,14 @@ const nativeRelease = (input: typeof ReleaseCellInput.Type) => Effect.gen(functi
     profile: input.profile as "contextful-edge" | "contextful-full", target: input.target as "x86_64-pc-windows-msvc" | "aarch64-pc-windows-msvc" }));
   const deadline = yield* step("native-release-deadline", () => io.now.pipe(Effect.map(now => now + RELEASE_BUILD_TIMEOUT_SEC * 1000)));
   for (let index = 0; ; index++) {
-    const observed = yield* step(`observe-native-release-${index}`, () => nativeExecution.observeRelease(handle));
-    if (observed.status === "ready") break;
     const now = yield* step(`native-release-clock-${index}`, () => io.now);
     if (now >= deadline) return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release deadline exceeded" }));
+    const observed = yield* step(`observe-native-release-${index}`, () => nativeExecution.observeRelease(handle));
+    if (observed.status === "ready") {
+      const completedAt = yield* step(`native-release-ready-clock-${index}`, () => io.now);
+      if (completedAt >= deadline) return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release deadline exceeded" }));
+      break;
+    }
     yield* step(`sleep-native-release-${index}`, () => io.sleep("30 seconds"));
   }
   const name = stem(input.profile, input.tag.slice(1), input.target);
