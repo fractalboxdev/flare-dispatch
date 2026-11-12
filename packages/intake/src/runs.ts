@@ -65,6 +65,11 @@ export interface IntakeRun {
    * body reads it (FD-AGT-092, FD-AGT-093); a run without it reads no required set at intake.
    */
   readonly requiredCheck?: (inputs: unknown, required: boolean) => unknown;
+  /**
+   * The pull request the inputs name, for a run with `requiredCheck`: a dispatch reads its target branch from it, and
+   * null leaves the branch unknown, so the check counts as required.
+   */
+  readonly pullNumber?: (inputs: unknown) => number | null;
 }
 
 /** The run catalogue: a run by name, or undefined when the deployment serves no such run. */

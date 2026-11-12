@@ -1260,6 +1260,56 @@ describe("the catalogue's request decoders through the webhook route", () => {
       await deliver(h, "pull_request", botPullRequest("4".repeat(40)));
       expect(factsOf(h).map((f) => f.requiredCheck)).toEqual([true]);
     });
+
+    it("[FD-AGT-092] [FD-AGT-093] a dispatch's requiredCheck gives way to intake's read of the target branch", async () => {
+      const dispatchHarness = () =>
+        catalogHarness([
+          {
+            recipe: "pr-review",
+            triggers: ["dispatch"],
+            params: { maxDiffChars: 60_000, reviewBots: ["renovate[bot]"] },
+          },
+        ]);
+      const sent = {
+        repo: { owner: "acme", name: "app" },
+        number: 12,
+        baseSha: "d".repeat(40),
+        headSha: HEAD,
+        draft: false,
+        labels: ["skip-ai-review"],
+        authorLogin: "dependabot[bot]",
+        authorAssociation: "NONE",
+        forkHead: false,
+        maxDiffChars: 60_000,
+        reviewBots: ["renovate[bot]"],
+        requiredCheck: false,
+      };
+      const pull = {
+        number: 12,
+        updated_at: "2026-01-01T00:00:00Z",
+        head: { sha: HEAD, ref: "deps", repo: { full_name: REPO } },
+        base: { ref: "release", repo: { full_name: REPO } },
+      };
+      const dispatchOf = (inputs: unknown) =>
+        authenticated({ run: "pr-review", sha: HEAD, label: null, inputs });
+
+      const required = await dispatchHarness();
+      required.reads.repos[REPO]!.pulls = [pull];
+      required.reads.repos[REPO]!.required = { release: ["flare-dispatch/pr-review"] };
+      await admit(required, dispatchOf(sent));
+      expect(factsOf(required).map((f) => f.requiredCheck)).toEqual([true]);
+      expect(required.reads.calls).toContain(`requiredChecks ${REPO}`);
+
+      const notRequired = await dispatchHarness();
+      notRequired.reads.repos[REPO]!.pulls = [pull];
+      await admit(notRequired, dispatchOf({ ...sent, requiredCheck: true }));
+      expect(factsOf(notRequired).map((f) => f.requiredCheck)).toEqual([false]);
+
+      const unknownBase = await dispatchHarness();
+      unknownBase.reads.repos[REPO]!.required = { main: [] };
+      await admit(unknownBase, dispatchOf(sent));
+      expect(factsOf(unknownBase).map((f) => f.requiredCheck)).toEqual([true]);
+    });
   });
 
   it("[FD-AGT-045] a pr-review entry without maxDiffChars makes the manifest invalid", async () => {

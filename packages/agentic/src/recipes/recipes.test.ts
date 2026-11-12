@@ -15,6 +15,7 @@ import {
   type Recorder,
 } from "./fakes.test-support.ts";
 import {
+  BOT_NOT_LISTED,
   buildReviewDiff,
   classifyChange,
   coordinate,
@@ -290,6 +291,16 @@ describe("pr-review", () => {
       _tag: "skipped",
       detail: "author-excluded",
     });
+    const draftBot = prInput({
+      draft: true,
+      authorLogin: "dependabot[bot]",
+      reviewBots: ["renovate[bot]"],
+      requiredCheck: true,
+    });
+    expect(prReviewSkip(draftBot)).toEqual({ _tag: "failure", reason: BOT_NOT_LISTED });
+    const draftRun = await runReview(draftBot, {});
+    expect(draftRun.result).toEqual({ _tag: "failure", reason: BOT_NOT_LISTED });
+    expect(draftRun.rec.modelCalls).toEqual([]);
   });
 
   it("[FD-AGT-049] builds the diff with git diff, drops lockfile, generated and vendored paths, caps it, and grounds on lint", async () => {

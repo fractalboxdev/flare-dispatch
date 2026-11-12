@@ -182,7 +182,7 @@ export const webhookSubmissions = (e: RepositoryEvent) =>
     if (answering.length === 0) return [];
     const targetBranch = targetBranchOf(e.event.event, e.fields);
     const withFacts = yield* Effect.forEach(answering, (a) =>
-      requiredCheckFact(e.repo, targetBranch, a.run, a.entry, a.inputs).pipe(
+      requiredCheckFact(e.repo, targetBranch, a.run, a.entry.label ?? null, a.inputs).pipe(
         Effect.map((inputs) => ({ ...a, inputs })),
       ),
     );
@@ -238,21 +238,29 @@ export const webhookSubmissions = (e: RepositoryEvent) =>
 
 /**
  * A run that reads the required set gets whether its check name is in the target branch's, read through the 10 min
- * protection cache (FD-AGT-092, FD-AGT-093). An unreadable set counts as required: off the required set a run may skip,
- * and a skipped required check lets the merge through.
+ * protection cache (FD-AGT-092, FD-AGT-093); the fact replaces any the inputs carry. An unknown target branch or an
+ * unreadable set counts as required: off the required set a run may skip, and a skipped required check lets the merge
+ * through.
  */
-const requiredCheckFact = (
+export const requiredCheckFact = (
   repo: string,
   targetBranch: string | null,
   run: IntakeRun,
-  entry: ManifestEntry,
+  label: string | null,
   inputs: unknown,
 ) =>
   Effect.gen(function* () {
     const fact = run.requiredCheck;
-    if (fact === undefined || targetBranch === null) return inputs;
+    if (fact === undefined) return inputs;
+    const name = checkName(run.name, label);
+    if (targetBranch === null) {
+      yield* Effect.logWarning("target branch unknown; the check counts as required", {
+        repo,
+        check: name,
+      });
+      return fact(inputs, true);
+    }
     const read = yield* (yield* ProtectionSnapshots).requiredSet(repo, targetBranch);
-    const name = checkName(run.name, entry.label ?? null);
     if (isUnavailable(read)) {
       yield* Effect.logWarning("required set unreadable; the check counts as required", {
         repo,

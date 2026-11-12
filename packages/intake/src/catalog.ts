@@ -56,6 +56,7 @@ interface ManifestRecipe {
   readonly params: Schema.Decoder<unknown>;
   readonly decoder: (params: unknown, view: EntryView) => Option.Option<RequestDecoder>;
   readonly requiredCheck?: IntakeRun["requiredCheck"];
+  readonly pullNumber?: IntakeRun["pullNumber"];
 }
 
 const recipe = <A>(
@@ -96,6 +97,13 @@ const prReviewRequiredCheck = (inputs: unknown, required: boolean): unknown =>
   Option.match(Schema.decodeUnknownOption(PrReviewInput)(inputs), {
     onNone: () => inputs,
     onSome: (input) => withRequiredCheck(input, required),
+  });
+
+/** The pull request a `pr-review` input names. */
+const prReviewPullNumber = (inputs: unknown): number | null =>
+  Option.match(Schema.decodeUnknownOption(PrReviewInput)(inputs), {
+    onNone: () => null,
+    onSome: (input) => input.number,
   });
 
 /**
@@ -148,6 +156,7 @@ const MANIFEST_RECIPES: Readonly<Record<string, ManifestRecipe>> = {
   "pr-review": {
     ...recipe(PrReviewParams, prReviewDecoder),
     requiredCheck: prReviewRequiredCheck,
+    pullNumber: prReviewPullNumber,
   },
   "improve-pr": recipe(ImprovePrParams, improvePrDecoder),
 };
@@ -181,9 +190,12 @@ const serialKeyOf = (entry: CatalogEntry): Pick<IntakeRun, "serialKey"> =>
       }
     : {};
 
-const requiredCheckOf = (entry: CatalogEntry): Pick<IntakeRun, "requiredCheck"> => {
-  const requiredCheck = manifestRecipeOf(entry)?.requiredCheck;
-  return requiredCheck === undefined ? {} : { requiredCheck };
+const requiredCheckOf = (entry: CatalogEntry): Pick<IntakeRun, "requiredCheck" | "pullNumber"> => {
+  const recipe = manifestRecipeOf(entry);
+  return {
+    ...(recipe?.requiredCheck === undefined ? {} : { requiredCheck: recipe.requiredCheck }),
+    ...(recipe?.pullNumber === undefined ? {} : { pullNumber: recipe.pullNumber }),
+  };
 };
 
 /** The deployment's runs; a run the deployment refuses to execute is not in its catalogue. */

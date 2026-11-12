@@ -186,21 +186,21 @@ export const BOT_NOT_LISTED = "review: bot author not in reviewBots";
  * The applicability rules, as the verdict that ends the run before any reviewer starts, or null to review: a draft
  * without `request-ai-review`, the `skip-ai-review` label, or a `[bot]` author skips (FD-AGT-046). A `[bot]` author
  * that `reviewBots` lists is reviewed (FD-AGT-091). While the check is in the target branch's required set, the label
- * `skip-ai-review` has no effect (FD-AGT-092), and an unlisted `[bot]` author fails (FD-AGT-093), since a skipped
- * required check lets the merge through.
+ * `skip-ai-review` has no effect (FD-AGT-092), and an unlisted `[bot]` author fails before any skip rule, a draft
+ * included (FD-AGT-093), since a skipped required check lets the merge through.
  */
 export const prReviewSkip = (
   input: Pick<PrReviewInput, "draft" | "labels" | "authorLogin" | "reviewBots" | "requiredCheck">,
 ): RunResult | null => {
   const required = input.requiredCheck === true;
+  const unlistedBot =
+    input.authorLogin.endsWith("[bot]") && !(input.reviewBots ?? []).includes(input.authorLogin);
+  if (required && unlistedBot) return { _tag: "failure", reason: BOT_NOT_LISTED };
   if (input.draft && !input.labels.includes("request-ai-review"))
     return { _tag: "skipped", detail: "draft-pr" };
   if (!required && input.labels.includes("skip-ai-review"))
     return { _tag: "skipped", detail: "not-configured" };
-  if (input.authorLogin.endsWith("[bot]") && !(input.reviewBots ?? []).includes(input.authorLogin))
-    return required
-      ? { _tag: "failure", reason: BOT_NOT_LISTED }
-      : { _tag: "skipped", detail: "author-excluded" };
+  if (unlistedBot) return { _tag: "skipped", detail: "author-excluded" };
   return null;
 };
 

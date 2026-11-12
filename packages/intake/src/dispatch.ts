@@ -1,12 +1,12 @@
 // The admission of an authenticated dispatch: the run, the input schema, the signals caps, the installation, the
 // manifest and the commit, then one admission request (specs/intake.md § Actions dispatch). The HTTP API's declared
 // dispatch route authenticates the caller and decodes the body (specs/interfaces.md FD-IFC-024 to FD-IFC-036).
-import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
+import { GithubRead, type PullSummary } from "@fractalboxdev/flare-dispatch-github";
 import { classNamed } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect, Match, Option, Schema } from "effect";
 import { ClassResolver, IntakeConfig, intakeError } from "./config.ts";
 import type { Caller } from "./event.ts";
-import { readManifest, viewOf } from "./triggers.ts";
+import { readManifest, requiredCheckFact, viewOf } from "./triggers.ts";
 import { checkName, type IntakeRun } from "./runs.ts";
 import { submission, submit } from "./submit.ts";
 
@@ -154,6 +154,29 @@ export const lowerOnlyClass = (r: {
   });
 
 /**
+ * The branch the pull request a run's inputs name targets, for a run that reads the required set; null when the inputs
+ * name none, the pull request is not among the 100 most recently updated open ones, or the read fails.
+ */
+const pullTargetBranch = (run: IntakeRun, repo: string, inputs: unknown) =>
+  Effect.gen(function* () {
+    if (run.requiredCheck === undefined) return null;
+    const number = run.pullNumber?.(inputs) ?? null;
+    if (number === null) return null;
+    const pulls = yield* (yield* GithubRead).openPulls(repo).pipe(
+      Effect.catch((e) =>
+        Effect.as(
+          Effect.logWarning("open pull requests unreadable; the target branch is unknown", {
+            repo,
+            reason: e._tag,
+          }),
+          [] as readonly PullSummary[],
+        ),
+      ),
+    );
+    return pulls.find((p) => p.number === number)?.base.ref ?? null;
+  });
+
+/**
  * A dispatch whose caller is already authenticated and whose body is decoded, as the HTTP API's declared dispatch
  * route hands it to `admitDispatch`.
  */
@@ -194,7 +217,7 @@ export const admitDispatch = (d: AuthenticatedDispatch) =>
     if (run === undefined)
       return yield* Effect.fail(intakeError(404, "run_not_found", `no run named ${d.run}`));
     const repo = d.repository;
-    const inputs = yield* decodeOr(run.input, "invalid_inputs")(d.inputs ?? {});
+    const decoded = yield* decodeOr(run.input, "invalid_inputs")(d.inputs ?? {});
     yield* checkSignals(d.signals, d.inputs);
 
     // The App's own installation for the repository decides (FD-INT-042).
@@ -232,6 +255,14 @@ export const admitDispatch = (d: AuthenticatedDispatch) =>
             requested: d.classInput,
           })
         : d.classInput;
+    // Intake's own required-set fact replaces any the caller sent, whatever the trigger (FD-AGT-092, FD-AGT-093).
+    const inputs = yield* requiredCheckFact(
+      repo,
+      yield* pullTargetBranch(run, repo, decoded),
+      run,
+      d.label,
+      decoded,
+    );
     const admitted = yield* submit(
       submission({
         run,
