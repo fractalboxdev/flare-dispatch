@@ -16,6 +16,7 @@ interface Row {
   readonly status: string;
   readonly reason: string | null;
   readonly enqueued_at: number;
+  readonly finished_at: number | null;
   readonly placement: string | null;
   readonly epoch: number | null;
   readonly accepted_epoch: number | null;
@@ -28,7 +29,7 @@ interface Row {
   readonly local: number;
 }
 
-const SELECT = `select e.id, e.run, e.scope_id, e.class, e.status, e.reason, e.enqueued_at,
+const SELECT = `select e.id, e.run, e.scope_id, e.class, e.status, e.reason, e.enqueued_at, e.finished_at,
     p.state as placement, p.epoch, p.accepted_epoch, p.executor_id, x.kind as executor_kind,
     r.hold_micro_usd, r.metered_micro_usd, r.state as hold_state, o.identity as dispatched_by,
     exists (select 1 from dedup_keys d where d.execution_id = e.id and d.canonical like 'local:%') as local
@@ -98,6 +99,7 @@ export const recordOf = (row: Row): ExecutionRecord => {
     reserved_micro_usd: row.hold_micro_usd,
     settled_micro_usd: row.hold_state === "settled" ? row.metered_micro_usd : null,
     enqueued_at: row.enqueued_at,
+    finished_at: reportedStatus(row.status) === "done" ? (row.finished_at ?? null) : null,
     dispatchedBy: row.dispatched_by,
   };
 };
@@ -119,6 +121,10 @@ export const listQuery = (
   eq("e.class", filter.class);
   eq("x.kind", filter.executorKind);
   if (filter.status !== undefined) where.push(STATUS_SQL[filter.status]);
+  if (filter.finishedSince !== undefined) {
+    where.push("e.finished_at >= ?");
+    binds.push(filter.finishedSince);
+  }
   if (filter.before !== undefined) {
     where.push("e.id < ?");
     binds.push(filter.before);

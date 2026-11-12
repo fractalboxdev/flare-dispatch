@@ -1,14 +1,28 @@
-// The job sandbox's Layers for the recipe services that touch the checkout: the shell, the checkout's files, the edit
-// loop and the staged write. They import Node APIs, so only the executor entry exports them.
+// The job sandbox's Layers for the recipe services: the shell, the checkout's files, the edit loop, the staged write,
+// the artifact store, the intents and the model gateway, and the cloud executor's composition of them. They import Node
+// APIs, so only the executor entry exports them.
 import { spawn } from "node:child_process";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
+import { Intents } from "@fractalboxdev/mameko-run";
 import { Effect, Layer } from "effect";
 import { pathInvalid } from "../staged-write/gate.ts";
-import { buildStagedWrite, uploadStagedWrite, type ArtifactSink } from "../staged-write/build.ts";
 import {
+  buildStagedWrite,
+  sha256Hex,
+  uploadStagedWrite,
+  type ArtifactSink,
+} from "../staged-write/build.ts";
+import { ExecutionsRead } from "./ci-triage-pr.ts";
+import { executionsApiReadLayer } from "./executions-read.ts";
+import {
+  ArtifactFailed,
+  Artifacts,
   Checkout,
   EditLoop,
+  modelGatewayClientLayer,
+  ModelClient,
+  RecipeIntents,
   Shell,
   StagedWrites,
   StageFailed,
@@ -54,13 +68,42 @@ const runProcess = (
     });
   });
 
-/** `Shell` in the checkout through `sh -c`, 10 min per command unless the call names another timeout. */
-export const shellLayer = (checkout: string): Layer.Layer<Shell> =>
+/** The variables a sandboxed process inherits from the runner; every other variable stays with the runner. */
+const SANDBOX_ENV_KEYS = [
+  "PATH",
+  "HOME",
+  "LANG",
+  "LC_ALL",
+  "TERM",
+  "TMPDIR",
+  "TZ",
+  "USER",
+] as const;
+
+/**
+ * The environment of a command the run starts in the job sandbox: the allowlisted variables of `base` plus `extra`.
+ * The runner's own variables, a per-lease credential among them, never reach the command (FD-AGT-010).
+ */
+export const sandboxEnv = (
+  base: NodeJS.ProcessEnv,
+  extra: Readonly<Record<string, string>> = {},
+): NodeJS.ProcessEnv => {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of SANDBOX_ENV_KEYS) if (base[key] !== undefined) env[key] = base[key];
+  return { ...env, ...extra };
+};
+
+/**
+ * `Shell` in the checkout through `sh -c`, 10 min per command unless the call names another timeout. A command
+ * inherits the runner's environment unless `env` is given.
+ */
+export const shellLayer = (checkout: string, env?: NodeJS.ProcessEnv): Layer.Layer<Shell> =>
   Layer.succeed(Shell, {
     run: (command, options) =>
       runProcess("sh", ["-c", command], {
         cwd: options?.cwd ?? checkout,
         timeoutMs: options?.timeoutMs ?? 600_000,
+        ...(env === undefined ? {} : { env }),
       }),
   });
 
@@ -93,17 +136,24 @@ export const checkoutLayer = (checkout: string): Layer.Layer<Checkout> =>
 
 /**
  * `EditLoop` as the configured coding-agent command, with the prompt on its stdin. The sandbox's egress profile and
- * its proxy, not this Layer, decide what the command can reach (FD-AGT-010).
+ * its proxy, not this Layer, decide what the command can reach (FD-AGT-010). The command inherits the runner's
+ * environment unless `env` is given.
  */
 export const editLoopLayer = (
   checkout: string,
   command: readonly [string, ...string[]],
   timeoutMs = 1_800_000,
+  env?: NodeJS.ProcessEnv,
 ) =>
   Layer.succeed(EditLoop, {
     run: (prompt) =>
       Effect.map(
-        runProcess(command[0], command.slice(1), { cwd: checkout, timeoutMs, stdin: prompt }),
+        runProcess(command[0], command.slice(1), {
+          cwd: checkout,
+          timeoutMs,
+          stdin: prompt,
+          ...(env === undefined ? {} : { env }),
+        }),
         (r) => ({
           exitCode: r.exitCode,
         }),
@@ -134,3 +184,108 @@ export const stagedWritesLayer = (
         return manifest;
       }).pipe(Effect.mapError((e) => new StageFailed({ detail: `${e.step}: ${e.detail}` }))),
   });
+
+/** An artifact name the artifact store accepts (FD-CACHE-070): the name grammar, with no `.`, `..` or empty segment. */
+const ARTIFACT_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
+const validArtifactName = (name: string) =>
+  ARTIFACT_NAME.test(name) && !name.split("/").some((s) => s === ".." || s === "." || s === "");
+
+/**
+ * `Artifacts` over the execution's artifact store: each `dashboard` artifact goes byte for byte, with its SHA-256
+ * digest, under the lease's artifact prefix through `sink`, and `put` answers nothing a run could publish. The store's
+ * only reader is the dashboard's authenticated artifact route (FD-AGT-059).
+ */
+export const artifactsLayer = (sink: ArtifactSink): Layer.Layer<Artifacts> =>
+  Layer.succeed(Artifacts, {
+    put: (name, bytes, _access) =>
+      validArtifactName(name)
+        ? Effect.tryPromise({
+            try: () => sink.put(name, bytes, sha256Hex(bytes)),
+            catch: (cause) => new ArtifactFailed({ detail: `${name}: ${String(cause)}` }),
+          })
+        : Effect.fail(new ArtifactFailed({ detail: `${name} is not an artifact name` })),
+  });
+
+const refused = (step: string, kind: string, detail: string) =>
+  Effect.logWarning("intent refused; the runner fails the run", { step, kind, detail });
+
+/**
+ * `RecipeIntents` over the runner's `Intents`, each keyed `run:<step>:<index>`. An emission mameko refuses
+ * (`DuplicateIntentKey`, `IntentLimitExceeded`) fails the whole run in the runner with `infra: <tag>` and sends none of
+ * its intents (MAMEKO-RUN-070, MAMEKO-RUN-071), so here it is logged.
+ */
+export const runnerIntentsLayer: Layer.Layer<RecipeIntents, never, Intents> = Layer.effect(
+  RecipeIntents,
+  Effect.gen(function* () {
+    const intents = yield* Intents;
+    return {
+      append: (step, kind, payload) =>
+        intents.emit(`run:${step}`, { kind, payload }).pipe(
+          Effect.catchTags({
+            DuplicateIntentKey: (e) => refused(step, kind, `duplicate key ${e.intentKey}`),
+            IntentLimitExceeded: (e) => refused(step, kind, `limit ${e.limit}`),
+          }),
+        ),
+    };
+  }),
+);
+
+/** What the cloud executor knows of one execution's job sandbox. */
+export interface CloudAgenticConfig {
+  /** The checkout the workspace holds, at `baseCommit`. */
+  readonly checkout: string;
+  readonly baseCommit: string;
+  /** The staged write's directory, outside the checkout's tracked files. */
+  readonly stagingDir: string;
+  /** The coding-agent command of the edit loop. */
+  readonly editLoop: readonly [string, ...string[]];
+  /** The model route's URL; the egress proxy attaches the per-lease token to a request to it (FD-AGT-010). */
+  readonly modelGatewayUrl: string;
+  /** The control plane's origin, whose executions and log routes `ExecutionsRead` reads through the egress proxy. */
+  readonly controlPlaneUrl: string;
+  /** The job's `fetch`, whose requests leave through the egress proxy. */
+  readonly fetch: typeof globalThis.fetch;
+  /** The execution's artifact store under the lease's artifact prefix. */
+  readonly artifacts: ArtifactSink;
+  /** The runner's environment; a sandboxed command inherits only its allowlisted variables. */
+  readonly env: NodeJS.ProcessEnv;
+  /** Credentials the runner holds, such as a clone token; a model request carrying one is refused (FD-AGT-011). */
+  readonly credentials: readonly string[];
+}
+
+export type CloudAgenticServices =
+  | ModelClient
+  | Shell
+  | Checkout
+  | EditLoop
+  | StagedWrites
+  | Artifacts
+  | RecipeIntents
+  | ExecutionsRead;
+
+/**
+ * The agentic recipes' services on the cloud executor. The model client sends no credential and reaches the model
+ * route through the egress proxy, which alone holds the per-lease token; the shell and the edit loop start with the
+ * sandbox environment, so no runner variable reaches them (FD-AGT-010). Artifacts go to the execution's artifact store
+ * (FD-AGT-059). `ExecutionsRead` reads the control plane's executions and log routes, so the job holds no binding of the
+ * executions table or the log store (FD-AGT-071).
+ */
+export const cloudAgenticLayers = (
+  config: CloudAgenticConfig,
+): Layer.Layer<CloudAgenticServices, never, Intents> => {
+  const env = sandboxEnv(config.env, { FD_MODEL_GATEWAY_URL: config.modelGatewayUrl });
+  return Layer.mergeAll(
+    modelGatewayClientLayer({
+      url: config.modelGatewayUrl,
+      fetch: config.fetch,
+      forbidden: config.credentials,
+    }),
+    shellLayer(config.checkout, env),
+    checkoutLayer(config.checkout),
+    editLoopLayer(config.checkout, config.editLoop, undefined, env),
+    stagedWritesLayer(config.checkout, config.baseCommit, config.stagingDir, config.artifacts),
+    artifactsLayer(config.artifacts),
+    runnerIntentsLayer,
+    executionsApiReadLayer({ baseUrl: config.controlPlaneUrl, fetch: config.fetch }),
+  );
+};

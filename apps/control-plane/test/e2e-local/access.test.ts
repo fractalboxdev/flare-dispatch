@@ -56,19 +56,33 @@ const UNCLAIMED: readonly (readonly [string, string])[] = [
 const accessGated = (route: RouteSpec) => route.surface._tag === "Access";
 
 describe("the Access gate on the HTTP API", () => {
-  // The routes the Worker's router mounts, each with the surface its group declares.
+  // The routes the Worker's router mounts, each with the surface its group declares, and the status a token the team
+  // did not sign answers there: 403 (FD-IFC-012), or 401 where the surface answers it so, as `/mcp` does (FD-IFC-073).
   const declared = router.routes
     .filter(accessGated)
-    .map((r) => [r.method, concrete(r.path)] as const);
+    .map(
+      (r) =>
+        [
+          r.method,
+          concrete(r.path),
+          r.surface._tag === "Access" && r.surface.onInvalid === "unauthenticated" ? 401 : 403,
+        ] as const,
+    );
+  const forbidden = (paths: readonly (readonly [string, string])[]) =>
+    paths.map(([method, path]) => [method, path, 403] as const);
 
   it("[FD-IFC-010] answers 401 with no Access JWT and 403 with one the team did not sign, on every route outside the surfaces that name another check", async () => {
     expect(declared.length).toBeGreaterThan(10);
-    for (const [method, path] of [...declared, ...OPERABILITY_PATHS, ...UNCLAIMED]) {
+    for (const [method, path, invalid] of [
+      ...declared,
+      ...forbidden(OPERABILITY_PATHS),
+      ...forbidden(UNCLAIMED),
+    ]) {
       const none = await send(method, path, {});
       expect({ method, path, status: none.status }).toEqual({ method, path, status: 401 });
       expect(((await none.json()) as { error: string }).error).toBe("unauthenticated");
       const forged = await send(method, path, FORGED);
-      expect({ method, path, status: forged.status }).toEqual({ method, path, status: 403 });
+      expect({ method, path, status: forged.status }).toEqual({ method, path, status: invalid });
     }
   });
 

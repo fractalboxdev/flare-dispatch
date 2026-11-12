@@ -77,6 +77,10 @@ const nextAttempt = (family: readonly RecordWithStatus[]) =>
         placementConstraint: latest.placementConstraint,
         spendLine,
         cacheTrigger: latest.cacheTrigger,
+        // The attempt keeps the first attempt's data classes, so a re-run of a trifecta refusal is refused again
+        // (FD-AGT-005).
+        repositoryPublic: latest.repositoryPublic,
+        inputAssociations: latest.inputAssociations,
         applyCooldown: false,
       }),
     );

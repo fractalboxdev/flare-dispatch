@@ -9,6 +9,11 @@ import {
   type PlacementRequest,
   type Profile,
 } from "@fractalboxdev/flare-dispatch-profile";
+import {
+  computeDataClasses,
+  trifectaAdmission,
+  type DataClasses,
+} from "@fractalboxdev/flare-dispatch-agentic";
 import { executionId as newExecutionId, type AdmitAnswer } from "@fractalboxdev/mameko-coordinator";
 import { Clock, Effect, Match } from "effect";
 import {
@@ -74,6 +79,10 @@ export interface Submission extends Omit<KeyedRequest, "run"> {
   readonly targetBranch: string | null;
   /** Whether a ruleset or branch protection protects a push's ref; null when intake did not read it. */
   readonly refProtection: boolean | null;
+  /** Whether the repository is public, as the trigger stated it; null when the trigger did not say. */
+  readonly repositoryPublic: boolean | null;
+  /** The `author_association` of every principal whose text the trigger's payload carries. */
+  readonly inputAssociations: readonly string[];
 }
 
 export const submission = (
@@ -100,6 +109,8 @@ export const submission = (
   defaultBranch: null,
   targetBranch: null,
   refProtection: null,
+  repositoryPublic: null,
+  inputAssociations: [],
   ...fields,
 });
 
@@ -145,6 +156,27 @@ const concludedReason = (c: Concluded): string =>
     Match.when("cancelled", () => c.reason ?? "cancelled"),
     Match.exhaustive,
   );
+
+/**
+ * The execution's three data classes from what intake knows of the request (specs/runs/agentic.md § Data classes). A
+ * repository whose visibility the trigger did not state counts as private. The `agent` egress profile holds the
+ * profile's base grants and the run's own agent grants. Every intent applier writes to the execution's own repository,
+ * the row's scope, so no intent targets another.
+ */
+export const dataClassesOf = (
+  profile: Profile,
+  s: Submission,
+  confidentiality: ConfidentialityMode,
+): DataClasses =>
+  computeDataClasses({
+    repositoryPublic: s.repositoryPublic === true,
+    confidentiality,
+    inputAssociations: s.inputAssociations,
+    forkHead: s.trigger === "fork-pr",
+    egressGrants: [...profile.egress_profiles.agent.grants, ...(s.run.grants?.agent ?? [])],
+    intentRepositories: [s.repo],
+    repository: s.repo,
+  });
 
 /** Records a request rejected before admission (MAMEKO-ADM-091). */
 export const shed = (repo: string, run: string | null, reason: string) =>
@@ -302,14 +334,23 @@ export const submit = (
     const className = resolved.class;
     yield* boundsOf(config.profile, className);
     const key = yield* requestKey({ ...s, run: s.run.name });
-    const cooldown = yield* cooldownWait(s, now);
+    const confidentiality = config.confidentiality(s.repo);
+    // An execution whose computed classes are all true concludes `failure` with `policy: trifecta` at admission, before
+    // placement (FD-AGT-005); it waits out no cooldown window.
+    const refusal = Match.value(
+      trifectaAdmission(dataClassesOf(config.profile, s, confidentiality)),
+    ).pipe(
+      Match.tag("refuse", (r) => r.reason),
+      Match.tag("admit", () => null),
+      Match.exhaustive,
+    );
+    const cooldown = refusal === null ? yield* cooldownWait(s, now) : null;
     const id = newExecutionId(now, Math.random);
 
     // A fork pull request's input stays untrusted on every attempt, re-runs included (FD-PROF-018).
     const untrusted = s.trigger === "fork-pr" ? ["untrusted-input"] : [];
     const labels = [...new Set([...resolved.labels, ...s.extraLabels, ...untrusted])];
     const notBefore = cooldown?.notBefore ?? null;
-    const confidentiality = config.confidentiality(s.repo);
     const record: IntakeRecord = {
       executionId: id,
       trigger: s.trigger,
@@ -331,6 +372,8 @@ export const submit = (
       cacheTrigger: s.cacheTrigger,
       // Admission decides the kinds; `placed` copies them from its placement row once it answers.
       eligibleKinds: null,
+      repositoryPublic: s.repositoryPublic,
+      inputAssociations: s.inputAssociations,
       createdAt: now,
     };
     // mameko's `admit` writes the execution, dedup key and placement rows under this id in one transaction, with the
@@ -359,6 +402,7 @@ export const submit = (
       serialKey: s.run.serialKey?.(s.inputs) ?? null,
       // A merge group's runs report on the group's head, which is the request's commit (FD-GH-075).
       check: s.run.ownsCheck ? { name, headSha: s.sha } : null,
+      refusal,
     };
 
     // Inside the run's cooldown window the request is held before admission, and the minute tick admits it once the

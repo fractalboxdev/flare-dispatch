@@ -108,6 +108,12 @@ export interface IntakeAdmitInput {
    * on the request's head SHA (FD-GH-005, FD-GH-006). Null or absent for a run that owns no check.
    */
   readonly check?: { readonly name: string; readonly headSha: string } | null;
+  /**
+   * The policy reason intake refuses the request with, `policy: trifecta` (FD-AGT-005). Admission's class resolution
+   * answers it as a refusal, so the execution concludes `failure` with it before placement and with no placement row
+   * (MAMEKO-ADM-005). Null or absent admits the request.
+   */
+  readonly refusal?: string | null;
 }
 
 /** Admission did not answer: the store transaction failed, and nothing was written. */
@@ -216,7 +222,7 @@ const admittedIntents = (profile: Profile, input: IntakeAdmitInput) => ({
 
 /**
  * Every request goes through mameko's one admission function (MAMEKO-ADM-023). Intake has already resolved the class,
- * so the class-resolution binding answers that class and its labels. The profile declares no capability labels per
+ * so the class-resolution binding answers that class and its labels, or intake's refusal of the request. The profile declares no capability labels per
  * executor kind, so each kind is taken to advertise the request's own labels, and placement is decided by the
  * constraint fold alone, as `eligibleKinds` decides it.
  */
@@ -274,7 +280,10 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
           quarantined,
           inputs: {},
           resolution: {
-            binding: (r) => ({ class: r.className, labels: r.labels, alarm: null }),
+            binding: (r) =>
+              r.refusal === undefined || r.refusal === null
+                ? { class: r.className, labels: r.labels, alarm: null }
+                : { refuse: { reason: r.refusal } },
             catalogue: profile.classes as never,
             allowedLabels: input.labels,
           },

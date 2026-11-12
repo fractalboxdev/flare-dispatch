@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./ledger-object": "./src/ledger-object.ts",
     "./device": "./src/device/index.ts",
+    "./log-names": "./src/log-names.ts",
     "./oidc": "./src/oidc.ts"
   },
   "scripts": {

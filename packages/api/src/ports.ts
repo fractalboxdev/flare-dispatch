@@ -59,6 +59,8 @@ export interface ExecutionFilter {
   readonly executorKind?: string;
   /** Rows strictly older than this execution id. */
   readonly before?: string;
+  /** Rows that finished at or after this time, in epoch milliseconds. */
+  readonly finishedSince?: number;
   readonly limit: number;
 }
 
