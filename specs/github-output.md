@@ -38,6 +38,8 @@ The profile declares every kind the control plane accepts ([profile.md](profile.
 | `release.draft` | run | `run:<step name>:<index>` | Create a draft release and upload assets | Tag name |
 | `release.publish` | run | `run:<step name>:<index>` | Publish the draft release for the tag | Update is idempotent |
 | `dispatch.followOn` | run | `run:<step name>:<index>` | Submit a request to admission for the named run on the same commit; no GitHub call | Admission dedup key `<execution_id>/<intent_key>` |
+| `job.record` | control plane, `on: lease-granted` | `cp:job:record:<epoch>` | Signed `POST` to `records.url` | Delivery id header derived from the key |
+| `verdict.record` | ops | `ops:verdict-record:<execution_id>` | Signed `POST` to `records.url` | Delivery id header derived from the key |
 | `notify.email` | both | `cp:notify:email` or `run:<step name>:<index>` | Email binding | Message id derived from the key |
 | `notify.slack` | both | `cp:notify:slack` or `run:<step name>:<index>` | Signed `POST` to the configured endpoint | Delivery id header derived from the key |
 | `notice.publish` | both | `run:<step name>:<index>` | Notice channel | Delivery id `<run>:<use case>:<dedupe key>` |
@@ -218,7 +220,7 @@ Every call, `lookup` included, spends budget; only `apply` calls count against t
 
 ### Installation quota
 
-- **FD-GH-056** · phase 0 · `V-UNIT` `V-CONF` — The profile's `delivery.limit_key` binding must return the id of the GitHub App installation that serves the row's repository, so that every applier call for one installation takes its permit from that installation's `InstallationQuota` ([MAMEKO-OUT-038](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/outbox.md), [MAMEKO-OUT-057](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/outbox.md)).
+- **FD-GH-056** · phase 0 · `V-UNIT` `V-CONF` — For every kind [profile.md](profile.md) FD-PROF-068 does not name, the profile's `delivery.limit_key` binding must return the id of the GitHub App installation that serves the row's repository, so that every applier call for one installation takes its permit from that installation's `InstallationQuota` ([MAMEKO-OUT-038](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/outbox.md), [MAMEKO-OUT-057](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/outbox.md)).
 - **FD-GH-057** · phase 0 · `V-UNIT` — When a GitHub response carries `x-ratelimit-limit`, `x-ratelimit-remaining` or `x-ratelimit-reset`, the `InstallationQuota` object must store each as the installation's limit, remaining count and reset time.
 - **FD-GH-058** · phase 0 · `V-UNIT` `V-SIM` — The `InstallationQuota` reserve fraction must be 0.1 of the installation's limit by default, and the kinds that draw the reserve must be `check.conclude` and `check.open` ([MAMEKO-OUT-041](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/outbox.md)).
 - **FD-GH-059** · phase 0 · `V-UNIT` — While an installation's remaining count is at or below 0.3 of its limit, the `InstallationQuota` object must answer `wait` to every permit request of class `batch` whose kind draws no reserve.
@@ -252,6 +254,21 @@ Every call, `lookup` included, spends budget; only `apply` calls count against t
 - **FD-GH-088** · phase 0 · `V-UNIT` `V-REPLAY` — The `dispatch.followOn` applier must submit one request to admission whose `follow-on` dedup recipe yields `<execution_id>/<intent_key>`, so that a repeated apply starts no second execution.
 - **FD-GH-089** · phase 0 · `V-UNIT` `V-LIVE` — The control plane must insert each `canary.push` and `delivery.redeliver` row through `insertOpsIntent` with the repository its probe names as the scope ([MAMEKO-OUT-056](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/outbox.md), [operability.md](operability.md) FD-OPS-038, FD-OPS-045), and its applier must use the App JWT for a `delivery.redeliver` row and the installation token for a `canary.push` row ([architecture.md](architecture.md) FD-ARCH-003).
 
+### Job and verdict records
+
+A deploying organization that sets `records.url` receives one `job.record` per lease grant and one `verdict.record` per terminal execution, for its own monitoring. A run does not emit either kind. Both kinds draw on the delivery key `records`, so a pause of an installation's delivery key leaves them flowing while its `check.conclude` rows wait. A `verdict.record` for a `halt` outcome therefore has no GitHub conclusion until the key resumes.
+
+- **FD-GH-093** · phase 2 · `V-UNIT` `V-REPLAY` — Where the overlay sets `records.url`, the profile must generate `job.record` `on: lease-granted`, with the execution id, epoch, run, repository, commit SHA, class and executor kind.
+- **FD-GH-094** · phase 2 · `V-UNIT` `V-SIM` — Where the overlay sets `records.url`, on each minute tick the control plane must insert one `verdict.record` ops intent through `insertOpsIntent`, with the key `verdict-record:<execution_id>`, for each terminal execution that has no such row.
+- **FD-GH-095** · phase 2 · `V-UNIT` — The `verdict.record` payload must hold the schema `verdict-record/v1`, execution id, epoch, run, repository, commit SHA, ref, class, trigger, verdict, reason, conclusion and check name.
+- **FD-GH-096** · phase 2 · `V-UNIT` — Where a run reports scan results or findings, the `verdict.record` payload must also hold the scan bundle digest, each advisory snapshot digest, each scanner's name, version and scan result, and at most 200 findings with a `findingsTruncated` flag.
+- **FD-GH-097** · phase 2 · `V-UNIT` — The `job.record` and `verdict.record` payloads must not hold `input_json`, log text or a secret value.
+- **FD-GH-098** · phase 2 · `V-UNIT` — The `verdictRecord` applier must sign each `POST` with HMAC-SHA256 over the timestamp, a `.` and the body, and must send the timestamp and the delivery id with it.
+- **FD-GH-099** · phase 2 · `V-UNIT` `V-DEPLOY` — The control plane must keep the verdict record signing key, a Worker secret, distinct from the webhook secret, the link key, the OIDC key and the provenance key.
+- **FD-GH-100** · phase 2 · `V-UNIT` `V-REPLAY` — If the `verdictRecord` applier repeats a delivery, then it must send the delivery id of the first attempt.
+- **FD-GH-101** · phase 2 · `V-UNIT` — The `verdictRecord` applier must take no permit from `InstallationQuota`.
+- **FD-GH-102** · phase 2 · `V-UNIT` `V-SIM` — If a `job.record` or `verdict.record` row reaches `refused` or `expired`, then the control plane must raise the page alarm `record-undelivered` naming the execution, and must leave the verdict unchanged.
+
 ## Open items
 
 - Marked review-comment writes use a durable per-PR slot independently of the outbox row claim. A unique attempt footer
@@ -261,6 +278,7 @@ Every call, `lookup` included, spends budget; only `apply` calls count against t
   marked comments indefinitely. There is no timed unlock; operational recovery requires proving the old request cannot
   still write. Availability is sacrificed rather than letting a late older PATCH overwrite a newer review.
 
+- TODO(maintainer): move `verdict.record` into the terminal transaction when mameko generates a row for every `on: terminal` kind; the pinned commit generates only the outcome mapping's `surface_kind`.
 - TODO(maintainer): confirm GitHub's current secondary rate limits for content-creating requests and set the defaults of FD-GH-062 from them.
 - TODO(operator): decide whether a `check.conclude` row that reaches `expired` on a `release` or `required` execution also opens a tracking issue in an operator repository.
 - TODO(maintainer): bound `check.progress` to one row per 60 s and per bucket change; mameko generates an `on: progress` kind at every step and placement-state change, and its payload binding sees no earlier row.
