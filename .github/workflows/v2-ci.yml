@@ -3,10 +3,16 @@ name: v2-ci
 # The merge gate of specs/verification.md § Merge gate, one job per required check whose harness exists, and
 # `fallback-ci`, the not-required check that runbook R13 accepts while the control plane is down (FD-OPS-027). The
 # diagram check and the documentation site build run in the docs job. A push to the default branch runs the same jobs (FD-OPS-030).
+#
+# No job a pull request starts holds a Cloudflare credential: pull-request code runs on the runner, so a credential there
+# changes the deploying account outside fd deploy and fd doctor (FD-IFC-070). A job that needs one runs only on a push
+# to the default branch, a merge queue run, a manual dispatch or the deploy workflow's call.
 on:
   pull_request:
   push:
     branches: [main]
+  merge_group:
+  workflow_dispatch:
   workflow_call:
 
 concurrency:
@@ -165,6 +171,7 @@ jobs:
         run: $STRIP_TYPES packages/ops/scripts/phase-gate.ts --base "$BASE" --records .tmp/phase-gate-records.json
 
   # FD-VER-032: mameko's coordinator suites on host-cloudflare under workerd, with FlareDispatch's application ports.
+  # The job holds no Cloudflare credential, so FD-CACHE-041's real-R2 leg is skipped here and the Miniflare leg runs.
   conf:
     runs-on: ubuntu-latest
     steps:
@@ -172,12 +179,22 @@ jobs:
       - uses: ./.github/actions/v2-setup
         with:
           mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
-      # FD-CACHE-041's real-R2 leg runs when the operator provides a Cloudflare API token with Account > Workers
-      # Scripts: Edit on the account that holds the bucket FD_R2_CONFORMANCE_BUCKET. The leg reaches the bucket
-      # through the R2 binding of a preview Worker that wrangler's remote proxy session uploads (and it registers a
-      # workers.dev subdomain when the account has none), so an R2 object read/write token does not work. Without
-      # the token the leg is skipped and the Miniflare leg still runs.
       - run: pnpm --filter @fractalboxdev/flare-dispatch-conformance test
+
+  # FD-CACHE-041's real-R2 leg, on every event but a pull request. It runs when the operator provides a Cloudflare API
+  # token with Account > Workers Scripts: Edit on the account that holds the bucket FD_R2_CONFORMANCE_BUCKET. The leg
+  # reaches the bucket through the R2 binding of a preview Worker that wrangler's remote proxy session uploads (and it
+  # registers a workers.dev subdomain when the account has none), so an R2 object read/write token does not work.
+  # Without the token the leg is skipped.
+  conf-r2:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/v2-setup
+        with:
+          mameko-deploy-key: ${{ secrets.MAMEKO_DEPLOY_KEY }}
+      - run: pnpm --filter @fractalboxdev/flare-dispatch-conformance exec vitest run src/cache.test.ts -t "real R2"
         env:
           FD_R2_CONFORMANCE_BUCKET: ${{ vars.FD_R2_CONFORMANCE_BUCKET }}
           FD_R2_CONFORMANCE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -263,6 +280,7 @@ jobs:
       - run: shopt -s globstar && node apps/docs/scripts/check-diagrams.mjs specs/**/*.md
       - run: pnpm --filter @fractalboxdev/flare-dispatch-docs run build
 
+  # conf-r2 is not among the needs: a pull request skips it, and a skipped need skips fallback-ci.
   fallback-ci:
     needs: [lint, typecheck, unit, spec-tags, deploy-dry-run, profile-reference, formal, conf, sim, replay, diff, e2e-local, docs]
     runs-on: ubuntu-latest
