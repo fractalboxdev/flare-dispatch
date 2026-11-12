@@ -71,7 +71,7 @@ import {
   type WorkflowRunRef,
 } from "@fractalboxdev/flare-dispatch-core";
 import { artifactKey } from "./artifact-r2";
-import { classifyGhcrFailure, pushGhcrImage } from "./ghcr-push";
+import { classifyGhcrFailure, pushGhcrImageIndex, type GhcrPlatformImage } from "./ghcr-push";
 
 /** The GitHub App credentials the live `pullReview` write needs. */
 export type GithubLiveConfig = {
@@ -602,32 +602,69 @@ export const makeGithubLive = (
         if (ghcr === undefined || artifactsBucket === undefined || executionId === undefined || db === undefined) {
           return yield* Effect.fail(new GitHubApiError({ status: 0, reason: "other" }));
         }
+        const arches = ["amd64", "arm64"] as const;
         if (req.repo !== "fractalboxdev/contextful" ||
           !["contextful-control", "contextful-edge", "contextful-full"].includes(req.profile) ||
           !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(req.version) ||
-          req.layerArtifactName !== `${req.profile}-${req.version}-linux-amd64.layer.tar.gz` ||
-          !/^[a-f0-9]{64}$/.test(req.layerDigest) || !/^[a-f0-9]{64}$/.test(req.diffId)) {
+          req.platforms.length !== arches.length ||
+          req.platforms.some((platform, i) =>
+            platform.imageArtifactName !== `${req.profile}-${req.version}-linux-${arches[i]}.image.json`)) {
           return yield* Effect.fail(new GitHubApiError({ status: 400, reason: "other" }));
         }
-        const child = yield* Effect.tryPromise({
-          try: () => db.prepare("SELECT status FROM executions WHERE id = ? AND parent_execution_id = ? AND run = ?")
-            .bind(req.sourceExecutionId, executionId, "contextful-release-cell").first<{ status: string }>(),
-          catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
-        });
-        if (child?.status !== "success") return yield* Effect.fail(new GitHubApiError({ status: 403, reason: "other" }));
-        const source = yield* Effect.tryPromise({
-          try: () => artifactsBucket.get(artifactKey(req.sourceExecutionId, req.layerArtifactName)),
-          catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
-        });
-        if (source === null || source.size !== req.layerSize) {
-          return yield* Effect.fail(new GitHubApiError({ status: 404, reason: "other" }));
+        const platforms: GhcrPlatformImage[] = [];
+        for (const [i, platform] of req.platforms.entries()) {
+          const child = yield* Effect.tryPromise({
+            try: () => db.prepare("SELECT status FROM executions WHERE id = ? AND parent_execution_id = ? AND run = ?")
+              .bind(platform.sourceExecutionId, executionId, "contextful-release-cell").first<{ status: string }>(),
+            catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
+          });
+          if (child?.status !== "success") return yield* Effect.fail(new GitHubApiError({ status: 403, reason: "other" }));
+          const descriptorObject = yield* Effect.tryPromise({
+            try: () => artifactsBucket.get(artifactKey(platform.sourceExecutionId, platform.imageArtifactName)),
+            catch: () => new GitHubApiError({ status: 0, reason: "transient" }),
+          });
+          if (descriptorObject === null) return yield* Effect.fail(new GitHubApiError({ status: 404, reason: "other" }));
+          const descriptor = yield* Effect.tryPromise({
+            try: async () => JSON.parse(await descriptorObject.text()) as {
+              profile?: unknown; version?: unknown; platform?: { os?: unknown; architecture?: unknown };
+              layer?: { digest?: unknown; size?: unknown; path?: unknown };
+              config?: { digest?: unknown; content?: unknown };
+              manifest?: { digest?: unknown; content?: unknown };
+              entry?: Record<string, unknown>;
+            },
+            catch: () => new GitHubApiError({ status: 400, reason: "other" }),
+          });
+          const layerName = `${req.profile}-${req.version}-linux-${arches[i]}.layer.tar.gz`;
+          const { layer, config: imageConfig, manifest, entry } = descriptor;
+          if (descriptor.profile !== req.profile || descriptor.version !== req.version ||
+            descriptor.platform?.os !== "linux" || descriptor.platform.architecture !== arches[i] ||
+            layer?.path !== layerName || typeof layer.digest !== "string" || typeof layer.size !== "number" ||
+            typeof imageConfig?.digest !== "string" || typeof imageConfig.content !== "string" ||
+            typeof manifest?.digest !== "string" || typeof manifest.content !== "string" ||
+            typeof entry !== "object" || entry === null ||
+            (entry.platform as { architecture?: unknown } | undefined)?.architecture !== arches[i]) {
+            return yield* Effect.fail(new GitHubApiError({ status: 400, reason: "other" }));
+          }
+          const sourceExecutionId = platform.sourceExecutionId;
+          const layerSize = layer.size;
+          platforms.push({
+            layerDigest: layer.digest, layerSize,
+            // The layer streams from R2 only when the registry lacks it; a size
+            // that differs from the descriptor's is a staging defect.
+            openLayer: async () => {
+              const source = await artifactsBucket.get(artifactKey(sourceExecutionId, layerName));
+              if (source === null || source.size !== layerSize) throw new TypeError("invalid OCI image name, tag, digest, or size");
+              return source.body;
+            },
+            configDigest: imageConfig.digest, config: new TextEncoder().encode(imageConfig.content),
+            manifestDigest: manifest.digest, manifest: new TextEncoder().encode(manifest.content),
+            entry,
+          });
         }
         return yield* Effect.tryPromise({
-          try: () => pushGhcrImage({
+          try: () => pushGhcrImageIndex({
             username: ghcr.username, token: ghcr.token,
-            name: `${req.repo}/${req.profile}`, tag: req.version,
-            layer: source.body, layerSize: source.size,
-            layerDigest: req.layerDigest, diffId: req.diffId,
+            name: `${req.repo}/${req.profile}`, tag: req.version, platforms,
           }),
           catch: (cause) => new GitHubApiError(classifyGhcrFailure(cause)),
         });
