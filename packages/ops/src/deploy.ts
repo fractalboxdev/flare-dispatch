@@ -283,7 +283,7 @@ export type AccessFor = (overlay: OverlayValues) => CommittedAccess | null;
  * policy rules (FD-PROF-025), the templates' invariants, the
  * rendered configuration, no policy root key on any Worker (FD-PROV-045), the deployed Workers against the record of the
  * last deploy, the GitHub App's registration, the default branch's ruleset, the AWS account's Budgets actions where the
- * overlay carries the `aws` kind, the runner workflow's permissions where it carries the `gha` kind, and, given
+ * overlay carries the `aws` kind, the runner workflow's permissions and timeout where it carries the `gha` kind, and, given
  * `access`, the Access applications on the dispatcher's hostname, then the
  * profile step's findings over the decoded overlay from `more` (`withProfileStep`, the composition the pull-request
  * drift check shares). `fd deploy` passes no `access`: it checks only the hostname

@@ -112,7 +112,7 @@ describe("the runner workflow check of the drift check", () => {
   });
 
   it("[FD-EXEC-091] fails a job that sets no permissions, so its GITHUB_TOKEN holds the repository's defaults, naming each such job", async () => {
-    const text = `${runnerWorkflow(undefined, ID_TOKEN_ONLY)}\n  notify:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo done`;
+    const text = `${runnerWorkflow(undefined, ID_TOKEN_ONLY)}\n  notify:\n    runs-on: ubuntu-latest\n    timeout-minutes: \${{ fromJSON(inputs.deadline_minutes) }}\n    steps:\n      - run: echo done`;
     await refused(
       worldWith(text),
       `gha.workflow.jobs.notify.permissions: ${WHERE}: job notify sets no permissions, so its GITHUB_TOKEN holds the repository's default permissions; grant it only id-token: write`,
