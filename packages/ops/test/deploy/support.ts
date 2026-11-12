@@ -19,6 +19,7 @@ import {
   parseJsonc,
   placeholderOverlay,
   renderTemplate,
+  type AgenticRegistry,
   type AppPermissions,
   type OverlayValues,
   type WorkerConfig,
@@ -417,6 +418,8 @@ export const fd = (
     canary?: "live" | "passes";
     /** The profile document the deploy carries; the production document by default. */
     profile?: ProfileDocument;
+    /** The agentic recipes the run catalogue carries; `AGENTIC_CATALOG` by default. */
+    agenticRegistry?: AgenticRegistry;
   } = {},
 ) =>
   makeOperability({
@@ -425,6 +428,7 @@ export const fd = (
     workers: opts.workers ?? [CONTROL_PLANE],
     target: targetOn(w, opts.canary ?? "passes"),
     ...(opts.profile === undefined ? {} : { profile: opts.profile }),
+    ...(opts.agenticRegistry === undefined ? {} : { agenticRegistry: opts.agenticRegistry }),
   });
 
 export const deploy = (w: World, overlay = OVERLAY, opts: Parameters<typeof fd>[1] = {}) =>

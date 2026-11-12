@@ -308,6 +308,10 @@ describe("the cache, artifact and log routes", () => {
   const EXECUTION = "01LOGSANDARTIFACTS";
   const ARTIFACT = "0123456789abcdef0123456789abcdef";
   const OTHER_ARTIFACT = "fedcba9876543210fedcba9876543210";
+  /** A private repository's execution, dispatched by `AUTHOR`, and its one artifact. */
+  const PRIVATE_EXECUTION = "01PRIVATEARTIFACTS";
+  const PRIVATE_ARTIFACT = "aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb";
+  const AUTHOR = "author@example.com";
   let logFile: string;
 
   const get = async (mf: Miniflare, path: string, init: RequestInit = {}) =>
@@ -353,24 +357,45 @@ describe("the cache, artifact and log routes", () => {
       customMetadata: { executor_id: "mac-logs", executor_kind: "device" },
     });
     for (const sql of ARTIFACT_SCHEMA) await db.prepare(sql).run();
-    await db
-      .prepare(
-        `insert into artifacts (artifact_id, execution_id, epoch, name, size, sha256, content_type,
-           producer_executor_id, producer_executor_kind, repo, private, r2_path, browse, created_at, expires_at)
-         values (?, ?, 1, 'report.txt', 11, ?, 'text/plain', 'mac-logs', 'device', 'fractalboxdev/flare-dispatch',
-           1, ?, 1, ?, ?)`,
-      )
-      .bind(
-        ARTIFACT,
-        EXECUTION,
-        "0".repeat(64),
-        `artifacts/${EXECUTION}/1/report.txt`,
-        Date.now(),
-        Date.now() + 3_600_000,
-      )
-      .run();
+    const artifact = (id: string, executionId: string, repo: string, isPrivate: boolean) =>
+      db
+        .prepare(
+          `insert into artifacts (artifact_id, execution_id, epoch, name, size, sha256, content_type,
+             producer_executor_id, producer_executor_kind, repo, private, r2_path, browse, created_at, expires_at)
+           values (?, ?, 1, 'report.txt', 11, ?, 'text/plain', 'mac-logs', 'device', ?, ?, ?, 1, ?, ?)`,
+        )
+        .bind(
+          id,
+          executionId,
+          "0".repeat(64),
+          repo,
+          isPrivate ? 1 : 0,
+          `artifacts/${executionId}/1/report.txt`,
+          Date.now(),
+          Date.now() + 3_600_000,
+        )
+        .run();
+    await artifact(ARTIFACT, EXECUTION, "fractalboxdev/flare-dispatch", false);
     await bucket.put(`artifacts/${EXECUTION}/1/report.txt`, "report body");
     await bucket.put(`artifacts/${EXECUTION}/1/report.txt.browse/a/b.txt`, "browse body");
+    await db
+      .prepare(
+        `insert into executions (id, scope_id, run, class, status, enqueued_at)
+         values (?, 'acme/private', 'check', 'batch', 'success', ?)`,
+      )
+      .bind(PRIVATE_EXECUTION, Date.now())
+      .run();
+    await db
+      .prepare(
+        `insert into intake_records (execution_id, trigger, run, repo, sha, ref, inputs_json, class, labels_json,
+           attempt, family_root, caller, created_at)
+         values (?, 'dispatch', 'check', 'acme/private', ?, 'refs/heads/main', '{}', 'batch', '[]', 1, ?, ?, ?)`,
+      )
+      .bind(PRIVATE_EXECUTION, SHA, PRIVATE_EXECUTION, AUTHOR, Date.now())
+      .run();
+    await artifact(PRIVATE_ARTIFACT, PRIVATE_EXECUTION, "acme/private", true);
+    await bucket.put(`artifacts/${PRIVATE_EXECUTION}/1/report.txt`, "private body");
+    await bucket.put(`artifacts/${PRIVATE_EXECUTION}/1/report.txt.browse/a/b.txt`, "private browse");
   });
 
   const logsPath = () => `/v1/executions/${EXECUTION}/logs/${encodeURIComponent(logFile)}`;
@@ -546,6 +571,63 @@ describe("the cache, artifact and log routes", () => {
       expect(typeof body["message"]).toBe("string");
       expect(typeof body["request_id"]).toBe("string");
     }
+  });
+
+  it("[FD-CACHE-076] answers 404 for a private repository's artifact to an identity without read access, and lists it only to a reader", async () => {
+    const privatePath = `/v1/artifacts/${PRIVATE_ARTIFACT}`;
+    const listing = `/v1/executions/${PRIVATE_EXECUTION}/artifacts`;
+    const as = async (identity: string, path: string) =>
+      get(development, path, { headers: await headersFor(identity) });
+    for (const path of [privatePath, `${privatePath}/a/b.txt`]) {
+      const refused = await asMember(path);
+      expect(refused.status, path).toBe(404);
+      expect(await errorOf(refused)).toMatchObject({ error: "not_found" });
+    }
+    expect(await (await asMember(listing)).json()).toEqual({ artifacts: [], cursor: null });
+    for (const reader of [AUTHOR, OPERATOR]) {
+      const served = await as(reader, privatePath);
+      expect(served.status, reader).toBe(200);
+      expect(served.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+      expect(await served.text()).toBe("private body");
+      expect(await (await as(reader, listing)).json()).toMatchObject({
+        artifacts: [{ artifact_id: PRIVATE_ARTIFACT }],
+      });
+    }
+    const token = await link("artifact", PRIVATE_ARTIFACT);
+    const linked = await get(development, `${privatePath}/a/b.txt?t=${token}`);
+    expect(linked.status).toBe(200);
+    expect(linked.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+    expect(await linked.text()).toBe("private browse");
+    // A public repository's artifact serves every Access identity.
+    const publicArtifact = await asMember(artifactPath);
+    expect(publicArtifact.status).toBe(200);
+    expect(publicArtifact.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+  });
+
+  it("[FD-CACHE-077] the listing writes each artifact's URL with a link token for that artifact, which opens it with no identity", async () => {
+    const page = (await (await asMember(`/v1/executions/${EXECUTION}/artifacts`)).json()) as {
+      artifacts: { artifact_id: string; url: string }[];
+    };
+    const url = new URL(page.artifacts[0]!.url);
+    expect(url.pathname).toBe(artifactPath);
+    const token = url.searchParams.get("t")!;
+    const lifetime = Number(token.split(".")[0]) - Math.floor(Date.now() / 1000);
+    expect(lifetime).toBeGreaterThan(86_400 - 10);
+    expect(lifetime).toBeLessThanOrEqual(86_400);
+    const check = (purpose: LinkPurpose, objectId: string) =>
+      checkLinkToken(LINK_KEY, token, {
+        purpose,
+        objectId,
+        nowS: Math.floor(Date.now() / 1000),
+        currentEpoch: LINK_EPOCH,
+      });
+    expect(await check("artifact", ARTIFACT)).toEqual({ _tag: "Granted" });
+    expect(await check("logs", ARTIFACT)).toEqual({ _tag: "Invalid" });
+    const opened = await get(development, `${url.pathname}${url.search}`);
+    expect(opened.status).toBe(200);
+    expect(await opened.text()).toBe("report body");
+    const other = await get(development, `/v1/artifacts/${PRIVATE_ARTIFACT}${url.search}`);
+    expect(other.status).toBe(403);
   });
 
   it("[FD-CACHE-051] refuses a compile-cache request without a signing secret", async () => {

@@ -33,6 +33,30 @@ describe("the control plane's conclude facts", () => {
     expect(await check("exec-2")).toEqual({ _tag: "Invalid" });
   });
 
+  it("[FD-CACHE-087] issues the log link token bound to one execution id, under the logs label, for at most 7 days", async () => {
+    const db = await migratedD1();
+    await seedExecution(db, "exec-1", "success");
+    const env = envOf(db, { PUBLIC_ORIGIN: ORIGIN, LINK_KEY, LINK_LIFETIME_S: "604800" });
+    const before = Math.floor(Date.now() / 1000);
+    const token = new URL((await factsOf(env, "exec-1"))!.detailsUrl!).searchParams.get("t")!;
+    const lifetime = Number(token.split(".")[0]) - before;
+    expect(lifetime).toBeGreaterThanOrEqual(604_800);
+    expect(lifetime).toBeLessThanOrEqual(604_800 + 5);
+    const check = (purpose: "logs" | "artifact", objectId: string) =>
+      checkLinkToken(LINK_KEY, token, {
+        purpose,
+        objectId,
+        nowS: Math.floor(Date.now() / 1000),
+        currentEpoch: 0,
+      });
+    expect(await check("logs", "exec-1")).toEqual({ _tag: "Granted" });
+    expect(await check("logs", "exec-2")).toEqual({ _tag: "Invalid" });
+    // The artifact label derives another key, so the token opens no artifact of the same id.
+    expect(await check("artifact", "exec-1")).toEqual({ _tag: "Invalid" });
+    const overLong = envOf(db, { PUBLIC_ORIGIN: ORIGIN, LINK_KEY, LINK_LIFETIME_S: "604801" });
+    expect((await factsOf(overLong, "exec-1"))?.detailsUrl).toBeUndefined();
+  });
+
   it("[FD-GH-013] a deploy that names no public origin writes no details URL", async () => {
     const db = await migratedD1();
     await seedExecution(db, "exec-1", "success");

@@ -3,6 +3,7 @@
 import type { ApiEnv } from "@fractalboxdev/flare-dispatch-api";
 import { deploymentOf } from "@fractalboxdev/flare-dispatch-catalog";
 import type { ConcludeKind } from "@fractalboxdev/flare-dispatch-github";
+import type { TickUnit } from "@fractalboxdev/flare-dispatch-intake";
 import type { MonitorNamespace } from "@fractalboxdev/flare-dispatch-ops";
 import type { CacheEnv } from "./cache.ts";
 import {
@@ -40,6 +41,11 @@ export interface ControlPlaneEnv extends CacheEnv {
   readonly EPOCH_ANCHOR: ExecutorChannelEnv["EPOCH_ANCHOR"];
   /** The one `LivenessMonitor` object the minute tick starts. */
   readonly MONITOR: MonitorNamespace;
+  /** One `IntakeUnits` object per GitHub App installation, by `idFromName(<installation id>)` (FD-INT-067). */
+  readonly INTAKE_UNITS: {
+    idFromName(name: string): unknown;
+    get(id: unknown): { enqueue(units: readonly TickUnit[]): Promise<number> };
+  };
   /** `alerts.sink`; without it every alarm delivery fails and the alarm stays active. */
   readonly ALERT_SINK?: string;
   readonly DEPLOYMENT?: string;

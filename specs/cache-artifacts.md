@@ -201,6 +201,8 @@ sequenceDiagram
 
 An artifact is a named output of an execution kept for people and tools to fetch: reports, bundles, release files. It is stored at `artifacts/<execution_id>/<epoch>/<name>` and described by one D1 row: `artifact_id`, `execution_id`, `epoch`, `name`, `size`, `sha256`, `content_type`, producer executor id and kind, `expires_at`. The `artifact_id` is the public handle; the R2 path is never exposed.
 
+A link to a log or an artifact carries a link token signed under the link key ([interfaces.md](interfaces.md) § Link tokens): a log link's token is bound to one execution id, an artifact link's to one `artifact_id`, each under its own HKDF label. The execution listing writes each artifact's URL with a token for the configured link lifetime. A viewer identity has read access to a private repository's artifact when the operator overlay lists it in `operators` or it dispatched the execution that produced the artifact.
+
 A log object is `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.ndjson`, where `step_key` is the first 24 hex characters of the SHA-256 of the step's journal name and `<start>`, `<end>` are byte offsets in that stream. The name depends only on the step and the epoch, so a replay writes the same names and a reclaimed epoch never overwrites the previous one.
 
 ## Requirements
@@ -303,8 +305,8 @@ A log object is `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.n
 - **FD-CACHE-073** · phase 0 · `V-UNIT` — If a directory artifact uploaded with browse expansion holds an entry over 32 MiB, totals over 256 MiB or holds over 4000 entries, then the control plane must reject it with `ArtifactTooLarge`.
 - **FD-CACHE-074** · phase 0 · `V-UNIT` — If an execution's artifacts would total more than the per-execution artifact bound, default 2 GiB, then the control plane must reject the upload with `ArtifactTooLarge`.
 - **FD-CACHE-075** · phase 0 · `V-UNIT` — The dispatcher must serve `GET /v1/artifacts/<artifact_id>` and its browse paths with `Cache-Control: immutable` once the producing execution is terminal.
-- **FD-CACHE-076** · phase 0 · `V-UNIT` — If the artifact belongs to a private repository and the request carries neither a viewer identity with read access to that repository nor a capability token bound to that `artifact_id` and unexpired, then the dispatcher must answer `404`.
-- **FD-CACHE-077** · phase 0 · `V-UNIT` — The control plane must issue an artifact capability token with an expiry of at most 7 days, derive its key with a domain-separation label for artifacts, and compare it in constant time.
+- **FD-CACHE-076** · phase 0 · `V-UNIT` — If the artifact belongs to a private repository and the request carries neither a viewer identity with read access to that repository nor a link token bound to that `artifact_id` ([interfaces.md](interfaces.md) FD-IFC-017), then the dispatcher must answer `404`, as for an artifact that does not exist, and must leave the artifact out of the execution's listing.
+- **FD-CACHE-077** · phase 0 · `V-UNIT` — The control plane must issue an artifact link token ([interfaces.md](interfaces.md) FD-IFC-018) bound to one `artifact_id`, with an expiry of at most 7 days, under the link key's HKDF label for artifacts, and compare it in constant time.
 - **FD-CACHE-078** · phase 0 · `V-UNIT` — The dispatcher must list an execution's artifacts in pages of at most 100 rows with a cursor, and must list artifact rows only, never the files inside a browse expansion.
 - **FD-CACHE-079** · phase 0 · `V-UNIT` — The artifact sweep must delete an artifact and its row when `expires_at` passes, with `expires_at` set to a configurable retention after creation, default 30 days, unless [provenance.md](provenance.md) extends it.
 - **FD-CACHE-080** · phase 1 · `V-UNIT` `V-CONF` — While a repository's confidentiality mode is `confidential-compute`, the executor must keep artifacts on the device, and the control plane must store a row that names the executor and holds no R2 path.
@@ -317,7 +319,7 @@ A log object is `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.n
 - **FD-CACHE-084** · phase 0 · `V-UNIT` — The HTML log viewer must send a nonce-based `Content-Security-Policy` with `default-src 'none'`, insert log text only as text content, and strip ANSI escape sequences.
 - **FD-CACHE-085** · phase 0 · `V-UNIT` — When an execution is terminal, the dispatcher must serve its log objects with `Cache-Control: immutable`.
 - **FD-CACHE-086** · phase 0 · `V-UNIT` — The log viewer must show, for each log object, the executor id, executor kind and epoch that produced it.
-- **FD-CACHE-087** · phase 0 · `V-UNIT` — The control plane must issue a log capability token bound to one execution id, with an expiry of at most 7 days and a domain-separation label for logs.
+- **FD-CACHE-087** · phase 0 · `V-UNIT` — The control plane must issue a log link token ([interfaces.md](interfaces.md) FD-IFC-018) bound to one execution id, with an expiry of at most 7 days, under the link key's HKDF label for logs.
 - **FD-CACHE-088** · phase 1 · `V-UNIT` `V-CONF` — While a repository's confidentiality mode is `confidential-compute`, the executor must keep logs on the device, and the log viewer must show the executor id and execution id as a pointer and fetch no log content.
 - **FD-CACHE-089** · phase 0 · `V-UNIT` — The log sweep must delete log objects a configurable retention after the execution ends, default 30 days.
 

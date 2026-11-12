@@ -19,7 +19,8 @@ import {
 import { ApiConfig, type ApiConfigShape } from "./config.ts";
 import { declaredGroups } from "./groups.ts";
 import { ACTIONS_JWKS, accessIssuer } from "./identity.ts";
-import { mintLinkToken } from "./link-token.ts";
+import { checkLinkToken, mintLinkToken, type LinkPurpose } from "./link-token.ts";
+import { artifactUrl } from "./links.ts";
 import { mount, routerGroup, toFetchHandler } from "./router.ts";
 
 /** A stand-in for the cache-artifacts log route, mounted on the link surface. */
@@ -136,5 +137,38 @@ describe("link surface", () => {
     expect(expiry - now()).toBeGreaterThan(86_400 - 10);
     expect(expiry - now()).toBeLessThanOrEqual(86_400);
     expect((await call(dispatched["logs_url"]!)).status).toBe(200);
+  });
+});
+
+describe("artifact links", () => {
+  const ARTIFACT = "0123456789abcdef0123456789abcdef";
+  const nowS = 1_800_000_000;
+  const urlOf = (config: ApiConfigShape) =>
+    Effect.runPromise(
+      artifactUrl(ARTIFACT, "listing", nowS).pipe(Effect.provideService(ApiConfig, config)),
+    );
+  const check = (token: string, purpose: LinkPurpose, objectId: string) =>
+    checkLinkToken("link-key-for-tests", token, { purpose, objectId, nowS, currentEpoch: 0 });
+
+  it("[FD-CACHE-077] issues an artifact's URL with a link token bound to that artifact under the artifact label, for at most 7 days", async () => {
+    const url = new URL(await urlOf(baseConfig({ linkLifetimeS: 604_800 })));
+    expect(`${url.origin}${url.pathname}`).toBe(`${ORIGIN}/v1/artifacts/${ARTIFACT}`);
+    const t = url.searchParams.get("t")!;
+    expect(Number(t.split(".")[0]) - nowS).toBe(604_800);
+    expect(await check(t, "artifact", ARTIFACT)).toEqual({ _tag: "Granted" });
+    expect(await check(t, "artifact", "f".repeat(32))).toEqual({ _tag: "Invalid" });
+    // The logs label derives another key, so the token verifies as no log link of the same id.
+    expect(await check(t, "logs", ARTIFACT)).toEqual({ _tag: "Invalid" });
+    const mac = t.split(".")[2]!;
+    const flipped = `${t.slice(0, -mac.length)}${mac[0] === "A" ? "B" : "A"}${mac.slice(1)}`;
+    expect(await check(flipped, "artifact", ARTIFACT)).toEqual({ _tag: "Invalid" });
+    const day = new URL(await urlOf(baseConfig())).searchParams.get("t")!;
+    expect(Number(day.split(".")[0]) - nowS).toBe(86_400);
+  });
+
+  it("[FD-CACHE-077] writes an artifact's URL with no token on a deployment without a link key", async () => {
+    const url = new URL(await urlOf(baseConfig({ linkKey: undefined })));
+    expect(url.search).toBe("");
+    expect(url.pathname).toBe(`/v1/artifacts/${ARTIFACT}`);
   });
 });

@@ -19,6 +19,7 @@ export {
   EpochAnchor,
   ExecutionEngine,
   ExecutorChannel,
+  IntakeUnits,
   LivenessMonitor,
 } from "./durable-objects.ts";
 export {
@@ -80,8 +81,8 @@ export default {
     return apiFetch(request, env);
   },
   /**
-   * The minute tick (FD-INT-050): liveness record, `cron-silent`, the outbox drain through the GitHub applier and
-   * intake's sweep and schedule units, and the cache, artifact and log retention sweeps.
+   * The minute tick (FD-INT-050): liveness record, `cron-silent`, the outbox drain through the GitHub applier, the
+   * enqueue of intake's sweep and schedule units (FD-INT-067), and the cache, artifact and log retention sweeps.
    */
   scheduled: scheduledHandler((env: ControlPlaneEnv) => tickDeps(env, cacheSweeps(env))),
 };

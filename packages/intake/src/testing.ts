@@ -15,20 +15,30 @@ import { migrateIntake } from "./store.ts";
 
 const statement = (
   db: DatabaseSync,
+  count: () => void,
   sql: string,
   params: readonly unknown[] = [],
 ): D1Statement => ({
-  bind: (...values) => statement(db, sql, values),
-  run: async () => db.prepare(sql).run(...(params as SQLInputValue[])),
-  all: async () => ({ results: db.prepare(sql).all(...(params as SQLInputValue[])) as unknown[] }),
+  bind: (...values) => statement(db, count, sql, values),
+  run: async () => (count(), db.prepare(sql).run(...(params as SQLInputValue[]))),
+  all: async () => (
+    count(),
+    { results: db.prepare(sql).all(...(params as SQLInputValue[])) as unknown[] }
+  ),
 });
 
-/** A D1 whose `batch` runs in one SQLite transaction, as D1 runs it atomically. */
-export const sqliteD1 = (): D1Like & { readonly sqlite: DatabaseSync } => {
+/**
+ * A D1 whose `batch` runs in one SQLite transaction, as D1 runs it atomically. `queries` counts every statement it
+ * ran, each statement of a batch included, as D1 counts a Worker invocation's queries.
+ */
+export const sqliteD1 = (): D1Like & { readonly sqlite: DatabaseSync; queries(): number } => {
   const db = new DatabaseSync(":memory:");
+  let queries = 0;
+  const count = () => void queries++;
   return {
     sqlite: db,
-    prepare: (sql) => statement(db, sql),
+    queries: () => queries,
+    prepare: (sql) => statement(db, count, sql),
     batch: async (statements) => {
       db.exec("begin");
       try {
