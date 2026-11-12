@@ -48,7 +48,7 @@ describe("simulation: intake under redeliveries, D1 failures, manifest failures 
     reachedEvery(reached, ["sweeps", "submitted", "capped", "aged", "covered", "continued"]);
   }, 300_000);
 
-  it("[FD-INT-053] a minute's tick fired more than once creates at most one execution per run and repository", async () => {
+  it("[FD-INT-053] a minute's tick fired more than once creates at most one execution per run, label and repository", async () => {
     const { violations, reached } = await runSeeds("double-tick");
     expect(violations.slice(0, 5)).toEqual([]);
     reachedEvery(reached, ["refired", "late", "matched"]);

@@ -31,10 +31,13 @@ describe("dedup recipes", () => {
     );
   });
 
-  it("[FD-INT-053] a cron trigger keys on the scheduled minute in ISO 8601 UTC", async () => {
+  it("[FD-INT-053] a cron trigger keys on the run, its label and the scheduled minute in ISO 8601 UTC", async () => {
     expect((await key({ cronMinute: Date.UTC(2026, 10, 4, 3, 0, 42) })).canonical).toBe(
       "check:acme/app:cron:2026-11-04T03:00:00.000Z",
     );
+    expect(
+      (await key({ label: "size", cronMinute: Date.UTC(2026, 10, 4, 3, 0, 42) })).canonical,
+    ).toBe("check:size:acme/app:cron:2026-11-04T03:00:00.000Z");
   });
 
   it("[FD-INT-061] a local submit keys on the lease, run, tree hash and inputs digest", async () => {

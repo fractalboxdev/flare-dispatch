@@ -365,6 +365,61 @@ export const gateEvent: fc.Arbitrary<GateEvent> = fc
       }),
   );
 
+/** One model call a capacity lease's usage report records: the lease and the execution it ran for. */
+export interface UsageCall {
+  readonly leaseId: string;
+  readonly executionId: string;
+}
+
+/**
+ * One `local.writeback` that proposes file changes (FD-LOCAL-094): the registered execution and its lease, the lease
+ * usage reports' model calls, and the gate event the writeback gate reaches. The manifest is a `device-signed` draft
+ * from a `flare-dispatch/` branch, so every event passes the checks before the gate, and the event's `modelAuthored`
+ * is whether a usage report of the execution's lease records a model call for that execution.
+ */
+export interface WritebackEvent {
+  readonly executionId: string;
+  readonly leaseId: string;
+  readonly usage: readonly UsageCall[];
+  readonly gate: GateEvent;
+}
+
+export const WRITEBACK_EXECUTION = "01HWRITEBACK0000000000000";
+export const WRITEBACK_LEASE = "L-writeback";
+
+/** Whether the usage reports record a model call for the execution under its lease. */
+export const modelAuthoredFrom = (
+  usage: readonly UsageCall[],
+  leaseId: string,
+  executionId: string,
+) => usage.some((c) => c.leaseId === leaseId && c.executionId === executionId);
+
+const usageCall = fc.record({
+  leaseId: fc.constantFrom(WRITEBACK_LEASE, WRITEBACK_LEASE, "L-other"),
+  executionId: fc.constantFrom(WRITEBACK_EXECUTION, "01HOTHEREXECUTION00000000"),
+});
+
+export const writebackEvent: fc.Arbitrary<WritebackEvent> = fc
+  .tuple(
+    gateEvent,
+    fc.array(usageCall, { maxLength: 3 }),
+    fc.constantFrom("flare-dispatch/x", "flare-dispatch/", "flare-dispatch/feat/\u{1F600}"),
+  )
+  .map(([e, usage, branch]) => ({
+    executionId: WRITEBACK_EXECUTION,
+    leaseId: WRITEBACK_LEASE,
+    usage,
+    gate: {
+      ...e,
+      manifest: {
+        ...e.manifest,
+        branch,
+        pr: { ...e.manifest.pr, draft: true, labels: ["device-signed"] },
+      },
+      modelAuthored: modelAuthoredFrom(usage, WRITEBACK_LEASE, WRITEBACK_EXECUTION),
+    },
+  }));
+
 /** The oracle executable `lake build oracle` writes in `formal/`. */
 export const ORACLE_PATH = fileURLToPath(
   new URL("../../../../formal/.lake/build/bin/oracle", import.meta.url),

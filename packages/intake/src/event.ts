@@ -37,6 +37,8 @@ export const CronTrigger = Schema.TaggedStruct("cron", {
   scheduledAt: Schema.Number,
   repo: Schema.String,
   schedule: Schema.String,
+  /** The branch whose head the execution is pinned to: the schedule's branch, or the default branch (FD-INT-052). */
+  branch: Schema.String,
 });
 export const LocalTrigger = Schema.TaggedStruct("local", {
   leaseId: Schema.String,

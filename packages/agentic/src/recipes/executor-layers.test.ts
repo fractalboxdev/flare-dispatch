@@ -30,6 +30,33 @@ afterEach(async () => {
 });
 
 describe("executor layers", () => {
+  it.each([0, 7])("keeps exit code %i when a real child closes stdin before a large prompt finishes writing", async (exitCode) => {
+    const dir = await mkdtemp(join(tmpdir(), "fd-edit-stdin-"));
+    dirs.push(dir);
+    const result = await Effect.runPromise(
+      EditLoop.use(loop => loop.run("prompt\n".repeat(400_000))).pipe(
+        Effect.provide(editLoopLayer(dir, [process.execPath, "-e",
+          `require('node:fs').closeSync(0); setTimeout(() => process.exit(${exitCode}), 25);`])),
+      ),
+    );
+    // Vitest also fails this test file if the pipe emits an uncaught error after the command completes.
+    expect(result.exitCode).toBe(exitCode);
+  });
+
+  it("delivers the complete prompt to a real child that consumes its stdin", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fd-edit-prompt-"));
+    dirs.push(dir);
+    const prompt = "The exact coding-agent prompt.\n".repeat(10_000);
+    const result = await Effect.runPromise(
+      EditLoop.use(loop => loop.run(prompt)).pipe(
+        Effect.provide(editLoopLayer(dir, [process.execPath, "-e",
+          "let text='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>text+=chunk);process.stdin.on('end',()=>require('node:fs').writeFileSync('prompt.txt',text));"])),
+      ),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(await readFile(join(dir,"prompt.txt"),"utf8")).toBe(prompt);
+  });
+
   it("runs a command in the checkout and answers null for one that cannot start", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fd-shell-"));
     dirs.push(dir);

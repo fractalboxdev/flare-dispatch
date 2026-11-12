@@ -101,12 +101,20 @@ export const validateManifest = (text: string, size: number, catalog: RunCatalog
       errors: [`manifest lists ${manifest.runs.length} runs; the bound is ${MANIFEST_MAX_RUNS}`],
     };
   const errors: string[] = [];
+  // Entries that share a run and a label share every dedup key, so all but the first would never start (FD-INT-053).
+  const seen = new Set<string>();
   manifest.runs.forEach((entry, i) => {
     const run = catalog(entry.recipe);
     if (run === undefined) {
       errors.push(`runs[${i}].recipe: no recipe named ${entry.recipe}`);
       return;
     }
+    const identity = JSON.stringify([run.name, entry.label ?? null]);
+    if (seen.has(identity))
+      errors.push(
+        `runs[${i}].label: duplicate label ${entry.label ?? "none"} for recipe ${entry.recipe}`,
+      );
+    seen.add(identity);
     const params = Schema.decodeUnknownResult(run.params)(entry.params ?? {});
     if (Result.isFailure(params))
       errors.push(...lines(params.failure.message).map((l) => `runs[${i}].params: ${l}`));
