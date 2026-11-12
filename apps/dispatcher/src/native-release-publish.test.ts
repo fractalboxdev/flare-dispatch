@@ -97,7 +97,7 @@ for (const scenario of [403, 429, "budget"] as const) {
                             retryAfterMs: scenario === "budget" ? 1_200_000 : 700_965,
                           }),
                         )
-                      : Effect.void;
+                      : github.publishReleaseAsset(input);
                   }),
               }),
               Effect.provideService(StepRunner, {
