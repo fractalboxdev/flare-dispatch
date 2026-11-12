@@ -254,6 +254,62 @@ describe("device key window", () => {
   });
 });
 
+describe("subject digest", () => {
+  it("[FD-PROV-058] rejects a statement whose subject digest differs from the digest of the artifact being verified", async () => {
+    const other = await f.bundleOf(await f.deviceEnvelope({ subjectHex: "b".repeat(64) }));
+    expect((await rejection(await f.input(other))).reason).toBe("subject-digest");
+    const bundle = await f.bundleOf(await f.deviceEnvelope());
+    expect((await passed(await f.input(bundle))).tier).toBe("platform");
+    // The verifier digests the artifact it holds; the bundle's own claim does not stand in for it.
+    const e = await rejection(
+      await f.input(bundle, { artifactDigest: `sha256:${"c".repeat(64)}` }),
+    );
+    expect(e.reason).toBe("subject-digest");
+  });
+});
+
+describe("required tier", () => {
+  it("[FD-PROV-059] rejects an artifact whose assigned tier is below the signed policy's required tier for its class", async () => {
+    // A cloud `platform` statement meets `package` (platform) but not `release` (reproduced).
+    const bundle = await f.bundleOf(await f.cloudEnvelope(), { deviceKey: null });
+    expect((await passed(await f.input(bundle, { artifactClass: "package" }))).tier).toBe(
+      "platform",
+    );
+    expect((await rejection(await f.input(bundle, { artifactClass: "release" }))).reason).toBe(
+      "tier",
+    );
+    // Raising the class's requirement in the signed policy rejects the same bundle.
+    const doc = f.policyDoc();
+    const policy = await f.signPolicy({
+      ...doc,
+      required_tiers: { ...doc.required_tiers, package: "reproduced" },
+    });
+    const e = await rejection(await f.input(bundle, { policy, artifactClass: "package" }));
+    expect(e.reason).toBe("tier");
+    expect(e.message).toContain("package requires reproduced");
+  });
+});
+
+describe("registration binding", () => {
+  it("[FD-PROV-060] assigns a registration-bound statement no tier above device-signed", async () => {
+    const bundle = await f.bundleOf(await f.deviceEnvelope({ binding: "registration" }));
+    const pass = await passed(await f.input(bundle, { artifactClass: "verdict" }));
+    expect(pass.tier).toBe("device-signed");
+    expect(pass.statements[0]!.tier).toBe("device-signed");
+    // `platform` is out of reach, so a class that requires it rejects the artifact.
+    const e = await rejection(await f.input(bundle, { artifactClass: "pr-artifact" }));
+    expect(e.reason).toBe("tier");
+    expect(e.message).toContain("pr-artifact requires platform; the bundle reaches device-signed");
+    // Nor does it make a `reproduced` pair with a cloud statement.
+    const pair = await f.reproducedBundle({
+      device: await f.deviceEnvelope({ binding: "registration" }),
+    });
+    const r = await rejection(await f.input(pair, { artifactClass: "release" }));
+    expect(r.reason).toBe("tier");
+    expect(r.message).toContain("reproduced needs two platform statements");
+  });
+});
+
 describe("reproduced tier", () => {
   it("[FD-PROV-061] assigns reproduced to a cloud and a device statement with a logged reproduction record", async () => {
     const pass = await passed(
