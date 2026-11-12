@@ -40,6 +40,9 @@
     // The overlay's `attestation_max_age` in days, 10 where it sets none: the result-acceptance check rejects a
     // statement from a device whose last attestation is older (FD-PROV-016).
     "ATTESTATION_MAX_AGE_DAYS": "{{provenance.attestationMaxAgeDays}}",
+    // The OSV ecosystems whose `all.zip` archive the tick's `advisory-refresh` step stores in `cas/<sha256>` once per
+    // UTC day, none where the overlay sets none (FD-OPS-100).
+    "ADVISORY_ECOSYSTEMS": "{{scan.advisoryEcosystems}}",
     // The object-store presigner signs on `<account_id>.r2.cloudflarestorage.com`, never the custom domain, under
     // the `CACHE` bucket's name. Its R2 API token, scoped to the cache and artifact buckets with Object Read & Write
     // and used for nothing else, is the Worker secrets `R2_PRESIGN_ACCESS_KEY_ID` and `R2_PRESIGN_SECRET_ACCESS_KEY`
@@ -47,7 +50,8 @@
     "R2_ACCOUNT_ID": "{{accountId}}",
     "CACHE_BUCKET_NAME": "{{r2.CACHE}}",
   },
-  // The minute tick (FD-INT-050): outbox drain, liveness, the enqueue of intake's units and the retention sweeps.
+  // The minute tick (FD-INT-050): outbox drain, liveness, the enqueue of intake's units, the retention sweeps and the
+  // daily advisory refresh.
   "triggers": { "crons": ["* * * * *"] },
   "d1_databases": [
     {

@@ -229,8 +229,12 @@ export const policyRulesOf = (overlay: OverlayValues): PolicyRules => overlay.po
 /** The values a template's placeholders resolve against (`renderValuesOf`). */
 export type RenderValues = Omit<
   OverlayValues,
-  "spend" | "policy" | "dispatchers" | "intake" | "dispatch" | "provenance"
+  "spend" | "policy" | "dispatchers" | "intake" | "dispatch" | "provenance" | "scan"
 > & {
+  /** `advisoryEcosystems`, none where the overlay sets none, so `advisory-refresh` stores no archive. */
+  readonly scan: NonNullable<OverlayValues["scan"]> & {
+    readonly advisoryEcosystems: readonly string[];
+  };
   /** `attestationMaxAgeDays` at its 10-day default where the overlay sets none (FD-PROV-016). */
   readonly provenance: NonNullable<OverlayValues["provenance"]> & {
     readonly attestationMaxAgeDays: number;
@@ -248,8 +252,8 @@ export type RenderValues = Omit<
  * The values a template's placeholders resolve against: the overlay, its spend values completed with their defaults,
  * its policy rules and dispatchers, an empty set where it holds none, its Actions OIDC audience, empty where it sets
  * none, its intake webhook events, `null` where it sets none, so the rendered Worker tells an absent list (every
- * supported event) from an empty one (none) (FD-INT-027), and its `attestation_max_age` in days, at its default where
- * it sets none (FD-PROV-016).
+ * supported event) from an empty one (none) (FD-INT-027), its `attestation_max_age` in days, at its default where
+ * it sets none (FD-PROV-016), and its advisory ecosystems, none where it sets none (FD-OPS-100).
  */
 export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   ...overlay,
@@ -258,6 +262,7 @@ export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   dispatchers: overlay.dispatchers ?? [],
   intake: { webhookEvents: overlay.intake?.webhookEvents ?? null },
   dispatch: { oidcAudience: overlay.dispatch?.oidcAudience ?? "" },
+  scan: { ...overlay.scan, advisoryEcosystems: overlay.scan?.advisoryEcosystems ?? [] },
   provenance: {
     ...overlay.provenance,
     attestationMaxAgeDays:

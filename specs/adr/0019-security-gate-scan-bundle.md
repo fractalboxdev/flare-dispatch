@@ -78,7 +78,7 @@ zizmor documents exit codes 11 to 14 for findings by highest severity and 1 to 3
 
 ## Consequences
 
-- Every enrolled repository depends on a fresh advisory snapshot: an `advisory-refresh` outage longer than 48 h turns `security-gate` red on pull requests that change a lockfile. `advisory-snapshot-stale` pages at 24 h.
+- Every enrolled repository depends on a fresh advisory snapshot: once a snapshot's `Last-Modified` time is older than `scan.advisoryMaxAgeHours` (default 48 h, so about one missed daily refresh), `security-gate` turns red on pull requests that change a lockfile and `advisory-snapshot-stale` pages.
 - `zizmor.yml` and `.gitleaks.toml` on a target branch have no effect on a scan, because each scanner takes one configuration file and the bundle's replaces it. A repository suppresses through `.gitleaksignore`, `osv-scanner.toml` or a marker on a target-branch line.
 - `flare-dispatch/security-gate` runs for dependabot and every other author, so a dependency bump with a known vulnerability reports `failure`.
 - `check` keeps its `neutral` path for excluded authors, so a repository that requires `check` and accepts bot pull requests relies on `security-gate` for those pull requests.

@@ -18,6 +18,7 @@ import {
   envelopeBytes,
   fakeScanImage,
   IMAGE_VERSIONS,
+  memoryAdvisorySnapshots,
   memoryScanBundleStore,
   signingKey,
   validPayload,
@@ -61,12 +62,16 @@ export const simulateScanBundle = async (seed: number): Promise<ScanBundleOutcom
     const store = memoryScanBundleStore(new Map([[digest, stored]]));
     let scanned = false;
     const outcome = await Effect.runPromise(
-      runScan(digest, () =>
+      runScan({ pin: digest, changedPaths: [], now: 0, advisoryMaxAgeHours: 24 }, () =>
         Effect.sync(() => {
           scanned = true;
           return Outcome.success();
         }),
-      ).pipe(Effect.provide(Layer.merge(store.layer, fakeScanImage(versions, tools)))),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(store.layer, fakeScanImage(versions, tools), memoryAdvisorySnapshots().layer),
+        ),
+      ),
     );
     const reason = Match.value(outcome).pipe(
       Match.tag("failure", (f) => f.reason as string),

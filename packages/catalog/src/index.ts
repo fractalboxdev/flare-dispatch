@@ -40,8 +40,11 @@ export {
 } from "./deploy-smoke.ts";
 export * from "./scan-bundle.ts";
 export {
+  AdvisorySnapshots,
+  AdvisorySnapshotUnreadable,
   ScanBundleStore,
   ScanBundleUnreadable,
+  type AdvisorySnapshot,
   ScanImage,
   ScannerVersionUnknown,
 } from "./ports.ts";
