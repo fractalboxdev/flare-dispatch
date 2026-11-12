@@ -24,3 +24,9 @@ export class ProfileRejected extends Schema.TaggedError<ProfileRejected>()("Prof
   policy_version: Schema.String,
   rejections: Schema.Array(Rejection),
 }) {}
+
+/** Policy sync refused a deployment's policy rules; every rejection is listed, and no rule of the set takes effect. */
+export class PolicyRulesRejected extends Schema.TaggedError<PolicyRulesRejected>()(
+  "PolicyRulesRejected",
+  { rejections: Schema.Array(Rejection) },
+) {}

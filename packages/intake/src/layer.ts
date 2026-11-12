@@ -101,11 +101,7 @@ export const intakeLayer = (options: IntakeLayerOptions) =>
 /** The labels `resolveClass` may return (FD-PROF-018, FD-PROF-024). */
 const BINDING_LABELS: readonly string[] = ["untrusted-input", "local-only"];
 
-/**
- * The repository's policy rules, the `policy-rules` input. Neither the profile nor the deployment settings carry any,
- * so every request resolves under an empty rule set.
- */
-const POLICY_RULES: readonly PolicyRule[] = [];
+const NO_POLICY_RULES: readonly PolicyRule[] = [];
 
 const CLASS_NAMES: ReadonlySet<string> = new Set(CLASS_ORDER);
 const classOf = (name: string | null | undefined): ClassName | undefined =>
@@ -200,7 +196,7 @@ export const profileRequestOf = (r: ClassRequest, callerProtected: boolean): Pro
 export const profileClassResolver = Layer.effect(
   ClassResolver,
   Effect.gen(function* () {
-    const { profile } = yield* IntakeConfig;
+    const { profile, policyRules } = yield* IntakeConfig;
     const protection = yield* ProtectionSnapshots;
     const alarms = yield* AlarmPort;
     const catalogue = profile.classes.map((c) => ({ name: c.name, rank: c.rank }));
@@ -229,9 +225,10 @@ export const profileClassResolver = Layer.effect(
               : undefined;
           // Step 6 lets a caller raise only on a protected branch and only as a rule allows, so the caller's branch is
           // read only when a rule could allow it; an unreadable branch allows no raise.
+          const rules = policyRules?.(r.repo) ?? NO_POLICY_RULES;
           const callerRef = r.caller?.ref ?? r.ref;
           const callerRead =
-            r.classInput !== null && POLICY_RULES.length > 0 && r.caller?.kind === "actions-oidc"
+            r.classInput !== null && rules.length > 0 && r.caller?.kind === "actions-oidc"
               ? yield* protection.refProtected(r.repo, callerRef)
               : false;
           const callerProtected = !isUnavailable(callerRead) && callerRead;
@@ -245,7 +242,7 @@ export const profileClassResolver = Layer.effect(
             request: profileRequestOf(r, callerProtected),
             inputs: {
               ...(snapshot === undefined ? {} : { "protection-snapshot": snapshot }),
-              "policy-rules": POLICY_RULES,
+              "policy-rules": rules,
             },
             catalogue,
             allowedLabels: BINDING_LABELS,

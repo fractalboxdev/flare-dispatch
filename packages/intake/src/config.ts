@@ -4,6 +4,7 @@ import {
   checkOpenPayload,
   classNamed,
   type ConfidentialityMode,
+  type PolicyRule,
   type Profile,
 } from "@fractalboxdev/flare-dispatch-profile";
 import {
@@ -55,11 +56,16 @@ export interface IntakeSettings {
   /** The operator policy: whether a repository may run a run at all (FD-INT-015). */
   readonly allows: (repo: string, run: string) => boolean;
   /**
-   * A repository's confidentiality mode, which the placement's isolation reads (MAMEKO-LEASE-084). No policy rule sets
-   * one yet, so a deployment answers `unclassified`, mameko's fail-closed default, for every repository it does not
-   * know to be `non-confidential`.
+   * A repository's confidentiality mode, which the placement's isolation reads (MAMEKO-LEASE-084): the mode its synced
+   * policy rules set (FD-PROF-025), else `unclassified`, mameko's fail-closed default, for every repository the
+   * deployment does not know to be `non-confidential`.
    */
   readonly confidentiality: (repo: string) => ConfidentialityMode;
+  /**
+   * A repository's synced policy rules, the `policy-rules` input of class resolution, in order. Absent, every request
+   * resolves under an empty rule set.
+   */
+  readonly policyRules?: (repo: string) => readonly PolicyRule[];
   /**
    * The path of the first field of a request's inputs that holds a write credential the control plane never sends to
    * an executor, or null when none does. A request with a hit is refused before admission (FD-AGT-008).

@@ -1,7 +1,11 @@
 // The operator overlay: a JSON document of values only, decoded against the value schema with every undeclared key
 // rejected (specs/operability.md § Template, overlay and rendered configuration, FD-OPS-002 to FD-OPS-004, FD-OPS-056).
 import type { RegistryEntry } from "@fractalboxdev/flare-dispatch-agentic";
-import { spendConfigWith, type SpendConfig } from "@fractalboxdev/flare-dispatch-profile";
+import {
+  PolicyRules,
+  spendConfigWith,
+  type SpendConfig,
+} from "@fractalboxdev/flare-dispatch-profile";
 import { Effect, Schema } from "effect";
 import { decodeStrict, type DecodeIssue } from "./decode.ts";
 
@@ -96,6 +100,11 @@ export const OverlayValues = Schema.Struct({
       breaker: opt(Schema.Number),
     }),
   ),
+  /**
+   * Each repository's policy rules, keyed `<owner>/<repo>`: the class rules of class resolution and the repository's
+   * confidentiality mode, which policy sync checks before the deploy writes anything (FD-PROF-025).
+   */
+  policy: opt(Schema.Struct({ rules: opt(PolicyRules) })),
   provenance: opt(
     Schema.Struct({
       attestationMaxAgeDays: opt(Count),
@@ -167,10 +176,17 @@ export const spendValuesOf = (overlay: OverlayValues): Required<SpendValues> => 
   };
 };
 
-/** The values a template's placeholders resolve against: the overlay, its spend values completed with their defaults. */
+/** The overlay's policy rules, none for a repository the overlay names no rule for (FD-PROF-025). */
+export const policyRulesOf = (overlay: OverlayValues): PolicyRules => overlay.policy?.rules ?? {};
+
+/**
+ * The values a template's placeholders resolve against: the overlay, its spend values completed with their defaults
+ * and its policy rules, an empty set where it holds none.
+ */
 export const renderValuesOf = (overlay: OverlayValues): OverlayValues => ({
   ...overlay,
   spend: spendValuesOf(overlay),
+  policy: { ...overlay.policy, rules: policyRulesOf(overlay) },
 });
 
 /** The overlay's provider registry as the deploy check reads it, each entry under its key as its id. */

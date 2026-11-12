@@ -20,23 +20,24 @@ import {
   type PortUses,
   type ProfileDocument,
 } from "@fractalboxdev/mameko-ports";
-import { Effect, Match, Schema } from "effect";
+import { Effect, Exit, Match, Schema } from "effect";
 import {
   acceptanceReasonKinds,
   type Deployment,
   type Phase,
   type SpendConfig,
 } from "./document.ts";
+import { CONFIDENTIALITY_MODES, PolicyRule } from "./bindings.ts";
 import { eligibleKinds } from "./placement.ts";
-import { ProfileRejected, type PlacementShape, type Profile, type Rejection } from "./schema.ts";
+import {
+  PolicyRulesRejected,
+  ProfileRejected,
+  type PlacementShape,
+  type Profile,
+  type Rejection,
+} from "./schema.ts";
 
 const BUILT_IN_CLOUD_KINDS = ["cloudflare", "aws"] as const;
-const CONFIDENTIALITY_MODES: readonly ConfidentialityMode[] = [
-  "non-confidential",
-  "unclassified",
-  "confidential-model",
-  "confidential-compute",
-];
 const PPM = 1_000_000;
 
 /** What the validator reads beside the document: the registered code and the deployment's configuration. */
@@ -372,3 +373,66 @@ export const loadProfile = (
       Match.exhaustive,
     );
   });
+
+/** A deployment's policy rules: each repository's, keyed `<owner>/<repo>`, in the order class resolution reads them. */
+export const PolicyRules = Schema.Record(Schema.String, Schema.Array(PolicyRule));
+export type PolicyRules = typeof PolicyRules.Type;
+
+/**
+ * Every rejection policy sync finds in a set of policy rules; empty means accepted. A rule that sets
+ * `confidential-compute` must set `acceptsFailingRequiredCheck: true`: such a repository's required checks run only on
+ * a device, and fail while none is eligible (FD-PROF-025). mameko's profile validator adds the eligible-device count of
+ * MAMEKO-ADM-020. A confidentiality mode belongs to the whole repository, so a rule that sets one matches every request.
+ */
+export const validatePolicyRules = (rules: PolicyRules): readonly Rejection[] =>
+  Object.entries(rules).flatMap(([repository, list]) =>
+    list.flatMap((rule, i): Rejection[] => {
+      if (rule.confidentiality === undefined) return [];
+      const path = `${repository}[${i}]`;
+      return [
+        ...(rule.match.run === undefined && rule.match.label === undefined
+          ? []
+          : [
+              {
+                item: "policy-rules",
+                path: `${path}.match`,
+                reason:
+                  "a confidentiality mode applies to the whole repository; the rule must match every request",
+              },
+            ]),
+        ...(rule.confidentiality === "confidential-compute" &&
+        rule.acceptsFailingRequiredCheck !== true
+          ? [
+              {
+                item: "policy-rules",
+                path: `${path}.acceptsFailingRequiredCheck`,
+                reason:
+                  "confidential-compute runs required checks on devices only; the rule must set acceptsFailingRequiredCheck: true",
+              },
+            ]
+          : []),
+      ];
+    }),
+  );
+
+const decodeRules = Schema.decodeUnknownExit(PolicyRules, { onExcessProperty: "error" });
+
+/**
+ * Policy sync: decodes a deployment's policy rules and answers them only when `validatePolicyRules` accepts every
+ * rule. A value that does not decode or a rejected rule fails with every rejection, and no rule of the set applies.
+ */
+export const syncPolicyRules = (raw: unknown) =>
+  Effect.gen(function* () {
+    const decoded = decodeRules(raw);
+    if (Exit.isFailure(decoded))
+      return yield* new PolicyRulesRejected({
+        rejections: [{ item: "policy-rules", path: "", reason: "the policy rules do not decode" }],
+      });
+    const rejections = validatePolicyRules(decoded.value);
+    if (rejections.length > 0) return yield* new PolicyRulesRejected({ rejections });
+    return decoded.value;
+  });
+
+/** The confidentiality mode the first of a repository's rules that sets one gives it, or undefined where none does. */
+export const confidentialityOf = (rules: readonly PolicyRule[]): ConfidentialityMode | undefined =>
+  rules.find((r) => r.confidentiality !== undefined)?.confidentiality;
