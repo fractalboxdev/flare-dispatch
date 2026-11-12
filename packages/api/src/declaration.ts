@@ -322,7 +322,7 @@ export const InclusionProofView = Schema.Struct({
   tree_size: Schema.Number,
   /** The proof's hashes in order, standard base64 like the checkpoint's root. */
   hashes: Schema.Array(Schema.String),
-  /** The signed checkpoint the proof is against. */
+  /** The signed checkpoint the proof is against, with each witness cosignature line it carries (FD-PROV-039). */
   checkpoint: Schema.String,
 });
 export type InclusionProofView = typeof InclusionProofView.Type;

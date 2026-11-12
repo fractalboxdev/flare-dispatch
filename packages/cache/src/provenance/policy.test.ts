@@ -55,7 +55,13 @@ const policy = (overrides: Partial<VerificationPolicy> = {}): VerificationPolicy
   policy_version: "2026-11-01",
   issued_at: T0,
   provenance_keys: [],
-  logs: [{ kind: "private", keys: [], witnesses: [{ name: "witness-1", key: "witness-1+abc" }] }],
+  logs: [
+    {
+      kind: "private",
+      keys: [],
+      witnesses: [{ name: "witness-1", key: "witness-1+abc", url: "https://witness.example" }],
+    },
+  ],
   devices: [],
   required_tiers: {
     release: "reproduced",

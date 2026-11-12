@@ -1,7 +1,8 @@
 // The statement lookups' port over the cache area's log-append intents (packages/cache/src/provenance/append.ts): an
 // execution's intents, or the intents whose statement names a subject digest, each with its log entry once the append
-// succeeded; and the private log's inclusion proof from the `TransparencyLog` object. A failed store read answers 503
-// `unavailable`, never an empty lookup, since an empty answer reads as "no statement".
+// succeeded; and the private log's inclusion proof from the `TransparencyLog` object, against the published checkpoint
+// with each witness cosignature it carries (FD-PROV-039). A failed store read answers 503 `unavailable`, never an empty
+// lookup, since an empty answer reads as "no statement".
 import {
   LogAppendStatus,
   LogAppendStore,

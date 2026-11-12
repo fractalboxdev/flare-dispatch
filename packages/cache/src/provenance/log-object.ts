@@ -1,7 +1,9 @@
 // The `TransparencyLog` Durable Object: the only writer of the private transparency log (FD-PROV-074). One object,
 // `idFromName("private")`, records each leaf at its index in its SQLite storage before it writes the leaf to R2, and
 // writes the log's leaves and tiles with create-only puts (log.ts). An append arms the object's alarm, which signs the checkpoint no later than
-// `CHECKPOINT_DELAY_MS` after it (FD-PROV-037).
+// `CHECKPOINT_DELAY_MS` after it (FD-PROV-037), then sends it to each witness the current verification policy names and
+// stores each cosignature returned (FD-PROV-039, witness.ts). A round that leaves a cosignature missing re-arms the
+// alarm with back-off; an append still arms it within `CHECKPOINT_DELAY_MS`.
 import { DurableObject } from "cloudflare:workers";
 import { Effect } from "effect";
 import {
@@ -17,8 +19,10 @@ import {
   type PrivateLogInclusionProof,
   type TransparencyLogConfig,
 } from "./log.ts";
+import { cosignCheckpoint, CosignOutcome, witnessRetryDelay, type Exclusive } from "./witness.ts";
 
 export * from "./log.ts";
+export * from "./witness.ts";
 
 /** A plain copy of an outcome: RPC carries plain objects, not the tagged-enum values `Data` builds. */
 const plain = <A extends object>(value: A): A => ({ ...value });
@@ -44,6 +48,10 @@ export abstract class TransparencyLog<Env = unknown> extends DurableObject<Env> 
     return run;
   }
 
+  /** An effect run in `serial`, its exit carried back unchanged. */
+  private readonly exclusive: Exclusive = (effect) =>
+    Effect.flatten(Effect.promise(() => this.serial(() => Effect.runPromiseExit(effect))));
+
   /**
    * Appends one entry, the countersigned envelope's bytes, and arms the checkpoint alarm (FD-PROV-074). An append
    * whose leaf write fails still arms it: the leaf is recorded, and the checkpoint run writes it first.
@@ -60,9 +68,11 @@ export abstract class TransparencyLog<Env = unknown> extends DurableObject<Env> 
         );
         return plain(outcome);
       } finally {
+        const armed = await this.ctx.storage.getAlarm();
+        // A witness retry may be armed further out than the checkpoint bound allows.
         if (
           this.store.signedSize() < this.store.size() &&
-          (await this.ctx.storage.getAlarm()) === null
+          (armed === null || armed > now + CHECKPOINT_DELAY_MS)
         )
           await this.ctx.storage.setAlarm(now + CHECKPOINT_DELAY_MS);
       }
@@ -103,13 +113,49 @@ export abstract class TransparencyLog<Env = unknown> extends DurableObject<Env> 
   }
 
   /**
-   * Signs the checkpoint, and re-arms itself when a leaf appended while it ran is still unsigned. A refusal does not
-   * re-arm: the next append does, and pages again.
+   * Sends the published checkpoint to each witness of the current policy whose cosignature it lacks, and writes each
+   * cosignature returned onto it (FD-PROV-039). Appends and checkpoint runs go on while the witness requests are out.
+   * A failed read of the policy or the checkpoint rejects.
+   */
+  async witness(): Promise<CosignOutcome> {
+    return plain(
+      await Effect.runPromise(cosignCheckpoint(this.store, this.config(), this.exclusive)),
+    );
+  }
+
+  /**
+   * Signs the checkpoint and sends it to the witnesses. It re-arms itself when a leaf appended while it ran is still
+   * unsigned, and with back-off when a witness's cosignature is still missing. A refusal does not re-arm: the next
+   * append does, and pages again.
    */
   override async alarm(): Promise<void> {
+    const startedAt = Date.now();
     const outcome = await this.checkpoint();
     console.log(JSON.stringify({ privateLogCheckpoint: outcome }));
-    if (CheckpointOutcome.$is("Published")(outcome) && this.store.signedSize() < this.store.size())
-      await this.ctx.storage.setAlarm(Date.now() + CHECKPOINT_DELAY_MS);
+    if (CheckpointOutcome.$is("Refused")(outcome)) return;
+    const witnessed = await this.witness().catch((e: unknown) => {
+      console.error(
+        JSON.stringify({ privateLogWitnesses: e instanceof Error ? e.message : String(e) }),
+      );
+      return undefined;
+    });
+    if (witnessed !== undefined) console.log(JSON.stringify({ privateLogWitnesses: witnessed }));
+    const missing =
+      witnessed === undefined ||
+      (CosignOutcome.$is("Witnessed")(witnessed) && witnessed.failed.length > 0);
+    const failures = missing ? this.store.witnessFailures() + 1 : 0;
+    this.store.setWitnessFailures(failures);
+    const now = Date.now();
+    const due = [
+      // A leaf appended since the checkpoint run, including one appended during the witness round, is still unsigned.
+      ...(this.store.signedSize() < this.store.size() ? [now + CHECKPOINT_DELAY_MS] : []),
+      ...(missing ? [now + witnessRetryDelay(failures)] : []),
+    ];
+    // An alarm armed after this one started, by an append during the round, stands when it is earlier.
+    const armed = await this.ctx.storage.getAlarm();
+    if (due.length > 0)
+      await this.ctx.storage.setAlarm(
+        Math.min(...due, ...(armed !== null && armed > startedAt ? [armed] : [])),
+      );
   }
 }
