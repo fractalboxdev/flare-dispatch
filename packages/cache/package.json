@@ -14,7 +14,8 @@
     "./provenance": "./src/provenance/index.ts",
     "./transparency-log": "./src/provenance/log-object.ts",
     "./provenance-policy": "./src/provenance/policy.ts",
-    "./provenance-policy-test-support": "./src/provenance/policy.test-support.ts"
+    "./provenance-policy-test-support": "./src/provenance/policy.test-support.ts",
+    "./crypto": "./src/crypto.ts"
   },
   "scripts": {
     "test": "vitest run"

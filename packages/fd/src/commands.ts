@@ -4,6 +4,7 @@
 import type { ExecutionView } from "@fractalboxdev/flare-dispatch-api/declaration";
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { call, FdFetch, makeClient } from "./client.ts";
 import { controlPlaneUrl } from "./config.ts";
@@ -14,6 +15,7 @@ import { BrowserLogin } from "./login.ts";
 import { Operability } from "./operability.ts";
 import { diagnostic, emit, EXIT, exitForVerdict, FdExit, FdFailure, reporting } from "./outcome.ts";
 import { runMcpShim } from "./mcp-shim.ts";
+import { ArtifactClass, verifyArtifact } from "./verify.ts";
 
 /** A client for the configured control plane under the developer's stored Access token. */
 export const session = Effect.gen(function* () {
@@ -492,6 +494,102 @@ export const lease = Command.make("lease", { json }, (f) =>
   ),
 ).pipe(Command.withDescription("The capacity lease's state on the local scheduler"));
 
+// --- fd verify -------------------------------------------------------------------------------------------------------
+
+/** A local input of `fd verify`: an unreadable file or invalid JSON is a usage error. */
+const readLocal = (flag: string, path: string) =>
+  Effect.try({
+    try: () => readFileSync(path),
+    catch: () =>
+      new FdFailure({
+        code: "invalid_input",
+        message: `${flag} ${path} is not a readable file`,
+        exitCode: EXIT.usage,
+      }),
+  });
+
+const readLocalJson = (flag: string, path: string) =>
+  Effect.flatMap(readLocal(flag, path), (bytes) =>
+    Effect.try({
+      try: (): unknown => JSON.parse(bytes.toString("utf8")),
+      catch: () =>
+        new FdFailure({
+          code: "invalid_input",
+          message: `${flag} ${path} is not JSON`,
+          exitCode: EXIT.usage,
+        }),
+    }),
+  );
+
+/**
+ * `fd verify <artifact>`: the verifier procedure of specs/provenance.md over local files only, with no network access;
+ * it exits 0 only when the artifact passes and 1 when the verifier rejects it (FD-IFC-071).
+ */
+export const verify = Command.make(
+  "verify",
+  {
+    artifact: Argument.String("artifact").pipe(
+      Argument.withDescription("The artifact file to verify"),
+    ),
+    policy: Flag.String("policy").pipe(
+      Flag.withDescription("The verification policy envelope, a JSON file"),
+    ),
+    bundle: Flag.String("bundle").pipe(
+      Flag.withDescription(
+        "The statement bundle: the statements, their log proofs and any reproduction record",
+      ),
+    ),
+    rootKey: Flag.String("root-key").pipe(
+      Flag.withDescription("The policy root key this verifier pinned, a public JWK file"),
+    ),
+    artifactClass: Flag.Literals("class", ArtifactClass.literals).pipe(
+      Flag.withDescription("The artifact class whose required tier the policy sets"),
+    ),
+    json,
+  },
+  (f) =>
+    reporting(f.json)(
+      Effect.gen(function* () {
+        const artifact = yield* readLocal("artifact", f.artifact);
+        const policy = yield* readLocalJson("--policy", f.policy);
+        const bundle = yield* readLocalJson("--bundle", f.bundle);
+        const rootKey = yield* readLocalJson("--root-key", f.rootKey);
+        if (typeof rootKey !== "object" || rootKey === null)
+          return yield* new FdFailure({
+            code: "invalid_input",
+            message: "--root-key is not a JWK",
+            exitCode: EXIT.usage,
+          });
+        const pass = yield* verifyArtifact({
+          rootKey: rootKey as JsonWebKey,
+          policy,
+          bundle,
+          artifactDigest: `sha256:${createHash("sha256").update(artifact).digest("hex")}`,
+          artifactClass: f.artifactClass,
+        }).pipe(
+          Effect.mapError(
+            (e) =>
+              new FdFailure({
+                code: "rejected",
+                message: `${e.reason}: ${e.message}`,
+                exitCode: EXIT.failure,
+                body: { error: "rejected", reason: e.reason, message: e.message },
+              }),
+          ),
+        );
+        yield* emit(
+          f.json,
+          pass,
+          `pass ${pass.artifact_digest} ${pass.artifact_class} at ${pass.tier} (requires ${pass.required_tier}), policy ${pass.policy_version}`,
+        );
+      }),
+    ),
+).pipe(
+  Command.withDescription(
+    "Verify an artifact's provenance offline against a policy and a statement bundle",
+  ),
+);
+
 /** Each `fd-<subcommand>` executable and its command; every one maps to one route or scheduler operation. */
 export const COMMANDS = {
   login,
@@ -509,6 +607,7 @@ export const COMMANDS = {
   rehearse,
   queue,
   lease,
+  verify,
 } as const;
 
 export type Subcommand = keyof typeof COMMANDS;
