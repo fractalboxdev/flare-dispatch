@@ -24,7 +24,7 @@ The reserved-to-dispatching CAS tests the absolute deadline against database tim
 
 ## Consequences
 
-Migration `0011_native_controller_deadline.sql` leaves legacy policy columns null and rejects inconsistent insertion or policy updates. An expired intent grants neither another POST nor new controller publication admission. Unrepresentable durations refuse before durable reservation.
+Migration `0015_native_controller_deadline.sql` leaves legacy policy columns null and rejects inconsistent insertion or policy updates. An expired intent grants neither another POST nor new controller publication admission. Unrepresentable durations refuse before durable reservation.
 
 Deadline admission checks do not impose a hard process wall-clock bound. Archive/R2 stream reads and disposal include unbounded awaits; expiry refuses the next admitted side effect after they return. Workflow eviction does not imply cancellation of the external GitHub job.
 
