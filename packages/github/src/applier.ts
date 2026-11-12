@@ -32,8 +32,10 @@ import {
   ConcludeDetails,
   concludedVerdictOf,
   concludeSummary,
+  concludedRecordedVerdict,
   confidentialSummary,
   OutcomePayload,
+  provenanceLines,
   quarantineAnnotations,
   truncate,
   Verdict,
@@ -122,6 +124,11 @@ interface Ctx extends RepoCall {
   readonly recorded: Verdict | null;
   /** True while the repository's confidentiality mode is `confidential-compute` (FD-GH-019). */
   readonly confidential: boolean;
+  /**
+   * The summary line of the logged statement a `{ provenance_logged }` row renders again (FD-PROV-042); null for any
+   * other row. That row changes only the summary of a check run already completed with its conclusion.
+   */
+  readonly loggedLine: string | null;
 }
 
 interface Handler<K extends CheckKind> {
@@ -305,9 +312,15 @@ const handlers: { readonly [K in CheckKind]: Handler<K> } = {
         );
         return yield* restOfQuarantine(ctx, p, concluded);
       }),
-    adopted: (_, p, run) =>
+    // A provenance update is on the check run only once the summary carries the statement's logged line; a
+    // `confidential-compute` summary carries no provenance, so there the conclusion alone shows it (FD-PROV-042).
+    adopted: (ctx, p, run) =>
       Effect.succeed(
-        run.status === "completed" && run.conclusion === checkConclusion(p.verdict).conclusion,
+        run.status === "completed" &&
+          run.conclusion === checkConclusion(p.verdict).conclusion &&
+          (ctx.loggedLine === null ||
+            ctx.confidential ||
+            (run.output.summary ?? "").includes(ctx.loggedLine)),
       ),
   },
   "check.summary": {
@@ -448,7 +461,11 @@ export const makeCheckRunApplier = Effect.gen(function* () {
         );
   };
 
-  /** The verdict a logged statement's update concludes with: the recorded one, once the records show it logged. */
+  /**
+   * The verdict a logged statement's update concludes with, once the records show it logged: the one the original
+   * conclusion applied to the recorded outcome, so a child the parent-ended cascade cancelled stays `failure` "parent
+   * closed before this part settled" (FD-GH-020). Beside it, the statement's line the summary then carries.
+   */
   const loggedVerdict = (known: ConclusionFacts, envelopeDigest: string) =>
     Effect.gen(function* () {
       if (known.recorded === null)
@@ -457,7 +474,10 @@ export const makeCheckRunApplier = Effect.gen(function* () {
       if (link === undefined)
         return yield* unservable(`provenance: the summary links no statement ${envelopeDigest}`);
       if (link.status === "log-pending") return yield* new StatementNotLogged({ envelopeDigest });
-      return known.recorded;
+      return {
+        verdict: concludedRecordedVerdict(known.recorded),
+        line: provenanceLines([link])[0] ?? null,
+      };
     });
 
   /**
@@ -467,14 +487,14 @@ export const makeCheckRunApplier = Effect.gen(function* () {
    * `{ verdict }` (FD-GH-020). Either way the name, head SHA, attempt, summary facts and log link come from the
    * execution's records (FD-GH-008, FD-GH-013, FD-GH-014, FD-GH-015). A row that carries the whole payload is taken as
    * it is. The `cp:check:provenance:<digest>` row of a statement logged after the conclusion carries
-   * `{ provenance_logged }`: it concludes again with the execution's recorded outcome, so the summary links the
+   * `{ provenance_logged }`: it concludes again with the verdict of the execution's recorded outcome, so the summary links the
    * statement's inclusion proof and subjects (FD-PROV-042); it waits while the records still show the statement
    * pending, and is refused for an execution with no recorded outcome.
    */
   const concludePayload = (executionId: string, payload: unknown) =>
     Effect.gen(function* () {
       const given = Schema.decodeUnknownOption(Payloads["check.conclude"])(payload);
-      if (Option.isSome(given)) return { payload: given.value, recorded: null };
+      if (Option.isSome(given)) return { payload: given.value, recorded: null, loggedLine: null };
       // The payload is decoded before the records are read, so a row no payload schema matches is refused at once.
       const logged = Schema.decodeUnknownOption(ProvenanceLoggedPayload)(payload);
       const source: VerdictSource = Option.isSome(logged)
@@ -482,8 +502,10 @@ export const makeCheckRunApplier = Effect.gen(function* () {
         : { stated: yield* statedVerdict(payload) };
       const known = yield* facts.of(executionId);
       if (known === null) return yield* unservable("conclude: no record of the execution");
-      const verdict =
-        "logged" in source ? yield* loggedVerdict(known, source.logged) : source.stated;
+      const { verdict, line } =
+        "logged" in source
+          ? yield* loggedVerdict(known, source.logged)
+          : { verdict: source.stated, line: null };
       const built: PayloadOf<"check.conclude"> = {
         name: known.name,
         head_sha: known.headSha,
@@ -492,7 +514,7 @@ export const makeCheckRunApplier = Effect.gen(function* () {
         attempt: known.attempt,
         details: known.details,
       };
-      return { payload: built, recorded: known.recorded };
+      return { payload: built, recorded: known.recorded, loggedLine: line };
     });
 
   const decode = (kind: CheckKind, executionId: string, payload: unknown) =>
@@ -502,7 +524,7 @@ export const makeCheckRunApplier = Effect.gen(function* () {
           Schema.decodeUnknownEffect(Payloads[kind])(payload).pipe(
             Effect.catchTag("SchemaError", (e) => unservable(`payload: ${e.message}`)),
           ),
-          (decoded) => ({ payload: decoded, recorded: null }),
+          (decoded) => ({ payload: decoded, recorded: null, loggedLine: null }),
         );
 
   const resolve = (row: IntentRow) =>
@@ -512,7 +534,7 @@ export const makeCheckRunApplier = Effect.gen(function* () {
         return yield* unservable("a check-run kind belongs to an execution");
       const kind = row.kind;
       if (!isCheckKind(kind)) return yield* unservable(`applier: ${kind} is not a check-run kind`);
-      const { payload, recorded } = yield* decode(kind, executionId, row.payload);
+      const { payload, recorded, loggedLine } = yield* decode(kind, executionId, row.payload);
       const installation = yield* directory.installationFor(row.scopeId);
       if (installation === null) {
         yield* raiseInstallationLost(row, "installation: not found");
@@ -525,6 +547,7 @@ export const makeCheckRunApplier = Effect.gen(function* () {
         row,
         recorded,
         confidential: facts.confidentialCompute(row.scopeId),
+        loggedLine,
       };
       // The handler table is keyed by kind, and the payload decoded under that kind's schema.
       const handler = handlers[kind] as unknown as Handler<CheckKind>;

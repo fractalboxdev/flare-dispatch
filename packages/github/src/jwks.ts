@@ -160,17 +160,20 @@ const fetchJwks = (url: string): Effect.Effect<readonly Jwk[], JwksUnavailable> 
 
 /**
  * Keeps each URL's JWKS in memory for at most one hour from its fetch, and fetches with `no-store` so no second cache
- * ages the keys further. A fresh read bypasses the memory at most once per 30 s and replaces the entry.
+ * ages the keys further. A fresh read bypasses the memory at most once per 30 s per URL and replaces the entry, so a
+ * fresh read of one issuer's keys never holds back another issuer's.
  */
 export const JwksSourceLive = Layer.sync(JwksSource, () => {
   const cache = new Map<string, { readonly keys: readonly Jwk[]; readonly fetchedAtMs: number }>();
-  let lastFreshMs = Number.NEGATIVE_INFINITY;
+  const lastFreshMs = new Map<string, number>();
   return JwksSource.of({
     keys: (url, { fresh }) =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
-        const bypass = fresh && now - lastFreshMs > REVALIDATE_COOLDOWN_MS;
-        if (bypass) lastFreshMs = now;
+        const bypass =
+          fresh &&
+          now - (lastFreshMs.get(url) ?? Number.NEGATIVE_INFINITY) > REVALIDATE_COOLDOWN_MS;
+        if (bypass) lastFreshMs.set(url, now);
         const entry = cache.get(url);
         if (!bypass && entry !== undefined && now - entry.fetchedAtMs < JWKS_TTL_MS)
           return entry.keys;

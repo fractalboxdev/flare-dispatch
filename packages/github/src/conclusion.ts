@@ -141,6 +141,17 @@ export const concludedVerdictOf = (
   );
 
 /**
+ * The verdict a conclusion states for an execution's recorded outcome, as `concludedVerdictOf` states it for the outcome
+ * row: the recorded verdict, except that a child the parent-ended cascade cancelled concludes `failure` "parent closed
+ * before this part settled" (FD-GH-020).
+ */
+export const concludedRecordedVerdict = (recorded: Verdict): Verdict =>
+  Match.value(recorded).pipe(
+    Match.tag("cancelled", ({ cause }) => (cause === PARENT_ENDED ? PARENT_CLOSED : recorded)),
+    Match.orElse(() => recorded),
+  );
+
+/**
  * The verdict an execution row records in its `status` and `reason` columns, which mameko's terminal write sets with the
  * outcome row; null while the execution is not terminal. A skip's reason reads `<reason>: <detail>`.
  */
