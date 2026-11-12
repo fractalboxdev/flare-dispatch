@@ -49,6 +49,8 @@ import {
   type EnforcementPosition,
   type GrantProfileName,
   type SubstrateRepoRef,
+  type RevokeFailure,
+  type SandboxUnavailable,
 } from "@fractalboxdev/flare-dispatch-substrate-contract";
 import {
   CONTAINER_AUTHORED_AUTH_HEADERS,
@@ -311,22 +313,57 @@ export async function applyGrant(target: GrantTarget, grant: Grant): Promise<voi
  * host missing, so a symmetrical revoke would silently weaken a static deny
  * list the moment one is added to the Sandbox class.
  */
+/** One diagnostic constructor excludes arbitrary provider names, text and identities. */
+const revokeFailure = (operation: RevokeFailure["operation"], error: unknown): RevokeFailure => {
+  let errorClass: RevokeFailure["errorClass"] = "unknown";
+  try {
+    if (error instanceof TypeError) errorClass = "TypeError";
+    else if (error instanceof RangeError) errorClass = "RangeError";
+    else if (error instanceof DOMException) errorClass = "DOMException";
+    else if (error instanceof Error) errorClass = "Error";
+  } catch { /* A hostile prototype must not interrupt the remaining cleanup. */ }
+  let status: unknown;
+  try {
+    if (typeof error === "object" && error !== null)
+      status = Object.getOwnPropertyDescriptor(error, "status")?.value;
+  } catch { /* Failed reflection contributes no status evidence. */ }
+  return { operation, errorClass, ...(typeof status === "number" && Number.isInteger(status)
+    && status >= 100 && status <= 599 ? { status } : {}) };
+};
+
+export class EgressRevokeError extends AggregateError {
+  constructor(errors: readonly unknown[], readonly failures: readonly RevokeFailure[]) {
+    super(errors, `egress: ${errors.length} revoke call(s) failed`);
+  }
+}
+
+/** Convert before Workers RPC, which does not preserve custom exception fields. */
+export const revokeRefusal = (error: unknown): SandboxUnavailable | undefined => {
+  try {
+    return error instanceof EgressRevokeError
+      ? { kind: "sandbox-unavailable", reason: error.message, revokeFailures: error.failures }
+      : undefined;
+  } catch { return undefined; }
+};
+
 export async function revokeGrant(target: GrantTarget, grant: Grant): Promise<void> {
   const errors: unknown[] = [];
-  const attempt = async (fn: () => Promise<void>) => {
+  const failures: RevokeFailure[] = [];
+  const attempt = async (operation: RevokeFailure["operation"], fn: () => Promise<void>) => {
     try {
       await fn();
     } catch (e) {
       errors.push(e);
+      failures.push(revokeFailure(operation, e));
     }
   };
 
-  for (const host of grant.allow) await attempt(() => target.removeAllowedHost(host));
-  for (const h of grant.handlers) await attempt(() => target.removeOutboundByHost(h.host));
-  if (grant.catchAll) await attempt(() => target.setOutboundHandler("denyAll"));
+  for (const host of grant.allow) await attempt("remove-admission", () => target.removeAllowedHost(host));
+  for (const h of grant.handlers) await attempt("remove-handler", () => target.removeOutboundByHost(h.host));
+  if (grant.catchAll) await attempt("deny-catch-all", () => target.setOutboundHandler("denyAll"));
 
   if (errors.length)
-    throw new AggregateError(errors, `egress: ${errors.length} revoke call(s) failed`);
+    throw new EgressRevokeError(errors, failures);
 }
 
 /**

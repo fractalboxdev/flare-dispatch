@@ -51,6 +51,7 @@ import {
   egressHandlers,
   grantParamsFor,
   revokeGrant,
+  revokeRefusal,
   serveGrantedRequest,
   type Grant,
   type GrantParams,
@@ -476,7 +477,13 @@ export class SubstrateSandboxBase extends Sandbox<Env> implements GuardedSandbox
    * recipe and its own DO id; a consumer never sees either).
    */
   async guardedExec(input: Omit<FenceInput, "containerId">): Promise<FenceOutcome> {
-    return runFence(this, { ...input, containerId: this.ctx.id.toString() });
+    try {
+      return await runFence(this, { ...input, containerId: this.ctx.id.toString() });
+    } catch (error) {
+      const refusal = revokeRefusal(error);
+      if (refusal !== undefined) return { ok:false, refusal };
+      throw error;
+    }
   }
 
   /**
