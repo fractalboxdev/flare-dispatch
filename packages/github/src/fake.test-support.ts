@@ -34,6 +34,10 @@ export interface FakeGithub {
   readonly facts: Map<string, ConclusionFacts>;
   /** Whether reading those records fails. */
   factsDown: boolean;
+  /** The repositories whose confidentiality mode is `confidential-compute`. */
+  readonly confidential: Set<string>;
+  /** Every body a create or update sent, in order. */
+  readonly bodies: CheckRunBody[];
   /** The details URL each create or update sent, by check-run id. */
   readonly detailsUrls: Map<number, string>;
   tokenRefreshes: number;
@@ -48,6 +52,8 @@ export const fakeGithub = (): FakeGithub => ({
   alarms: [],
   facts: new Map(),
   factsDown: false,
+  confidential: new Set(),
+  bodies: [],
   detailsUrls: new Map(),
   tokenRefreshes: 0,
 });
@@ -78,6 +84,7 @@ export const fakeGithubLayers = (
   const client = Layer.succeed(GithubClient, {
     createCheckRun: ({ body }) =>
       step("create", () => {
+        gh.bodies.push(body);
         const run: CheckRun = merge(
           {
             id: 1000 + gh.runs.length,
@@ -95,6 +102,7 @@ export const fakeGithubLayers = (
       }),
     updateCheckRun: ({ checkRunId, body }) =>
       step("update", () => {
+        gh.bodies.push(body);
         const i = gh.runs.findIndex((r) => r.id === checkRunId);
         const next = merge(gh.runs[i]!, body);
         gh.runs[i] = next;
@@ -130,12 +138,13 @@ export const fakeLayers = (
 ) => Layer.merge(fakeGithubLayers(gh, installations), fakeConcludeFacts(gh));
 
 /** The control plane's records the fake holds in `gh.facts`. */
-export const fakeConcludeFacts = (gh: Pick<FakeGithub, "facts" | "factsDown">) =>
+export const fakeConcludeFacts = (gh: Pick<FakeGithub, "facts" | "factsDown" | "confidential">) =>
   Layer.succeed(ConcludeFacts, {
     of: (executionId) =>
       gh.factsDown
         ? Effect.fail(new ConcludeFactsUnavailable({ message: "D1 unavailable" }))
         : Effect.succeed(gh.facts.get(executionId) ?? null),
+    confidentialCompute: (repo) => gh.confidential.has(repo),
   });
 
 /** One repository as the fake reads see it. */

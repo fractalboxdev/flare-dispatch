@@ -233,6 +233,8 @@ export const QuarantinedFailure = Schema.Struct({
 export const ConcludeDetails = Schema.Struct({
   class: Schema.String,
   executor_kind: Schema.NullOr(Schema.String),
+  /** The executor that holds the accepted lease, or else the latest one; the log pointer names it (FD-GH-019). */
+  executor_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
   placement_reason: Schema.String,
   queue_age_ms: Schema.Number,
   reserved_micro_usd: Schema.Number,
@@ -287,5 +289,26 @@ export const concludeSummary = (verdict: Verdict, d: ConcludeDetails): string =>
     ...facts,
     ...(quarantined.length === 0 ? [] : ["", "**Quarantined failures:**", ...quarantined]),
     ...(d.markdown === undefined ? [] : ["", d.markdown]),
+  ].join("\n");
+};
+
+/**
+ * The concluded check run's summary for a `confidential-compute` repository (FD-GH-019): the outcome, the conclusion
+ * reason, the class, the executor id and the log pointer. No failing step, run-authored markdown, quarantined test,
+ * placement or cost appears, since each can carry source, a log line or model output.
+ */
+export const confidentialSummary = (
+  verdict: Verdict,
+  d: ConcludeDetails,
+  logUrl: string | undefined,
+): string => {
+  const { conclusion, title } = checkConclusion(verdict);
+  const executor = d.executor_id ?? "none";
+  return [
+    `- Outcome: ${conclusion}`,
+    `- Reason: ${title}`,
+    `- Class: ${d.class}`,
+    `- Executor: ${executor}`,
+    `- Logs: kept on executor ${executor}${logUrl === undefined ? "" : `; pointer: ${logUrl}`}`,
   ].join("\n");
 };

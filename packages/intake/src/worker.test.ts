@@ -89,7 +89,10 @@ const worker = async (manifestText = DEFAULT_MANIFEST, required: readonly string
     Layer.provide(
       Layer.mergeAll(
         alarms,
-        Layer.succeed(ConcludeFacts, { of: () => Effect.succeed(null) }),
+        Layer.succeed(ConcludeFacts, {
+          of: () => Effect.succeed(null),
+          confidentialCompute: () => false,
+        }),
         Layer.succeed(SideOutputConfig, {
           appBot: { login: "app[bot]", name: "app[bot]", email: "app@example.com" },
           slack: undefined,
