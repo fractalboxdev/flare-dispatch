@@ -156,6 +156,8 @@ The verification policy is a JSON document in a DSSE envelope signed by the poli
 - the required tier per artifact class: `release`, `package`, `image`, `pr-artifact`, `preview`, `verdict`;
 - the SLSA Build level each builder tier may claim.
 
+Times in the policy are milliseconds since the Unix epoch, as a log entry's integrated time is. The DSSE payload type is `application/vnd.flare-dispatch.provenance-policy+json`. The operator publishes a version with `PUT /v1/provenance-policy`; the control plane checks it, appends the envelope to the private log, and serves it once the log holds it. The control plane records every provenance key and log key it uses, with the window of each, in its own key history; the first use of a key it has not recorded is the rotation instant. A version is refused when its key history drops or changes an entry of the earlier version, or omits or misstates a key in that record. `packages/cache/src/provenance/policy.ts` implements the checks, the key history and the device revocation's `compromised_from`.
+
 A verifier runs the procedure below. `fd verify` implements it with no network access when given the policy and a statement bundle.
 
 ```mermaid

@@ -1,5 +1,14 @@
 import { issueOidcToken, type OidcKeys } from "@fractalboxdev/flare-dispatch-cache/oidc";
-import { Effect } from "effect";
+import { parseProvenanceKey } from "@fractalboxdev/flare-dispatch-cache/provenance";
+import {
+  POLICY_PAYLOAD_TYPE,
+  type KeysInUse,
+} from "@fractalboxdev/flare-dispatch-cache/provenance-policy";
+import {
+  memoryPolicyStores,
+  type MemoryPolicyStores,
+} from "@fractalboxdev/flare-dispatch-cache/provenance-policy-test-support";
+import { Context, Effect, Layer } from "effect";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   actionsClaims,
@@ -13,6 +22,8 @@ import {
 } from "../api.test-support.ts";
 import { INCIDENT_CAPS } from "../declaration.ts";
 import { apiError } from "../errors.ts";
+import { provenancePolicies } from "../live/provenance-policy.ts";
+import { ProvenancePolicies } from "../ports.ts";
 
 let h: Harness;
 beforeAll(async () => {
@@ -509,5 +520,138 @@ describe("well-known", () => {
 
   it("/health needs no identity", async () => {
     expect(await json(await h.fetch("/health"))).toEqual({ status: "ok" });
+  });
+});
+
+describe("verification policy", () => {
+  const POLICY_PATH = "/.well-known/flare-dispatch/provenance-policy.json";
+
+  const policy = (version: string, overrides: Record<string, unknown> = {}) => ({
+    policy_version: version,
+    issued_at: 1_700_000_000_000,
+    provenance_keys: [],
+    logs: [{ kind: "private", keys: [] }],
+    devices: [],
+    required_tiers: {
+      release: "reproduced",
+      package: "platform",
+      image: "platform",
+      "pr-artifact": "platform",
+      preview: "platform",
+      verdict: "device-signed",
+    },
+    slsa_build_levels: { cloud: 3, "attested-dedicated": 2, "managed-workstation": 1 },
+    ...overrides,
+  });
+
+  /** The operator's envelope; the policy root key's signature is the verifier's to check (FD-PROV-053). */
+  const envelope = (p: Record<string, unknown>) => ({
+    payloadType: POLICY_PAYLOAD_TYPE,
+    payload: Buffer.from(JSON.stringify(p)).toString("base64"),
+    signatures: [{ keyid: "policy-root", sig: "MEUCIQ==" }],
+  });
+
+  const publish = async (body: unknown) =>
+    h.fetch(
+      "/v1/provenance-policy",
+      await h.asAccess(OPERATOR, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ envelope: body }),
+      }),
+    );
+
+  let stores: MemoryPolicyStores;
+
+  /** The real publisher over in-memory stores, holding `keys`. */
+  const holding = (keys: KeysInUse) => {
+    h.doubles.provenancePolicies = Context.get(
+      Effect.runSync(
+        Layer.build(provenancePolicies(keys).pipe(Layer.provide(stores.layer))).pipe(Effect.scoped),
+      ),
+      ProvenancePolicies,
+    );
+  };
+
+  beforeEach(() => {
+    stores = memoryPolicyStores();
+    holding({ provenance: undefined, log: undefined });
+  });
+
+  it("[FD-PROV-044] serves the current policy at the well-known path and every earlier version by its policy_version", async () => {
+    expect((await h.fetch(POLICY_PATH)).status).toBe(404);
+    const first = envelope(policy("v1"));
+    const second = envelope(policy("v2"));
+    expect((await publish(first)).status).toBe(200);
+    expect(await json(await h.fetch(POLICY_PATH))).toEqual(first);
+    expect((await publish(second)).status).toBe(200);
+    const current = await h.fetch(POLICY_PATH);
+    expect(current.status).toBe(200);
+    expect(await json(current)).toEqual(second);
+    expect(await json(await h.fetch(`${POLICY_PATH}?policy_version=v1`))).toEqual(first);
+    expect(await json(await h.fetch(`${POLICY_PATH}?policy_version=v2`))).toEqual(second);
+    const missing = await h.fetch(`${POLICY_PATH}?policy_version=v9`);
+    expect(missing.status).toBe(404);
+    expect((await json(missing))["error"]).toBe("not_found");
+  });
+
+  it("[FD-PROV-044] only an operator publishes a policy version", async () => {
+    const body = JSON.stringify({ envelope: envelope(policy("v1")) });
+    const init = { method: "PUT", headers: { "content-type": "application/json" }, body };
+    expect((await h.fetch("/v1/provenance-policy", init)).status).toBe(401);
+    expect((await h.fetch("/v1/provenance-policy", await h.asAccess(MEMBER, init))).status).toBe(
+      403,
+    );
+    expect(stores.appended).toHaveLength(0);
+  });
+
+  it("[FD-PROV-046] a published version is in the transparency log before the route serves it", async () => {
+    const body = envelope(policy("v1"));
+    stores.failAppend = "the log is unreachable";
+    const failed = await publish(body);
+    expect(failed.status).toBe(503);
+    expect((await json(failed))["error"]).toBe("unavailable");
+    expect((await h.fetch(POLICY_PATH)).status).toBe(404);
+    expect((await h.fetch(`${POLICY_PATH}?policy_version=v1`)).status).toBe(404);
+    stores.failAppend = undefined;
+    const published = await publish(body);
+    expect(await json(published)).toMatchObject({ policy_version: "v1", log_index: 0 });
+    expect(stores.appended.map((e) => JSON.parse(e) as unknown)).toEqual([body]);
+    expect(await json(await h.fetch(POLICY_PATH))).toEqual(body);
+  });
+
+  it("[FD-PROV-052] refuses a policy that lets a managed-workstation builder claim a SLSA Build level above L1", async () => {
+    const levels = { cloud: 3, "attested-dedicated": 3, "managed-workstation": 2 };
+    const refused = await publish(envelope(policy("v1", { slsa_build_levels: levels })));
+    expect(refused.status).toBe(400);
+    expect(await json(refused)).toMatchObject({ error: "invalid_body" });
+    expect(
+      String(
+        (await json(await publish(envelope(policy("v1", { slsa_build_levels: levels })))))[
+          "message"
+        ],
+      ),
+    ).toContain("slsa-level");
+    expect(stores.appended).toHaveLength(0);
+    expect((await h.fetch(POLICY_PATH)).status).toBe(404);
+  });
+
+  it("[FD-PROV-047] refuses a policy whose key history omits the provenance key the control plane holds", async () => {
+    const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+      "sign",
+      "verify",
+    ])) as CryptoKeyPair;
+    const priv = (await crypto.subtle.exportKey("jwk", pair.privateKey)) as JsonWebKey;
+    const key = parseProvenanceKey(JSON.stringify({ ...priv, kid: "prov-1" }))!;
+    holding({ provenance: key, log: undefined });
+    const omits = await publish(envelope(policy("v1")));
+    expect(omits.status).toBe(400);
+    expect(String((await json(omits))["message"])).toContain("drops key prov-1");
+    const [entry] = stores.history.provenance;
+    const keeps = await publish(envelope(policy("v1", { provenance_keys: [entry] })));
+    expect(keeps.status).toBe(200);
+    expect(await json(await h.fetch(POLICY_PATH))).toEqual(
+      envelope(policy("v1", { provenance_keys: [entry] })),
+    );
   });
 });
