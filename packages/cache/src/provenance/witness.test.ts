@@ -34,6 +34,7 @@ import {
   type WitnessFetch,
   type WitnessState,
 } from "./witness.ts";
+import { witnessOf, type Witness } from "./witness.test-support.ts";
 
 const storedTree = async (entries: readonly Uint8Array[]) => {
   const stored = new Map<string, Uint8Array>();
@@ -100,36 +101,6 @@ describe("RFC 9162 consistency proofs", () => {
     expect(await consistencyProof(0, 5, read)).toEqual([]);
   });
 });
-
-/** A C2SP tlog-cosignature witness: an Ed25519 key, its note verifier key and its cosignature lines. */
-const witnessOf = async (name: string) => {
-  const pair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
-    "sign",
-    "verify",
-  ])) as CryptoKeyPair;
-  const raw = new Uint8Array((await crypto.subtle.exportKey("raw", pair.publicKey)) as ArrayBuffer);
-  const key = new Uint8Array([0x04, ...raw]);
-  const keyId = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new Uint8Array([...utf8(`${name}\n`), ...key])),
-  ).subarray(0, 4);
-  return {
-    name,
-    vkey: `${name}+${hex(keyId)}+${toBase64(key)}`,
-    cosign: async (body: string, time: number) => {
-      const ts = new Uint8Array(8);
-      new DataView(ts.buffer).setBigUint64(0, BigInt(time));
-      const sig = new Uint8Array(
-        await crypto.subtle.sign(
-          { name: "Ed25519" },
-          pair.privateKey,
-          utf8(`cosignature/v1\ntime ${time}\n${body}`),
-        ),
-      );
-      return `— ${name} ${toBase64(new Uint8Array([...keyId, ...ts, ...sig]))}`;
-    },
-  };
-};
-type Witness = Awaited<ReturnType<typeof witnessOf>>;
 
 /** One `add-checkpoint` request a witness received. */
 interface Received {
@@ -400,6 +371,83 @@ describe("a witness round over the published checkpoint", () => {
       ),
     ).toMatchObject({ _tag: "NoCheckpoint" });
     expect(received).toEqual([]);
+  });
+
+  it("[FD-PROV-039] sends nothing to a witness whose policy key is malformed or names another witness", async () => {
+    const [a, b, other] = [
+      await witnessOf("witness-a.example"),
+      await witnessOf("witness-b.example"),
+      await witnessOf("witness-other.example"),
+    ];
+    const received: Received[] = [];
+    const { state, text } = await published(5);
+    const outcome = await run(
+      state,
+      [
+        { ...policyWitness(a, "a.example"), key: "witness-a.example+00000000+not-a-key" },
+        { ...policyWitness(b, "b.example"), key: other.vkey },
+      ],
+      routed({ "a.example": stubWitness(a, received), "b.example": stubWitness(b, received) }),
+    );
+    expect(outcome).toMatchObject({
+      cosigned: [],
+      failed: [
+        { witness: a.name, reason: "bad-key" },
+        { witness: b.name, reason: "bad-key", detail: other.vkey },
+      ],
+    });
+    expect(received).toEqual([]);
+    expect(await checkpointNow()).toBe(text);
+  });
+
+  it("[FD-PROV-039] records a witness that holds a larger tree than the log's as ahead, and stores nothing", async () => {
+    const a = await witnessOf("witness-a.example");
+    const received: Received[] = [];
+    const { state, text, witnessed } = await published(5);
+    const outcome = await run(
+      state,
+      [policyWitness(a, "a.example")],
+      routed({ "a.example": stubWitness(a, received, { size: 8 }) }),
+    );
+    expect(outcome).toMatchObject({
+      cosigned: [],
+      failed: [{ witness: a.name, reason: "witness-ahead" }],
+    });
+    // The 409 named size 8: no second request is sent from a size the log does not have.
+    expect(received.map((r) => r.old)).toEqual([0]);
+    expect(await checkpointNow()).toBe(text);
+    expect(witnessed.has(a.name)).toBe(false);
+  });
+
+  it("[FD-PROV-039] appends nothing when the checkpoint is replaced between the round's read and its put", async () => {
+    const a = await witnessOf("witness-a.example");
+    const received: Received[] = [];
+    const { state, witnessed } = await published(5);
+    const replaced = await signCheckpoint(
+      { origin: ORIGIN, size: 6, root: await treeHead(6, state.read) },
+      logKey,
+    );
+    const stub = stubWitness(a, received);
+    const outcome = await run(
+      state,
+      [policyWitness(a, "a.example")],
+      routed({
+        // A checkpoint run publishes a grown checkpoint while the witness request is out.
+        "a.example": async (url, body) => {
+          await bucket.put(`${prefix}${CHECKPOINT_PATH}`, replaced);
+          return stub(url, body);
+        },
+      }),
+    );
+    expect(outcome).toMatchObject({
+      size: 5,
+      cosigned: [],
+      failed: [{ witness: a.name, reason: "checkpoint-changed" }],
+    });
+    expect(received).toHaveLength(1);
+    expect(await checkpointNow()).toBe(replaced);
+    // The witness cosigned size 5, so the next round sends from it.
+    expect(witnessed.get(a.name)).toBe(5);
   });
 });
 

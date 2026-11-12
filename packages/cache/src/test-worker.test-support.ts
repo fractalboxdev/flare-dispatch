@@ -11,6 +11,7 @@ import {
   TransparencyLog as LogObject,
   type TransparencyLogConfig,
 } from "./provenance/log-object.ts";
+import type { PolicyWitness } from "./provenance/policy.ts";
 
 export { CacheLedger } from "./ledger-object.ts";
 
@@ -24,7 +25,9 @@ interface Env {
 /**
  * The `TransparencyLog` with its alarms recorded in its own storage, and its R2 prefix settable, so each suite writes
  * under a prefix of its own and an alarm armed by one suite's object never writes into another's. `failLeafWrites(n)`
- * makes the next `n` leaf puts write their object and then reject, as a put whose answer is lost does.
+ * makes the next `n` leaf puts write their object and then reject, as a put whose answer is lost does. Its policy
+ * names the witnesses `useWitness` adds: one with an answer answers every request `200` with it, and one without is
+ * unreachable.
  */
 export class TransparencyLog extends LogObject<Env> {
   private recorder() {
@@ -32,6 +35,9 @@ export class TransparencyLog extends LogObject<Env> {
     sql.exec("create table if not exists test_alarms (alarm text not null)");
     sql.exec("create table if not exists test_prefix (prefix text not null)");
     sql.exec("create table if not exists test_failing_writes (n integer not null)");
+    sql.exec(
+      "create table if not exists test_witnesses (name text primary key, key text not null, url text not null, answer text)",
+    );
     return sql;
   }
 
@@ -72,9 +78,33 @@ export class TransparencyLog extends LogObject<Env> {
             sql.exec("insert into test_alarms (alarm) values (?)", JSON.stringify(alarm));
           }),
       }),
-      witnesses: Effect.succeed([]),
-      fetch: (url, init) => fetch(url, init),
+      witnesses: Effect.sync(() =>
+        this.witnesses(sql).map(({ name, key, url }) => ({ name, key, url })),
+      ),
+      fetch: async (url) => {
+        const answer = this.witnesses(sql).find((w) => url.startsWith(w.url))?.answer;
+        if (answer == null) throw new Error(`connect ECONNREFUSED ${url}`);
+        return new Response(answer);
+      },
     };
+  }
+
+  private witnesses(sql: SqlStorage) {
+    return sql
+      .exec<PolicyWitness & { answer: string | null }>(
+        "select name, key, url, answer from test_witnesses",
+      )
+      .toArray();
+  }
+
+  useWitness(witness: PolicyWitness, answer: string | null): void {
+    this.recorder().exec(
+      "insert or replace into test_witnesses (name, key, url, answer) values (?, ?, ?, ?)",
+      witness.name,
+      witness.key,
+      witness.url,
+      answer,
+    );
   }
 
   usePrefix(prefix: string): void {

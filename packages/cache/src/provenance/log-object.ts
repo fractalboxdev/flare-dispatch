@@ -19,7 +19,7 @@ import {
   type PrivateLogInclusionProof,
   type TransparencyLogConfig,
 } from "./log.ts";
-import { cosignCheckpoint, CosignOutcome, witnessRetryDelay } from "./witness.ts";
+import { cosignCheckpoint, CosignOutcome, witnessRetryDelay, type Exclusive } from "./witness.ts";
 
 export * from "./log.ts";
 export * from "./witness.ts";
@@ -47,6 +47,10 @@ export abstract class TransparencyLog<Env = unknown> extends DurableObject<Env> 
     this.queue = run.catch(() => undefined);
     return run;
   }
+
+  /** An effect run in `serial`, its exit carried back unchanged. */
+  private readonly exclusive: Exclusive = (effect) =>
+    Effect.flatten(Effect.promise(() => this.serial(() => Effect.runPromiseExit(effect))));
 
   /**
    * Appends one entry, the countersigned envelope's bytes, and arms the checkpoint alarm (FD-PROV-074). An append
@@ -110,11 +114,12 @@ export abstract class TransparencyLog<Env = unknown> extends DurableObject<Env> 
 
   /**
    * Sends the published checkpoint to each witness of the current policy whose cosignature it lacks, and writes each
-   * cosignature returned onto it (FD-PROV-039). A failed read of the policy or the checkpoint rejects.
+   * cosignature returned onto it (FD-PROV-039). Appends and checkpoint runs go on while the witness requests are out.
+   * A failed read of the policy or the checkpoint rejects.
    */
-  witness(): Promise<CosignOutcome> {
-    return this.serial(async () =>
-      plain(await Effect.runPromise(cosignCheckpoint(this.store, this.config()))),
+  async witness(): Promise<CosignOutcome> {
+    return plain(
+      await Effect.runPromise(cosignCheckpoint(this.store, this.config(), this.exclusive)),
     );
   }
 
@@ -124,6 +129,7 @@ export abstract class TransparencyLog<Env = unknown> extends DurableObject<Env> 
    * append does, and pages again.
    */
   override async alarm(): Promise<void> {
+    const startedAt = Date.now();
     const outcome = await this.checkpoint();
     console.log(JSON.stringify({ privateLogCheckpoint: outcome }));
     if (CheckpointOutcome.$is("Refused")(outcome)) return;
@@ -141,11 +147,15 @@ export abstract class TransparencyLog<Env = unknown> extends DurableObject<Env> 
     this.store.setWitnessFailures(failures);
     const now = Date.now();
     const due = [
-      ...(CheckpointOutcome.$is("Published")(outcome) && this.store.signedSize() < this.store.size()
-        ? [now + CHECKPOINT_DELAY_MS]
-        : []),
+      // A leaf appended since the checkpoint run, including one appended during the witness round, is still unsigned.
+      ...(this.store.signedSize() < this.store.size() ? [now + CHECKPOINT_DELAY_MS] : []),
       ...(missing ? [now + witnessRetryDelay(failures)] : []),
     ];
-    if (due.length > 0) await this.ctx.storage.setAlarm(Math.min(...due));
+    // An alarm armed after this one started, by an append during the round, stands when it is earlier.
+    const armed = await this.ctx.storage.getAlarm();
+    if (due.length > 0)
+      await this.ctx.storage.setAlarm(
+        Math.min(...due, ...(armed !== null && armed > startedAt ? [armed] : [])),
+      );
   }
 }

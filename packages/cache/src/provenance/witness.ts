@@ -227,24 +227,24 @@ type Asked =
   | { readonly failure: WitnessFailureReason; readonly detail: string };
 
 /**
- * Asks one witness to cosign the checkpoint of `size` leaves, starting from the size it last cosigned. A `409` names
- * the witness's size; the request is sent once more from it.
+ * Asks one witness to cosign the checkpoint of `size` leaves, starting from `recorded`, the size it last cosigned. A
+ * `409` names the witness's size; the request is sent once more from it.
  */
 const ask = (
-  state: WitnessState,
-  config: WitnessConfig,
+  read: ReadStoredHash,
+  fetchWitness: WitnessFetch,
   witness: PolicyWitness,
   key: WitnessKey,
   checkpoint: string,
   size: number,
+  recorded: number,
 ) =>
   Effect.gen(function* () {
     const body = noteBody(checkpoint);
-    const recorded = state.witnessedSize(witness.name) ?? 0;
     let from = recorded <= size ? recorded : 0;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const proof = yield* Effect.promise(() => consistencyProof(from, size, state.read));
-      const answer = yield* submitCheckpoint(config.fetch, witness, from, proof, checkpoint);
+      const proof = yield* Effect.promise(() => consistencyProof(from, size, read));
+      const answer = yield* submitCheckpoint(fetchWitness, witness, from, proof, checkpoint);
       const next: Asked | number = yield* WitnessAnswer.$match(answer, {
         Cosigned: ({ lines }) =>
           Effect.gen(function* () {
@@ -284,23 +284,42 @@ const ask = (
   );
 
 /**
+ * Runs `effect` with the object's appends and checkpoint runs held off until it ends. A witness round runs only its
+ * reads of the object's state and its writes under it, never a witness request.
+ */
+export type Exclusive = <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
+
+/**
  * One witness round over the published checkpoint (FD-PROV-039): sends it to each witness of the current policy whose
  * cosignature it does not yet carry, and writes every cosignature returned onto it. Only a checkpoint over the object's
  * own tree at its signed size is sent.
+ *
+ * The round reads the checkpoint, its etag and the signed size under `exclusive`, sends the witness requests outside
+ * it, and takes it again to record each witness's size and append the verified lines with an `etagMatches` put. An
+ * append or a checkpoint run therefore never waits on a witness, and no checkpoint run reads the checkpoint between
+ * the round's read and its put.
  */
-export const cosignCheckpoint = (state: WitnessState, config: WitnessConfig) =>
+export const cosignCheckpoint = (
+  state: WitnessState,
+  config: WitnessConfig,
+  exclusive: Exclusive = (effect) => effect,
+) =>
   Effect.gen(function* () {
     const path = `${config.prefix}${CHECKPOINT_PATH}`;
-    const object = yield* Effect.tryPromise({
-      try: async () => {
-        const got = await config.bucket.get(path);
-        return got === null ? null : { etag: got.etag, text: await got.text() };
-      },
-      catch: (e) =>
-        new WitnessStoreFailed({ path, message: e instanceof Error ? e.message : String(e) }),
-    });
+    const { object, size } = yield* exclusive(
+      Effect.tryPromise({
+        try: async () => {
+          const got = await config.bucket.get(path);
+          return {
+            object: got === null ? null : { etag: got.etag, text: await got.text() },
+            size: state.signedSize(),
+          };
+        },
+        catch: (e) =>
+          new WitnessStoreFailed({ path, message: e instanceof Error ? e.message : String(e) }),
+      }),
+    );
     const checkpoint = object === null ? undefined : parseCheckpoint(object.text);
-    const size = state.signedSize();
     if (object === null || checkpoint === undefined || checkpoint.size !== size || size === 0)
       return CosignOutcome.NoCheckpoint();
     const root = yield* Effect.promise(() => treeHead(size, state.read));
@@ -308,43 +327,51 @@ export const cosignCheckpoint = (state: WitnessState, config: WitnessConfig) =>
 
     const witnesses = yield* config.witnesses;
     const present = signatureLines(object.text);
+    // The witnesses are asked at once, so a round takes at most one witness's two requests.
+    const answers = yield* Effect.forEach(
+      witnesses,
+      (witness) =>
+        Effect.gen(function* () {
+          const key = yield* Effect.promise(() => parseWitnessKey(witness.key));
+          if (key === undefined || key.name !== witness.name)
+            return { failure: "bad-key" as const, detail: witness.key } satisfies Asked;
+          for (const line of present)
+            if (yield* Effect.promise(() => verifyCosignature(checkpoint.body, key, line)))
+              return "already" as const;
+          const recorded = state.witnessedSize(witness.name) ?? 0;
+          return yield* ask(state.read, config.fetch, witness, key, object.text, size, recorded);
+        }),
+      { concurrency: "unbounded" },
+    );
     const cosigned: string[] = [];
     const already: string[] = [];
     const failed: WitnessFailure[] = [];
     const lines: string[] = [];
-    for (const witness of witnesses) {
-      const key = yield* Effect.promise(() => parseWitnessKey(witness.key));
-      if (key === undefined || key.name !== witness.name) {
-        failed.push({ witness: witness.name, reason: "bad-key", detail: witness.key });
-        continue;
+    for (const [i, answer] of answers.entries()) {
+      const witness = witnesses[i]!.name;
+      if (answer === "already") already.push(witness);
+      else if ("failure" in answer)
+        failed.push({ witness, reason: answer.failure, detail: answer.detail });
+      else {
+        cosigned.push(witness);
+        lines.push(...answer.lines);
       }
-      let carried = false;
-      for (const line of present)
-        if (!carried)
-          carried = yield* Effect.promise(() => verifyCosignature(checkpoint.body, key, line));
-      if (carried) {
-        already.push(witness.name);
-        continue;
-      }
-      const asked = yield* ask(state, config, witness, key, object.text, size);
-      if ("failure" in asked) {
-        failed.push({ witness: witness.name, reason: asked.failure, detail: asked.detail });
-        continue;
-      }
-      state.witnessed(witness.name, asked.size);
-      cosigned.push(witness.name);
-      lines.push(...asked.lines);
     }
     if (lines.length === 0) return CosignOutcome.Witnessed({ size, cosigned, already, failed });
-    const put = yield* Effect.tryPromise({
-      try: () =>
-        config.bucket.put(path, `${object.text}${lines.map((l) => `${l}\n`).join("")}`, {
-          onlyIf: { etagMatches: object.etag },
-          httpMetadata: { contentType: "text/plain; charset=utf-8" },
-        }),
-      catch: (e) =>
-        new WitnessStoreFailed({ path, message: e instanceof Error ? e.message : String(e) }),
-    });
+    // Each witness that cosigned holds `size` now, whether or not its line is written.
+    const put = yield* exclusive(
+      Effect.tryPromise({
+        try: () => {
+          for (const witness of cosigned) state.witnessed(witness, size);
+          return config.bucket.put(path, `${object.text}${lines.map((l) => `${l}\n`).join("")}`, {
+            onlyIf: { etagMatches: object.etag },
+            httpMetadata: { contentType: "text/plain; charset=utf-8" },
+          });
+        },
+        catch: (e) =>
+          new WitnessStoreFailed({ path, message: e instanceof Error ? e.message : String(e) }),
+      }),
+    );
     if (put === null)
       return CosignOutcome.Witnessed({
         size,

@@ -11,6 +11,7 @@ import { startMiniflare } from "../support.test-support.ts";
 import { parseProvenanceKey, type ProvenanceKey } from "./dsse.ts";
 import {
   CHECKPOINT_BOUND_MS,
+  CHECKPOINT_DELAY_MS,
   PRIVATE_LOG_REFUSED_ALARM,
   type AppendOutcome,
   type CheckpointOutcome,
@@ -36,6 +37,9 @@ import {
   verifyInclusion,
   type ReadStoredHash,
 } from "./merkle.ts";
+import type { PolicyWitness } from "./policy.ts";
+import { WITNESS_RETRY_MIN_MS } from "./witness.ts";
+import { witnessOf } from "./witness.test-support.ts";
 
 const bytes = (...values: number[]) => Uint8Array.from(values);
 
@@ -182,6 +186,7 @@ interface LogStub {
   size(): Promise<number>;
   usePrefix(prefix: string): Promise<void>;
   failLeafWrites(n: number): Promise<void>;
+  useWitness(witness: PolicyWitness, answer: string | null): Promise<void>;
   delivered(): Promise<readonly Alarm[]>;
 }
 
@@ -228,6 +233,16 @@ describe("the TransparencyLog Durable Object", () => {
       await new Promise((r) => setTimeout(r, 200));
     }
     return undefined;
+  };
+
+  /** The alarm once a run re-arms it later than `after`, and when the suite saw it. */
+  const armedAfter = async (log: LogStub, after: number) => {
+    for (let waited = 0; waited < 20_000; waited += 200) {
+      const due = await log.checkpointDueAt();
+      if (due !== null && due > after) return { due, seenAt: Date.now() };
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error(`no alarm armed after ${after}`);
   };
 
   /** A checkpoint run's outcome once the tree is signed at `size`, by this run or by the alarm before it. */
@@ -280,6 +295,59 @@ describe("the TransparencyLog Durable Object", () => {
         hex(await leafHash(entry)),
       );
     expect(await log.checkpoint()).toMatchObject({ _tag: "Unchanged", size: 5 });
+  });
+
+  it("[FD-PROV-037] [FD-PROV-039] a round that leaves a cosignature missing re-arms with back-off, and an append pulls that retry back within the checkpoint delay", async () => {
+    const { log, prefix } = await freshLog();
+    const down = await witnessOf("witness-down.example");
+    await log.useWitness({ name: down.name, key: down.vkey, url: "https://down.example/" }, null);
+
+    const first = (await log.append(utf8("unwitnessed-0"))) as { integratedAt: number };
+    const retry = await armedAfter(log, first.integratedAt + CHECKPOINT_DELAY_MS);
+    expect(await checkpointOf(prefix, 1)).toBeDefined();
+    expect(retry.due).toBeGreaterThanOrEqual(first.integratedAt + WITNESS_RETRY_MIN_MS);
+    expect(retry.due).toBeLessThanOrEqual(retry.seenAt + WITNESS_RETRY_MIN_MS);
+
+    // The retry is armed further out than the checkpoint delay; an append arms the alarm within it.
+    const second = (await log.append(utf8("unwitnessed-1"))) as { integratedAt: number };
+    const due = (await log.checkpointDueAt())!;
+    expect(due).toBeLessThanOrEqual(second.integratedAt + CHECKPOINT_DELAY_MS);
+
+    // That checkpoint run's witness round leaves the cosignature missing again, and the delay doubles.
+    const doubled = await armedAfter(log, due);
+    expect(await checkpointOf(prefix, 2)).toBeDefined();
+    expect(doubled.due).toBeGreaterThanOrEqual(second.integratedAt + 2 * WITNESS_RETRY_MIN_MS);
+    expect(doubled.due).toBeLessThanOrEqual(doubled.seenAt + 2 * WITNESS_RETRY_MIN_MS);
+  });
+
+  it("[FD-PROV-039] a round that leaves no cosignature missing arms no witness retry", async () => {
+    const { log, prefix } = await freshLog();
+    const up = await witnessOf("witness-up.example");
+    const entry = utf8("witnessed-0");
+    const line = await up.cosign(
+      checkpointBody({
+        origin: "ci.example.com/private-log",
+        size: 1,
+        root: await leafHash(entry),
+      }),
+      1_780_000_000,
+    );
+    await log.useWitness({ name: up.name, key: up.vkey, url: "https://up.example/" }, `${line}\n`);
+    await log.append(entry);
+
+    let cosigned = false;
+    for (let waited = 0; waited < 20_000 && !cosigned; waited += 200) {
+      const got = await bucket.get(`${prefix}${CHECKPOINT_PATH}`);
+      cosigned = got !== null && (await got.text()).endsWith(`${line}\n`);
+      if (!cosigned) await new Promise((r) => setTimeout(r, 200));
+    }
+    expect(cosigned).toBe(true);
+    let due = await log.checkpointDueAt();
+    for (let waited = 0; waited < 5_000 && due !== null; waited += 200) {
+      await new Promise((r) => setTimeout(r, 200));
+      due = await log.checkpointDueAt();
+    }
+    expect(due).toBeNull();
   });
 
   it("answers each leaf's RFC 9162 inclusion proof against the published checkpoint, and none for a leaf it does not cover", async () => {

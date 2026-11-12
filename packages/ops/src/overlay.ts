@@ -111,7 +111,6 @@ export const OverlayValues = Schema.Struct({
       reattestIntervalDays: opt(Count),
       auditRate: opt(Schema.Number),
       statementRetentionDays: opt(Count),
-      witnesses: opt(Schema.Array(NonEmpty)),
     }),
   ),
 });
