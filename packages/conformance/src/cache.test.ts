@@ -516,8 +516,11 @@ describe("a confidential-compute repository on the composed control plane", () =
 // ---- FD-CACHE-041: create-only manifests, on the control plane's bucket and on a real R2 bucket ------------------
 
 /**
- * A real R2 bucket, the second backend of the manifest commit. CI sets these when the operator provides an R2 token
- * with object read and write on one bucket; without them the real-R2 leg is skipped and the Miniflare leg still runs.
+ * A real R2 bucket, the second backend of the manifest commit. CI sets these when the operator provides a Cloudflare
+ * API token with Account > Workers Scripts: Edit on the account that holds the bucket. `startRemoteProxySession`
+ * uploads a preview Worker through the Workers API and reaches the bucket through that Worker's R2 binding, and it
+ * registers a workers.dev subdomain when the account has none; an R2 object read/write token has no Workers Scripts
+ * permission and fails in `beforeAll`. Without these the real-R2 leg is skipped and the Miniflare leg still runs.
  */
 const REAL_R2 = {
   bucket: process.env["FD_R2_CONFORMANCE_BUCKET"] ?? "",
