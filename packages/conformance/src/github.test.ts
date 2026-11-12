@@ -260,7 +260,6 @@ const sideServices = () => {
 const unreadRecords = Layer.succeed(WritebackRecords, {
   blobs: () => Effect.die("a lookup reads no staged blob"),
   modelCalls: () => Effect.die("a lookup reads no model call"),
-  modelEntries: () => Effect.die("a lookup reads no model entry"),
   issuedCredentials: () => Effect.die("a lookup reads no issued credential"),
 });
 

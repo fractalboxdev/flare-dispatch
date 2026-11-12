@@ -338,13 +338,12 @@ def Call.isGithubWrite : Call → Bool
   | _ => false
 
 /-- What decides the applier's path: the payload decodes, the run has a `writeback` block, it declares a model call
-site, the records hold a model call, the first and second gate verdicts, the line-scoped paths, the branch checks, the branch's existing head, human
+site, the first and second gate verdicts, the line-scoped paths, the branch checks, the branch's existing head, human
 commits on it, the entries and an open pull request. -/
 structure ApplyFacts where
   decodes : Bool
   hasWriteback : Bool
   declaresModel : Bool
-  modelCalled : Bool
   first : Verdict
   lineScoped : List String
   second : Verdict
@@ -362,11 +361,10 @@ def ApplyFacts.final (f : ApplyFacts) : Verdict :=
   | .accept => .accept
   | .reject _ => if f.lineScoped.isEmpty then f.first else f.second
 
-/-- The reads of the control plane's records, then the first gate run (applier.ts `modelAuthorship`, the model entries
-of a model-authored write for its `Drafted-With:` trailer (FD-AGT-040), `gateStagedWrite`). -/
+/-- The reads of the control plane's records, then the first gate run (applier.ts `modelAuthorship`,
+`gateStagedWrite`). -/
 def preCalls (f : ApplyFacts) : List Call :=
   (if f.declaresModel then [] else [.records "modelCalls"]) ++
-    (if f.declaresModel || f.modelCalled then [.records "modelEntries"] else []) ++
     [.records "blobs", .records "issuedCredentials", .gate]
 
 /-- The base-commit reads and the second gate run, when the first verdict rejects on a line of a manifest file. -/
@@ -402,12 +400,12 @@ def applierCalls (f : ApplyFacts) : List Call :=
 
 theorem preCalls_not_github (f : ApplyFacts) : ∀ c ∈ preCalls f, c.isGithub = false := by
   have h : (preCalls f).all (fun c => !c.isGithub) = true := by
-    unfold preCalls; cases f.declaresModel <;> cases f.modelCalled <;> rfl
+    unfold preCalls; cases f.declaresModel <;> rfl
   intro c hc
   simpa using List.all_eq_true.mp h c hc
 
 theorem gate_mem_preCalls (f : ApplyFacts) : Call.gate ∈ preCalls f := by
-  unfold preCalls; cases f.declaresModel <;> cases f.modelCalled <;> simp
+  unfold preCalls; cases f.declaresModel <;> simp
 
 theorem regateCalls_not_write (f : ApplyFacts) : ∀ c ∈ regateCalls f, c.isGithubWrite = false := by
   intro c hc

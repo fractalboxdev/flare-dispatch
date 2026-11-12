@@ -148,31 +148,4 @@ describe("writebackRecordsLayer", () => {
     expect(await calls("cloud")).toMatchObject({ _tag: "Success", success: false });
     expect(await calls("device")).toMatchObject({ _tag: "Failure", failure: { source: "device" } });
   });
-
-  it("[FD-AGT-040] answers no model entry only for a cloud placement without a call, and fails where the records name none", async () => {
-    const db = recordsDb();
-    db.exec(`insert into executors values ('c1', 'cloudflare'), ('d1', 'device');
-      insert into placements values ('called', 'accepted', 1, 'c1', 1), ('cloud', 'accepted', 1, 'c1', 1),
-        ('device', 'accepted', 1, 'd1', 1);
-      insert into model_calls values ('m1', 'called')`);
-    const entries = (id: string) =>
-      run(
-        Effect.flatMap(WritebackRecords, (r) => r.modelEntries(id)),
-        db,
-        memoryBucket(),
-      );
-    expect(await entries("cloud")).toMatchObject({ _tag: "Success", success: [] });
-    expect(await entries("called")).toMatchObject({
-      _tag: "Failure",
-      failure: { source: "gateway" },
-    });
-    expect(await entries("device")).toMatchObject({
-      _tag: "Failure",
-      failure: { source: "device" },
-    });
-    expect(await entries("unplaced")).toMatchObject({
-      _tag: "Failure",
-      failure: { source: "placements" },
-    });
-  });
 });

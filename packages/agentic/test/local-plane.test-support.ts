@@ -188,7 +188,6 @@ export const localPlane = async (opts: { readonly rate?: number } = {}) => {
         }),
       ),
     modelCalls: () => Effect.succeed(false),
-    modelEntries: () => Effect.succeed([]),
     issuedCredentials: () => Effect.succeed([]),
   });
   const usage = Layer.succeed(CapacityUsage, { modelCalls: () => Effect.succeed(false) });

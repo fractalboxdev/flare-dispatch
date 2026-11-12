@@ -63,12 +63,7 @@ const row = (m: Manifest): IntentRow => ({
 });
 
 const recordsLayer = (
-  opts: {
-    blobs?: Record<string, string>;
-    modelCalls?: boolean;
-    modelEntries?: readonly string[] | "fail";
-    fail?: boolean;
-  } = {},
+  opts: { blobs?: Record<string, string>; modelCalls?: boolean; fail?: boolean } = {},
 ) =>
   Layer.succeed(WritebackRecords, {
     blobs: (_x, entries) =>
@@ -83,10 +78,6 @@ const recordsLayer = (
             }),
           ),
     modelCalls: () => Effect.succeed(opts.modelCalls ?? false),
-    modelEntries: () =>
-      opts.modelEntries === "fail"
-        ? Effect.fail(new StagedWriteReadFailed({ source: "gateway", detail: "down" }))
-        : Effect.succeed(opts.modelEntries ?? []),
     issuedCredentials: () => Effect.succeed([]),
   });
 
@@ -111,75 +102,6 @@ const WRITES = [
   "updatePull",
   "addLabels",
 ];
-
-/** The commit message's last paragraph, which git reads as its trailer block. */
-const trailerBlock = (message: string | undefined) =>
-  (message ?? "").split("\n\n").at(-1)?.split("\n") ?? [];
-
-describe("Drafted-With trailer", () => {
-  const authoredBy = (declaresModel: boolean) => ({
-    ...config,
-    writebackFor: (run: string) =>
-      run === "spec-drift-pr" ? { writeback, declaresModel } : undefined,
-  });
-  const applyWith = (
-    repo: FakeRepo,
-    m: Manifest,
-    records: ReturnType<typeof recordsLayer>,
-    declaresModel = true,
-    payloadExtra: Record<string, unknown> = {},
-  ) => {
-    const r = row(m);
-    return Effect.runPromise(
-      applyPrPropose(authoredBy(declaresModel))({
-        ...r,
-        payload: { ...(r.payload as object), ...payloadExtra },
-      }).pipe(Effect.provide(Layer.merge(fakeGitLayer(repo), records))),
-    );
-  };
-  const headMessage = (repo: FakeRepo) =>
-    repo.commits.get(repo.refs.get("flare-dispatch/spec-drift") as string)?.message;
-
-  it("[FD-AGT-040] a model-authored commit carries the model entry ids of the records, never ids the run returned", async () => {
-    const repo = fakeRepo();
-    const forged = manifest({
-      message: "docs(specs): reconcile\n\nDrafted-With: forged-model\n  drafted-with : other-forged",
-    });
-    const answer = await applyWith(
-      repo,
-      forged,
-      recordsLayer({ modelEntries: ["workers-ai/llama", "bedrock/sonnet", "workers-ai/llama"] }),
-      true,
-      { draftedWith: ["result-model"], modelEntries: ["result-model"] },
-    );
-    expect(answer).toMatchObject({ _tag: "applied" });
-    const message = headMessage(repo) ?? "";
-    expect(trailerBlock(message)).toEqual([
-      "Drafted-With: bedrock/sonnet, workers-ai/llama",
-      executionTrailer("x1"),
-    ]);
-    expect(message.match(/drafted-with/gi)).toHaveLength(1);
-    expect(message).not.toMatch(/forged|result-model/);
-
-    const unmodelled = fakeRepo();
-    const human = await applyWith(
-      unmodelled,
-      forged,
-      recordsLayer({ modelCalls: false, modelEntries: "fail" }),
-      false,
-    );
-    expect(human).toMatchObject({ _tag: "applied" });
-    expect(trailerBlock(headMessage(unmodelled))).toEqual([executionTrailer("x1")]);
-    expect(headMessage(unmodelled)).not.toMatch(/drafted-with/i);
-  });
-
-  it("[FD-AGT-040] if the model entries cannot be read, then the applier makes no GitHub write and answers retryable", async () => {
-    const repo = fakeRepo();
-    const answer = await applyWith(repo, manifest(), recordsLayer({ modelEntries: "fail" }));
-    expect(answer).toEqual({ _tag: "retryable", reason: "writeback: read gateway" });
-    expect(repo.calls.filter((c) => WRITES.includes(c))).toEqual([]);
-  });
-});
 
 describe("pr.propose", () => {
   it("[FD-AGT-034] the binding returns the manifest of a success result with a staged write, and none otherwise", () => {

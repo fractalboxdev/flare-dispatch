@@ -248,7 +248,6 @@ export const runScenario = async (seed: number): Promise<Observation> => {
             : Effect.succeed(blobsOf(p, entries)),
         ),
       modelCalls: () => Effect.succeed(true),
-      modelEntries: () => Effect.succeed([]),
       issuedCredentials: () => Effect.succeed([]),
     });
     const git = fakeGitLayer(repo);

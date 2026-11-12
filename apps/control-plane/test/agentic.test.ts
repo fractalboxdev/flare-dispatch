@@ -84,8 +84,6 @@ const refusingGit = Layer.succeed(
 const unreadRecords = Layer.succeed(WritebackRecords, {
   blobs: () => Effect.fail(new StagedWriteReadFailed({ source: "artifacts", detail: "unread" })),
   modelCalls: () => Effect.fail(new StagedWriteReadFailed({ source: "gateway", detail: "unread" })),
-  modelEntries: () =>
-    Effect.fail(new StagedWriteReadFailed({ source: "gateway", detail: "unread" })),
   issuedCredentials: () =>
     Effect.fail(new StagedWriteReadFailed({ source: "credentials", detail: "unread" })),
 });
