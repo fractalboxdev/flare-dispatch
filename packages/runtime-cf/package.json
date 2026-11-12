@@ -14,6 +14,7 @@
     "./run-supersede": "./src/run-supersede-d1.ts",
     "./checks-github": "./src/checks-github.ts",
     "./native": "./src/native.ts",
+    "./child-runs": "./src/child-runs-cf.ts",
     "./testing": "./src/test-support.ts"
   },
   "scripts": {

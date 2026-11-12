@@ -43,6 +43,8 @@ export type ChildRunHandle = {
 
 /** Arguments to `spawnChildRun`. */
 export type SpawnChildRunOpts = {
+  /** A commit the trusted parent resolved from its authenticated GitHub context, such as an annotated release tag. */
+  readonly githubSha?: string;
   /** The child run name — must be registered on the same deploy. */
   readonly run: string;
   /**

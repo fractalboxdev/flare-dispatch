@@ -14,6 +14,17 @@ const runFanOut = async <T>(
 };
 
 describe("fanOut", () => {
+  it("carries the trusted parent's resolved source to every child without adding it to recipe inputs", async () => {
+    const githubSha = "a".repeat(40);
+    const { spawned } = await runFanOut({
+      run: "cell",
+      items: [1, 2],
+      toInput: (n) => ({ n }),
+      githubSha,
+    });
+    expect(spawned.map((s) => s.githubSha)).toEqual([githubSha, githubSha]);
+    expect(spawned.map((s) => s.input)).toEqual([{ n: 1 }, { n: 2 }]);
+  });
   it("spawns one child per item, in order, with mapped inputs + shard coords", async () => {
     const { handles, spawned } = await runFanOut({
       run: "playwright-e2e-shard",

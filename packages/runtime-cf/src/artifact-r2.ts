@@ -102,7 +102,17 @@ export const makeR2ArtifactLive = <T extends Sandbox>(
   ns?: DurableObjectNamespace<T>,
   publicOrigin?: string,
 ): Layer.Layer<Artifact> => {
-  const service: ArtifactService = {
+const service: ArtifactService = {
+    uploadVerified: ({ name, body, size, sha256, contentType }) => Effect.tryPromise({
+      try: async () => {
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name.endsWith(".")) {
+          await body.cancel(); throw new Error("verified artifact name invalid");
+        }
+        await putStream(bucket, artifactKey(executionId, name), body, size, { contentType }, sha256);
+        return artifactUrl(executionId, name, publicOrigin);
+      },
+      catch: cause => new ArtifactUploadFailed({ name, cause }),
+    }),
     upload: ({ name, path, contentType, container }) =>
       Effect.tryPromise({
         try: async () => {
