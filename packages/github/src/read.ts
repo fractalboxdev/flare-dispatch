@@ -70,6 +70,8 @@ export class GithubRead extends Context.Service<
       ref: string,
     ) => Effect.Effect<RepoFile | null, GithubReadError>;
     readonly defaultBranch: (repo: string) => Effect.Effect<string, GithubReadError>;
+    /** The repository's visibility as GitHub reports it: `public`, `private` or `internal`. */
+    readonly visibility: (repo: string) => Effect.Effect<string, GithubReadError>;
     /** The commit SHA at the head of `branch`. */
     readonly branchHead: (repo: string, branch: string) => Effect.Effect<string, GithubReadError>;
     /** Open pull requests, most recently updated first, at most 100. */
@@ -119,6 +121,7 @@ const ContentFile = Schema.Struct({
   content: Schema.optionalKey(Schema.String),
 });
 const Repository = Schema.Struct({ default_branch: Schema.String });
+const RepositoryVisibility = Schema.Struct({ visibility: Schema.String });
 const Branch = Schema.Struct({ commit: Schema.Struct({ sha: Schema.String }) });
 const BranchRules = Schema.Array(
   Schema.Struct({
@@ -239,6 +242,11 @@ export const githubReadLayer = (options: GithubClientOptions) =>
           Effect.map(
             Effect.flatMap(get(repo, `/repos/${repo}`), decode(Repository)),
             (r) => r.default_branch,
+          ),
+        visibility: (repo) =>
+          Effect.map(
+            Effect.flatMap(get(repo, `/repos/${repo}`), decode(RepositoryVisibility)),
+            (r) => r.visibility,
           ),
         branchHead: (repo, branch) =>
           Effect.map(

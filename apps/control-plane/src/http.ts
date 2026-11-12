@@ -22,11 +22,13 @@ import {
   oidcKeyFromSecret,
   Operations,
   opsGroup,
+  provenanceGroup,
   provenancePolicies,
   provenancePolicyGroup,
   provenanceStatements,
   RequestId,
   routerGroup,
+  StatementVisibility,
   toFetchHandler,
   wellKnownGroup,
 } from "@fractalboxdev/flare-dispatch-api";
@@ -45,6 +47,7 @@ import {
   PolicyStore,
   PolicyTransparencyLog,
 } from "@fractalboxdev/flare-dispatch-cache/provenance-policy";
+import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { handleIntake, WEBHOOK_MAX_BYTES } from "@fractalboxdev/flare-dispatch-intake";
 import {
   livenessReport,
@@ -52,7 +55,7 @@ import {
   OpsStore,
   runOpsMigrations,
 } from "@fractalboxdev/flare-dispatch-ops";
-import { Context, Effect, Layer } from "effect";
+import { Clock, Context, Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { ArtifactsHandlers, cacheReads, LogsHandlers } from "./cache.ts";
 import { isolateServices, type IsolateServices } from "./composition.ts";
@@ -93,7 +96,10 @@ export const intakeGroup = routerGroup(
  * artifact reads pass the link surface's gate like every other route (FD-IFC-017); the fleet view, the phase gate's
  * records, the spend view and the install flow pass the operability group's gates. The MCP server at `/mcp` reads the
  * same per-request ports as the routes its tools wrap, so its `dispatch` reaches intake's admission through the
- * declared dispatch route's `Intake` port, as trigger `mcp` (FD-IFC-072, FD-IFC-074, FD-INT-062).
+ * declared dispatch route's `Intake` port, as trigger `mcp` (FD-IFC-072, FD-IFC-074, FD-INT-062). The statement
+ * lookups under `/v1/provenance/*` serve a caller without identity the statements of public repositories, and every
+ * other statement behind an Access JWT (FD-IFC-053, FD-IFC-054); the verification policy is served at its well-known
+ * path by `wellKnownGroup`.
  */
 export const router = mount(
   wellKnownGroup,
@@ -104,6 +110,7 @@ export const router = mount(
   operabilityGroup(OperabilityHandlers),
   executorsGroup,
   provenancePolicyGroup,
+  provenanceGroup,
   logsGroup(LogsHandlers),
   artifactsGroup(ArtifactsHandlers),
   mcpGroup,
@@ -176,11 +183,58 @@ const statements = (env: ControlPlaneEnv) => {
   return provenanceStatements(
     ns === undefined ? undefined : ns.get(ns.idFromName(PRIVATE_LOG_NAME)),
   ).pipe(
-    Layer.provide(
-      Layer.succeed(LogAppendStore)(d1LogAppendStore(env.DB as unknown as D1Database)),
-    ),
+    Layer.provide(Layer.succeed(LogAppendStore)(d1LogAppendStore(env.DB as unknown as D1Database))),
   );
 };
+
+/** How long a visibility read answers later lookups of the same repository. */
+export const VISIBILITY_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * The visibility reads each `GithubRead` has answered, by repository. The isolate builds its `GithubRead` once, so the
+ * cache lasts the isolate's lifetime rather than one request's.
+ */
+const visibilityReads = new WeakMap<object, Map<string, { open: boolean; at: number }>>();
+
+/**
+ * Whether a repository's GitHub visibility is `public`, which opens its statements to a caller without identity
+ * (FD-IFC-053); any other visibility keeps them behind an Access JWT (FD-IFC-054). The isolate's `GithubRead` reads it
+ * at most once per repository per `VISIBILITY_TTL_MS`, so lookups without identity cost the installation's rate limit
+ * one read per repository per interval. A read that fails answers not public and is not kept, so an unreadable
+ * visibility never opens a statement and the next lookup reads it again.
+ */
+export const statementVisibility = Layer.effect(StatementVisibility)(
+  Effect.gen(function* () {
+    const read = yield* GithubRead;
+    let known = visibilityReads.get(read);
+    if (known === undefined) {
+      known = new Map();
+      visibilityReads.set(read, known);
+    }
+    const cache = known;
+    return {
+      isPublic: (repository: string) =>
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          const seen = cache.get(repository);
+          if (seen !== undefined && now - seen.at < VISIBILITY_TTL_MS) return seen.open;
+          return yield* read.visibility(repository).pipe(
+            Effect.map((visibility) => visibility === "public"),
+            Effect.tap((open) => Effect.sync(() => cache.set(repository, { open, at: now }))),
+            Effect.catch((error) =>
+              Effect.as(
+                Effect.logWarning(
+                  "repository visibility unreadable; its statements need an Access identity",
+                  { repository, cause: String(error) },
+                ),
+                false,
+              ),
+            ),
+          );
+        }),
+    };
+  }),
+);
 
 const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateServices>) =>
   Layer.mergeAll(
@@ -203,6 +257,7 @@ const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateS
     spendViewOf(env),
     policies(env),
     statements(env),
+    statementVisibility.pipe(Layer.provide(Layer.succeedContext(isolate))),
   );
 
 /** One request through the router, with the isolate's services and the ones its routes read. */

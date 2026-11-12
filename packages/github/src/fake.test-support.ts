@@ -163,6 +163,8 @@ export interface FakeRepo {
   protectedRefs: string[];
   /** Each collaborator's permission by login; any other login has `none`. */
   permissions: Record<string, RepoPermission>;
+  /** The repository's GitHub visibility: `public`, `private` or `internal`. */
+  visibility: string;
 }
 
 export const fakeRepo = (overrides: Partial<FakeRepo> = {}): FakeRepo => ({
@@ -174,6 +176,7 @@ export const fakeRepo = (overrides: Partial<FakeRepo> = {}): FakeRepo => ({
   required: {},
   protectedRefs: [],
   permissions: {},
+  visibility: "private",
   ...overrides,
 });
 
@@ -216,6 +219,7 @@ export const fakeReadLayer = (state: FakeReads) => {
         return text === undefined ? null : { size: new TextEncoder().encode(text).length, text };
       }),
     defaultBranch: (repo) => read("defaultBranch", repo, (r) => r.defaultBranch),
+    visibility: (repo) => read("visibility", repo, (r) => r.visibility),
     branchHead: (repo, branch) =>
       Effect.flatMap(
         read("branchHead", repo, (r) => r.branches[branch]),

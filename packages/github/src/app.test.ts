@@ -299,6 +299,20 @@ describe("GithubRead", () => {
     ).toBe(true);
   });
 
+  it("reads a repository's visibility as GitHub reports it", async () => {
+    const visibility = await live(
+      GithubRead.use((r) => r.visibility("acme/app")),
+      {
+        ...covered,
+        "GET /repos/acme/app": () => ({
+          status: 200,
+          body: { default_branch: "main", private: true, visibility: "internal" },
+        }),
+      },
+    );
+    expect(visibility).toBe("internal");
+  });
+
   it("[FD-INT-032] the required set is the union of ruleset and branch-protection checks", async () => {
     const checks = await live(
       GithubRead.use((r) => r.requiredChecks("acme/app", "main")),
