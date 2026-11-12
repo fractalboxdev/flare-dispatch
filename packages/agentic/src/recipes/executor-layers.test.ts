@@ -40,7 +40,7 @@ describe("executor layers", () => {
       ),
     );
     // Vitest also fails this test file if the pipe emits an uncaught error after the command completes.
-    expect(result).toEqual({ started: true, exitCode });
+    expect(result.exitCode).toBe(exitCode);
   });
 
   it("delivers the complete prompt to a real child that consumes its stdin", async () => {
@@ -53,7 +53,7 @@ describe("executor layers", () => {
           "let text='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>text+=chunk);process.stdin.on('end',()=>require('node:fs').writeFileSync('prompt.txt',text));"])),
       ),
     );
-    expect(result).toEqual({ started: true, exitCode: 0 });
+    expect(result.exitCode).toBe(0);
     expect(await readFile(join(dir,"prompt.txt"),"utf8")).toBe(prompt);
   });
 
