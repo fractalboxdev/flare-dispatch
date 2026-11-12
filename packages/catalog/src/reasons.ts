@@ -44,6 +44,8 @@ export const FD_REASON_KINDS = {
   jobs: "finding",
   smoke: "finding",
   image: "finding",
+  scan: "finding",
+  "scan-error": "infra",
   review: "finding",
   "no-fix": "finding",
   suppression: "infra",
@@ -128,3 +130,14 @@ export const ScanConfigReason = {
   /** That ecosystem's snapshot is older than `scan.advisoryMaxAgeHours` (FD-GATE-107). */
   advisoryStale: (ecosystem: string): Reason => `config: advisory snapshot stale ${ecosystem}`,
 } as const satisfies Record<string, Reason | ((s: string) => Reason)>;
+
+/**
+ * The reasons a security-gate scan concludes with from its scan results (specs/runs/gate.md FD-GATE-090, FD-GATE-091):
+ * a scanner or baseline check that ends as a tool error, with how it ended (`exit <code>`, `signal <name>`, `timeout`,
+ * `deadline`, `output over limit` or `not started`), and the scanners and baseline checks that report a finding, in the
+ * order they ran.
+ */
+export const ScanReason = {
+  error: (id: string, end: string): Reason => `scan-error: ${id} ${end}`,
+  finding: (ids: readonly string[]): Reason => `scan: ${ids.join(", ")}`,
+} as const;

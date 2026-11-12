@@ -82,6 +82,8 @@ describe("reason kinds", () => {
       jobs: "finding",
       smoke: "finding",
       image: "finding",
+      scan: "finding",
+      "scan-error": "infra",
       review: "finding",
       "no-fix": "finding",
       suppression: "infra",

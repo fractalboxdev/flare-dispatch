@@ -2,7 +2,7 @@
 // `Workspace` Layers (MAMEKO-RUN-036 to MAMEKO-RUN-039) replace `processGateExec` once they exist; every recipe
 // depends on the interface only.
 //
-// `processGateExec` runs a command as a supervised child process. The child leads its own process group, so a timeout
+// `processGateExec` runs a command, through `/bin/sh -c` or as an argv with no shell, as a supervised child process. The child leads its own process group, so a timeout
 // or a stopped runner kills everything the command started. Its output reaches the runner's stderr: the runner's
 // stdout carries only the result line, and any other line there loses the result (MAMEKO-EXEC-132).
 import { spawn } from "node:child_process";
@@ -40,6 +40,14 @@ export interface CommandOptions {
   readonly outputLimitBytes?: number;
 }
 
+/**
+ * A command run as an argv with no shell: `argv[0]` is the binary, looked up on the `PATH` of `env`, and every other
+ * element reaches it as one argument, so no element is word-split, globbed or expanded.
+ */
+export interface ArgvOptions extends Omit<CommandOptions, "command"> {
+  readonly argv: readonly [string, ...string[]];
+}
+
 /** A finished command: how it ended and its combined output, which stops at the output limit. */
 export interface CommandRun {
   readonly exit: CommandExit;
@@ -64,6 +72,7 @@ export class GateExec extends Context.Service<
     /** A fresh, empty directory that no other job shares, removed when the scope closes (FD-GATE-030). */
     readonly workspace: Effect.Effect<string, never, Scope.Scope>;
     readonly run: (options: CommandOptions) => Effect.Effect<CommandRun>;
+    readonly runArgv: (options: ArgvOptions) => Effect.Effect<CommandRun>;
     readonly readFile: (path: string) => Effect.Effect<Uint8Array, WorkspaceReadFailed>;
     /** Replaces an existing file's bytes and keeps its mode. */
     readonly writeFile: (path: string, bytes: Uint8Array) => Effect.Effect<void, WorkspaceWriteFailed>;
@@ -80,11 +89,15 @@ const signalGroup = (pid: number, signal: NodeJS.Signals) => {
 
 const concat = (chunks: readonly Buffer[]): Uint8Array => new Uint8Array(Buffer.concat(chunks));
 
-/** Runs one command to its exit; interruption and a SIGTERM to the runner kill its process group. */
-export const runCommand = (options: CommandOptions): Effect.Effect<CommandRun> =>
+/** Runs `file` with `args` to its exit; interruption and a SIGTERM to the runner kill its process group. */
+const supervise = (
+  file: string,
+  args: readonly string[],
+  options: Omit<CommandOptions, "command">,
+): Effect.Effect<CommandRun> =>
   Effect.callback<CommandRun>((resume) => {
     const limit = options.outputLimitBytes ?? OUTPUT_LIMIT_BYTES;
-    const child = spawn("/bin/sh", ["-c", options.command], {
+    const child = spawn(file, [...args], {
       cwd: options.cwd,
       env: options.env,
       detached: true,
@@ -159,6 +172,16 @@ export const runCommand = (options: CommandOptions): Effect.Effect<CommandRun> =
     });
   });
 
+/** Runs one command through `/bin/sh -c` to its exit. */
+export const runCommand = (options: CommandOptions): Effect.Effect<CommandRun> =>
+  supervise("/bin/sh", ["-c", options.command], options);
+
+/** Runs one argv with no shell to its exit; a binary that cannot start ends `NotStarted`. */
+export const runArgv = (options: ArgvOptions): Effect.Effect<CommandRun> => {
+  const [file, ...args] = options.argv;
+  return supervise(file, args, options);
+};
+
 /**
  * A workspace sits outside the repository the runner starts from, so a dependency the commit lacks cannot resolve from
  * a parent `node_modules`. `FD_WORKSPACE_ROOT` names where it goes, the OS temporary directory by default.
@@ -175,6 +198,7 @@ const workspace: Effect.Effect<string, never, Scope.Scope> = Effect.acquireRelea
 export const processGateExec: Layer.Layer<GateExec> = Layer.succeed(GateExec, {
   workspace,
   run: runCommand,
+  runArgv,
   readFile: (path) =>
     Effect.tryPromise({
       try: async () => new Uint8Array(await readFile(path)),
