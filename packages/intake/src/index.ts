@@ -56,6 +56,10 @@ export {
 } from "./layer.ts";
 export { followOnSubmitterLayer } from "./follow-on.ts";
 export {
+  reproductionSubmission,
+  reproductionSubmitterLayer,
+} from "./reproduction.ts";
+export {
   LOCAL_CLASS,
   LOCAL_ONLY,
   LocalSubmitBody,

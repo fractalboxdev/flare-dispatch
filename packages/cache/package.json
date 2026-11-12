@@ -13,6 +13,7 @@
     "./oidc": "./src/oidc.ts",
     "./provenance": "./src/provenance/index.ts",
     "./provenance-subjects": "./src/provenance/subjects.ts",
+    "./reproduction-request": "./src/provenance/reproduction-request.ts",
     "./transparency-log": "./src/provenance/log-object.ts",
     "./provenance-policy": "./src/provenance/policy.ts",
     "./provenance-policy-test-support": "./src/provenance/policy.test-support.ts",
