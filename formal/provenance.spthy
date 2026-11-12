@@ -1,0 +1,283 @@
+/*
+ * The provenance protocol (specs/provenance.md, ADR-0018 decision 6) against a Dolev-Yao network attacker who may
+ * also reveal any device key and any retired provenance key. The `formal` job runs
+ * `tamarin-prover --prove formal/provenance.spthy` at the version `formal/tamarin-prover.version` pins and fails
+ * unless every lemma below is `verified`; each expected attack is an `exists-trace` lemma whose name ends in
+ * `_attack` (FD-PROV-073).
+ *
+ * The model trusts the policy root key, so the device registry and the provenance key history reach the verifier as
+ * persistent facts, and it treats ES256 as an ideal signature. A lease or registration is the linear fact `Current`;
+ * acceptance consumes it, so acceptance consumes the nonce, and a reclaim replaces it with a fresh epoch and nonce.
+ * Log time is the log entry's index: the verifier reads a key's window and a device's window at that index.
+ */
+theory Provenance
+begin
+
+builtins: signing, hashing
+
+/* The equality a rule's signature check asserts. */
+restriction Equality:
+  "All x y #i. Eq(x, y) @ i ==> x = y"
+
+/* A device registers once; the policy's device registry is keyed by executor. */
+restriction OneRegistration:
+  "All dv #i #j. Registered(dv) @ i & Registered(dv) @ j ==> #i = #j"
+
+/* The control plane issues a lease to, and accepts from, a device only while it is registered and not revoked. */
+restriction DeviceActive:
+  "All dv #i. DeviceActive(dv) @ i ==>
+     (Ex #g. Registered(dv) @ g & #g < #i) & not (Ex #v. Revoke(dv) @ v & #v < #i)"
+
+/* A provenance key signs, and frames log time, only inside its window: after it is created, before it retires. */
+restriction ProvActive:
+  "All k #i. ProvActive(k) @ i ==>
+     (Ex #c. ProvCreated(k) @ c & #c < #i) & not (Ex #r. Retire(k) @ r & #r < #i)"
+
+/* The verifier's device-key window: registered before log time, and log time before `compromised_from`. */
+restriction DeviceWindow:
+  "All dv li #i #t. DeviceWindow(dv, li) @ i & LogIndex(li) @ t ==>
+     (Ex #g. Registered(dv) @ g & #g < #t) & not (Ex #c. Compromised(dv) @ c & #c < #t)"
+
+/* The provenance-key window the key history gives: a key frames log time only if it was active at that time. */
+restriction KeyWindow:
+  "All k li #i #t. KeyWindow(k, li) @ i & LogIndex(li) @ t ==>
+     (Ex #c. ProvCreated(k) @ c & #c < #t) & not (Ex #r. Retire(k) @ r & #r < #t)"
+
+// ---------------------------------------------------------------------------------------------------------------
+// Keys
+
+rule Register_Device:
+  [ Fr(~dk) ]
+  --[ Registered($dv) ]->
+  [ !DevKey($dv, ~dk), !DevPub($dv, pk(~dk)), Out(pk(~dk)) ]
+
+rule Revoke_Device:
+  [ !DevPub(dv, pkd) ] --[ Revoke(dv) ]-> [ ]
+
+rule Mark_Compromised:
+  [ !DevPub(dv, pkd) ] --[ Compromised(dv) ]-> [ ]
+
+rule Reveal_Device_Key:
+  [ !DevKey(dv, dk) ] --[ RevealDev(dv) ]-> [ Out(dk) ]
+
+rule Create_Provenance_Key:
+  [ Fr(~k) ]
+  --[ ProvCreated(~k) ]->
+  [ !ProvKey(~k), !ProvPub(pk(~k)), Out(pk(~k)) ]
+
+rule Retire_Provenance_Key:
+  [ !ProvKey(k) ] --[ Retire(k) ]-> [ !Retired(k) ]
+
+/* Only a retired provenance key leaks, as from an old backup; the active key stays a Worker secret. */
+rule Reveal_Retired_Provenance_Key:
+  [ !Retired(k) ] --[ RevealProv(k) ]-> [ Out(k) ]
+
+// ---------------------------------------------------------------------------------------------------------------
+// Leases, registrations and reclaims
+
+rule Issue_Execution_Lease:
+  [ Fr(~x), Fr(~e), Fr(~n), !DevPub(dv, pkd) ]
+  --[ Issued(~x, ~e, ~n, dv), DeviceActive(dv) ]->
+  [ Current(~x, ~e, ~n, dv, 'granted'), !LeaseFor(dv, ~x, ~e, ~n), Out(<~x, ~e, ~n, dv>) ]
+
+/* `local.register`: the epoch is the capacity lease id with its epoch. */
+rule Issue_Registration:
+  [ Fr(~x), Fr(~cl), Fr(~ce), Fr(~n), !DevPub(dv, pkd) ]
+  --[ Issued(~x, <'registration', ~cl, ~ce>, ~n, dv), DeviceActive(dv) ]->
+  [ Current(~x, <'registration', ~cl, ~ce>, ~n, dv, 'registered'), !LeaseFor(dv, ~x, <'registration', ~cl, ~ce>, ~n),
+    Out(<~x, <'registration', ~cl, ~ce>, ~n, dv>) ]
+
+/*
+ * A reclaim replaces epoch k with epoch k + 1. Each later reclaim is the same step over fresh values, so the model
+ * reclaims a granted lease once, which keeps the backward search from unrolling a chain of reclaims.
+ */
+rule Reclaim:
+  [ Current(x, e, n, dv, 'granted'), Fr(~e2), Fr(~n2), !DevPub(dv2, pkd2) ]
+  --[ Reclaim(x, e), Issued(x, ~e2, ~n2, dv2), DeviceActive(dv2) ]->
+  [ Current(x, ~e2, ~n2, dv2, 'reclaimed'), !LeaseFor(dv2, x, ~e2, ~n2), Out(<x, ~e2, ~n2, dv2>) ]
+
+rule Issue_Cloud_Lease:
+  [ Fr(~x), Fr(~e) ] --[ CloudIssued(~x, ~e) ]-> [ CloudCurrent(~x, ~e) ]
+
+// ---------------------------------------------------------------------------------------------------------------
+// Builders
+
+/* The device executor signs through the key helper; the job sandbox never holds the key. */
+rule Device_Sign_Statement:
+  let stmt = <'stmt', x, e, n, dv, h($c)> in
+  [ !LeaseFor(dv, x, e, n), !DevKey(dv, dk) ]
+  --[ Signed(dv, x, e, n, h($c)) ]->
+  [ Out(<stmt, sign(stmt, dk)>) ]
+
+/* The control plane signs as cloud builder only for its current cloud placement at the current epoch. */
+rule Cloud_Sign_Statement:
+  let cstmt = <'cloud', x, e, h($c)> in
+  [ CloudCurrent(x, e), !ProvKey(k) ]
+  --[ CloudSigned(x, e, h($c)), CloudBuilt(h($c)), ProvActive(k) ]->
+  [ Out(<cstmt, sign(cstmt, k), pk(k)>) ]
+
+// ---------------------------------------------------------------------------------------------------------------
+// The result-acceptance check, the countersignature and the transparency log
+
+/*
+ * Checks 1 to 3 and 5 to 9 of the acceptance table: the signature verifies under the registered key of the executor
+ * the lease names, that executor is registered and not revoked, and the execution, epoch and nonce are the current
+ * ones. Accepting consumes the lease, so the nonce is consumed. The control plane then countersigns with an active
+ * provenance key.
+ */
+rule Accept_Statement:
+  let stmt = <'stmt', x, e, n, dv, d>
+      cs = sign(<'cs', stmt, ds>, k)
+      env = <stmt, ds, cs, pk(k)>
+  in
+  [ In(<stmt, ds>), Current(x, e, n, dv, stage), !DevPub(dv, pkd), !ProvKey(k) ]
+  --[ Eq(verify(ds, stmt, pkd), true), DeviceActive(dv), ProvActive(k),
+      Accepted(x, e, n, dv, d), Countersigned(env, x, e, n, dv, d) ]->
+  [ Out(<cs, pk(k)>) ]
+
+/* Anyone may submit to the log; the entry's index is its log time, framed by the provenance keys active then. */
+rule Log_Append:
+  [ In(env), Fr(~li) ]
+  --[ Logged(env, ~li), LogIndex(~li) ]->
+  [ !LogEntry(env, ~li) ]
+
+/* The key history: the provenance keys whose window contains an entry's log time. */
+rule Log_Time_Key:
+  [ !LogEntry(env, li), !ProvKey(k) ]
+  --[ KeyWindow(k, li) ]->
+  [ !LogTimeKey(li, pk(k)) ]
+
+// ---------------------------------------------------------------------------------------------------------------
+// Verifiers
+
+/* The verifier of specs/provenance.md, Verification policy: inclusion proof, device window and countersignature-key window. */
+rule Verify_Platform:
+  let stmt = <'stmt', x, e, n, dv, d>
+      env = <stmt, ds, cs, P>
+  in
+  [ In(env), !DevPub(dv, pkd), !ProvPub(P), !LogEntry(env, li), !LogTimeKey(li, P) ]
+  --[ Eq(verify(ds, stmt, pkd), true), Eq(verify(cs, <'cs', stmt, ds>, P), true),
+      DeviceWindow(dv, li),
+      VerifiedPlatform(env, x, e, n, dv, d) ]->
+  [ ]
+
+/* The `reproduced` tier: a platform statement and a logged cloud-builder statement with equal digests. */
+rule Verify_Reproduced:
+  let stmt = <'stmt', x, e, n, dv, d>
+      env = <stmt, ds, cs, P>
+      cstmt = <'cloud', x2, e2, d>
+      cenv = <cstmt, csig, P2>
+  in
+  [ In(<env, cenv>), !DevPub(dv, pkd), !ProvPub(P), !LogEntry(env, li), !LogTimeKey(li, P),
+    !ProvPub(P2), !LogEntry(cenv, li2), !LogTimeKey(li2, P2) ]
+  --[ Eq(verify(ds, stmt, pkd), true), Eq(verify(cs, <'cs', stmt, ds>, P), true),
+      Eq(verify(csig, cstmt, P2), true),
+      DeviceWindow(dv, li),
+      TierReproduced(d) ]->
+  [ ]
+
+/* A verifier that skips the inclusion proof: the misuse it lets through is `skip_inclusion_attack`. */
+rule Verify_Skip_Inclusion:
+  let stmt = <'stmt', x, e, n, dv, d>
+      env = <stmt, ds, cs, P>
+  in
+  [ In(env), !DevPub(dv, pkd), !ProvPub(P) ]
+  --[ Eq(verify(ds, stmt, pkd), true), Eq(verify(cs, <'cs', stmt, ds>, P), true),
+      VerifiedSkipInclusion(env) ]->
+  [ ]
+
+/* A verifier with no key history trusts every provenance key ever published: `no_key_history_attack`. */
+rule Verify_No_Key_History:
+  let stmt = <'stmt', x, e, n, dv, d>
+      env = <stmt, ds, cs, P>
+  in
+  [ In(env), !DevPub(dv, pkd), !ProvPub(P), !LogEntry(env, li) ]
+  --[ Eq(verify(ds, stmt, pkd), true), Eq(verify(cs, <'cs', stmt, ds>, P), true),
+      DeviceWindow(dv, li),
+      VerifiedNoKeyHistory(env) ]->
+  [ ]
+
+// ---------------------------------------------------------------------------------------------------------------
+// Lemmas
+
+/* The model admits the honest flow: a statement accepted, logged and verified with no key revealed. */
+lemma executable_platform:
+  exists-trace
+  "Ex env x e n dv d #i.
+     VerifiedPlatform(env, x, e, n, dv, d) @ i
+     & not (Ex dv2 #r. RevealDev(dv2) @ r) & not (Ex k #r. RevealProv(k) @ r)"
+
+/* The model admits the honest `reproduced` tier. */
+lemma executable_reproduced:
+  exists-trace
+  "Ex d #i. TierReproduced(d) @ i
+     & not (Ex dv2 #r. RevealDev(dv2) @ r) & not (Ex k #r. RevealProv(k) @ r)"
+
+/*
+ * S7a injective agreement (FD-PROV-010, FD-PROV-013, FD-PROV-014, FD-PROV-017, FD-PROV-018, FD-PROV-020,
+ * FD-PROV-021, FD-PROV-032): an accepted statement for (execution, epoch, nonce, digest) was signed by the device the
+ * lease was issued to, unless that device key was revealed before acceptance; it is countersigned; and no other
+ * accepted statement carries its nonce.
+ */
+lemma injective_agreement:
+  "All x e n dv d #i. Accepted(x, e, n, dv, d) @ i ==>
+     (Ex #l. Issued(x, e, n, dv) @ l & #l < #i)
+     & ((Ex #j. Signed(dv, x, e, n, d) @ j & #j < #i) | (Ex #r. RevealDev(dv) @ r & #r < #i))
+     & (Ex env #c. Countersigned(env, x, e, n, dv, d) @ c & #c = #i)
+     & not (Ex x2 e2 dv2 d2 #i2. Accepted(x2, e2, n, dv2, d2) @ i2 & not (#i2 = #i))"
+
+/*
+ * S7b freshness (FD-PROV-011, FD-PROV-012, FD-PROV-019): no statement for an epoch is accepted after a reclaim of
+ * that epoch, and no statement is accepted whose nonce anyone knew before the lease or registration was issued.
+ */
+lemma freshness:
+  "(All x e n dv d #i #j. Accepted(x, e, n, dv, d) @ i & Reclaim(x, e) @ j ==> #i < #j)
+   & (All x e n dv d #i. Accepted(x, e, n, dv, d) @ i ==>
+        Ex #l. Issued(x, e, n, dv) @ l & #l < #i & not (Ex #k. K(n) @ k & #k < #l))"
+
+/*
+ * S7c compromise scope (FD-PROV-009, FD-PROV-015, FD-PROV-057, FD-PROV-061): with any device key revealed, a
+ * countersignature exists only for a lease issued to that device while it is registered and not revoked; a verified
+ * statement was logged after the device registered and before it was marked compromised; a cloud-builder signature
+ * exists only for a current cloud placement; and the `reproduced` tier needs an honest cloud build of the digest.
+ */
+lemma compromise_scope:
+  "(All env x e n dv d #i. Countersigned(env, x, e, n, dv, d) @ i ==>
+      (Ex #l. Issued(x, e, n, dv) @ l & #l < #i)
+      & (Ex #g. Registered(dv) @ g & #g < #i)
+      & not (Ex #v. Revoke(dv) @ v & #v < #i))
+   & (All env x e n dv d #i. VerifiedPlatform(env, x, e, n, dv, d) @ i ==>
+      Ex li #t. Logged(env, li) @ t & #t < #i
+        & (Ex #g. Registered(dv) @ g & #g < #t)
+        & not (Ex #c. Compromised(dv) @ c & #c < #t))
+   & (All x e d #i. CloudSigned(x, e, d) @ i ==> Ex #l. CloudIssued(x, e) @ l & #l < #i)
+   & (All d #i. TierReproduced(d) @ i ==> Ex #j. CloudBuilt(d) @ j & #j < #i)"
+
+/* S7d misuse detection (FD-PROV-054): every statement a verifier accepts has a log entry. */
+lemma misuse_detection:
+  "All env x e n dv d #i. VerifiedPlatform(env, x, e, n, dv, d) @ i ==>
+     Ex li #t. Logged(env, li) @ t & #t < #i"
+
+/* S7d's expected attack (FD-PROV-054): a verifier that skips the inclusion proof accepts an unlogged statement. */
+lemma skip_inclusion_attack:
+  exists-trace
+  "Ex env #i. VerifiedSkipInclusion(env) @ i & not (Ex li #t. Logged(env, li) @ t)"
+
+/*
+ * S7e rotation (FD-PROV-047, FD-PROV-048, FD-PROV-056): with every retired provenance key revealed, a verifier that
+ * reads the key history accepts only countersignatures the control plane made.
+ */
+lemma rotation:
+  "All env x e n dv d #i. VerifiedPlatform(env, x, e, n, dv, d) @ i ==>
+     Ex #j. Countersigned(env, x, e, n, dv, d) @ j & #j < #i"
+
+/*
+ * S7e's expected attack (FD-PROV-047, FD-PROV-048, FD-PROV-056): a verifier with no key history accepts a
+ * countersignature forged with a revealed retired provenance key.
+ */
+lemma no_key_history_attack:
+  exists-trace
+  "Ex env #i. VerifiedNoKeyHistory(env) @ i
+     & not (Ex x e n dv d #j. Countersigned(env, x, e, n, dv, d) @ j)"
+
+end

@@ -215,6 +215,25 @@ describe("spec-tags", () => {
     expect(provedChecks(s8, new Map([["formal/FdFormal/StagedWrite.lean", lean]]))).toEqual([]);
   });
 
+  it("[FD-VER-013] a Tamarin lemma marked proved needs every ID of its row in the block comment right before it", () => {
+    const rows = parseFormalTable(specs.get("verification.md")!);
+    const s7 = rows.filter((r) => r.property.startsWith("S7") && r.property !== "S7 · gate");
+    expect(s7.flatMap((r) => r.theorems.filter((t) => t.status === "proved"))).toHaveLength(7);
+    const model = readFileSync(join(ROOT, "formal/provenance.spthy"), "utf8");
+    expect(provedChecks(s7, new Map([["formal/provenance.spthy", model]]))).toEqual([]);
+    const s7d = rows.filter((r) => r.property === "S7d");
+    const spthy = (doc: string) =>
+      `/* misuse FD-PROV-054 */\nlemma misuse_detection: "F"\n/* ${doc} */\nlemma skip_inclusion_attack: exists-trace "F"`;
+    expect(provedChecks(s7d, new Map([["formal/p.spthy", spthy("attack FD-PROV-054")]]))).toEqual(
+      [],
+    );
+    expect(
+      provedChecks(s7d, new Map([["formal/p.spthy", spthy("attack, no ID")]])).map(
+        (f) => f.message,
+      ),
+    ).toEqual(["skip_inclusion_attack's docstring lacks FD-PROV-054"]);
+  });
+
   it("[FD-VER-034] a moved row with the wrong columns, an unknown disposition or a repeated ID fails", () => {
     const { findings } = parseMoved(
       "fd_id\tdisposition\ttarget\nFD-A-001\tmoved\nFD-A-002\tgone\tx\nFD-A-003\tremoved\tr\nFD-A-003\tremoved\tr\n",
