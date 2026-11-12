@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import {
   IO,
   NativeExecution,
+  NativeExecutionUnavailable,
   NativeReceiptRefused,
   type NativeExecutionService,
   type NativeRequest,
@@ -36,6 +37,7 @@ for (const late of ["before observation", "during observation"]) {
       command_sha256: "d".repeat(64),
     };
     const native: NativeExecutionService = {
+      ...await Effect.runPromise(NativeExecution.pipe(Effect.provide(NativeExecutionUnavailable))),
       admitRelease: () => Effect.succeed({ request }),
       observeRelease: () =>
         Effect.sync(() => {

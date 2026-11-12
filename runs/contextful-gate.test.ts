@@ -3,6 +3,7 @@ import { Cause, Duration, Effect, Exit } from "effect";
 import { describe, expect } from "vitest";
 import { makeCFRuntimeTest } from "@fractalboxdev/flare-dispatch-core/testing";
 import {
+  ChildRuns,
   DEPLOYED_VERSION_ENV,
   EXECUTION_CREATED_AT_ENV,
   IO,
@@ -12,6 +13,7 @@ import {
   type StepRunnerService,
 } from "@fractalboxdev/flare-dispatch-core";
 import { check } from "./check";
+import { nativeGate } from "./native-gate";
 import {
   contextfulGate,
   lightLabelsKey,
@@ -39,6 +41,119 @@ const DISCOVER_AFFECTED = `${DISCOVER_HEAD} --affected`;
 const input = { repo: "fractalboxdev/contextful", sha: SHA, baseSha: BASE_SHA } as const;
 
 describe("contextful-gate", () => {
+  it.effect("routes discovered native leaves outside the Linux command executor", () => {
+    const parts = "pins\nwindows.x86_64-msvc\nwindows.aarch64-msvc\n";
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [DISCOVER_HEAD]: { stdout: parts, exitCode: 0 }, [DISCOVER]: { stdout: "pins\n", exitCode: 0 } },
+      childRuns: { pollFn: ids => ids.map(executionId => ({ executionId, status: "success" })) },
+    });
+    return Effect.gen(function* () {
+      expect(yield* contextfulGate.run(input)).toEqual({ stages: 3, failed: [], notAffected: [] });
+      const native = handles.childRuns.spawned.filter(child => String((child.input as { checkLabel?: string }).checkLabel).startsWith("windows."));
+      expect(native).toHaveLength(2);
+      expect(native.every(child => child.run === "native-gate")).toBe(true);
+      expect(native.map(child => child.input)).toEqual([
+        expect.objectContaining({ repo: input.repo, sha: SHA, baseSha: BASE_SHA, target: "x86_64-pc-windows-msvc", checkLabel: "windows.x86_64-msvc" }),
+        expect.objectContaining({ repo: input.repo, sha: SHA, baseSha: BASE_SHA, target: "aarch64-pc-windows-msvc", checkLabel: "windows.aarch64-msvc" }),
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("a native-only selected tier joins the complete declared nonnative wave before admission", () => {
+    const parts = "pins\nlint\nwindows.x86_64-msvc\n";
+    const completed = new Set<string>();
+    let spawned: ReturnType<typeof makeCFRuntimeTest>["handles"]["childRuns"]["spawned"] = [];
+    const { layer, handles } = makeCFRuntimeTest({
+      config: { [lightLabelsKey(input.repo)]: "windows.x86_64-msvc", [`contextful-gate.window:${input.repo}`]: "1" },
+      sandboxProgram: { [DISCOVER_HEAD]: { stdout: parts, exitCode: 0 }, [DISCOVER]: { stdout: parts, exitCode: 0 } },
+      childRuns: { pollFn: (ids, poll) => ids.map(executionId => {
+        const child = spawned.find(item => item.instanceId === executionId)!;
+        const label = (child.input as { checkLabel: string }).checkLabel;
+        if (poll === 0) return { executionId, status: "running" };
+        if (child.run === "check") completed.add(label);
+        return { executionId, status: "success" };
+      }) },
+    });
+    spawned = handles.childRuns.spawned;
+    return Effect.gen(function* () {
+      const children = yield* ChildRuns;
+      const output = yield* contextfulGate.run(input).pipe(Effect.provideService(ChildRuns, {
+        ...children,
+        spawn: opts => Effect.gen(function* () {
+          if (opts.run === "native-gate") expect([...completed].sort()).toEqual(["lint", "pins"]);
+          return yield* children.spawn(opts);
+        }),
+      }));
+      expect(output).toMatchObject({ stages: 3, failed: [], deferred: [] });
+      expect(handles.childRuns.spawned.map(child => [child.run, (child.input as { checkLabel: string }).checkLabel]))
+        .toEqual([["check", "pins"], ["check", "lint"], ["native-gate", "windows.x86_64-msvc"]]);
+      expect(handles.childRuns.polls).toBeGreaterThan(3);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("joins a native child still settling after its queue, lease and body ceilings", () => {
+    let now = 0;
+    const leaseWaitMs = 600_000;
+    const settleAfterBodyMs = 300_000;
+    const nativeInput = { ...input, target: "x86_64-pc-windows-msvc", checkLabel: "windows.x86_64-msvc" } as const;
+    const queueLimit = nativeGate.limits.admissionMaxQueueAgeSec;
+    const admissionSeconds = typeof queueLimit === "function" ? queueLimit(nativeInput) : queueLimit ?? 0;
+    const settlesAt = (admissionSeconds + nativeGate.limits.maxDurationSec) * 1000
+      + leaseWaitMs + settleAfterBodyMs;
+    let nativeSpawnedAt = 0;
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: {
+        [DISCOVER_HEAD]: { stdout: "pins\nwindows.x86_64-msvc\n", exitCode: 0 },
+        [DISCOVER]: { stdout: "pins\n", exitCode: 0 },
+      },
+      childRuns: { pollFn: ids => ids.map(executionId => ({ executionId,
+        status: executionId.startsWith("native-gate") && now - nativeSpawnedAt < settlesAt ? "running" : "success" })),
+      },
+    });
+    return Effect.gen(function* () {
+      const io = yield* IO, steps = yield* StepRunner, children = yield* ChildRuns;
+      const result = yield* contextfulGate.run(input).pipe(
+        Effect.provideService(IO, { ...io, now: Effect.sync(() => now) }),
+        Effect.provideService(StepRunner, { ...steps,
+          sleep: (_, milliseconds) => Effect.sync(() => { now += milliseconds; }),
+        }),
+        Effect.provideService(ChildRuns, { ...children, spawn: opts => Effect.gen(function* () {
+          if (opts.run === nativeGate.name) nativeSpawnedAt = now;
+          return yield* children.spawn(opts);
+        }) }),
+      );
+      expect(result).toEqual({ stages: 2, failed: [], notAffected: [] });
+      expect(now - nativeSpawnedAt).toBeGreaterThanOrEqual(settlesAt);
+      expect(handles.childRuns.spawned.map(child => child.run)).toEqual(["check", "native-gate"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses native admission when any discovered Linux predecessor fails", () => {
+    const { layer, handles } = makeCFRuntimeTest({
+      sandboxProgram: { [DISCOVER_HEAD]: { stdout: "pins\nwindows.x86_64-msvc\n", exitCode: 0 }, [DISCOVER]: { stdout: "pins\n", exitCode: 0 } },
+      childRuns: { pollFn: ids => ids.map(executionId => ({ executionId, status: "failure" })) },
+    });
+    return Effect.gen(function* () {
+      expect(Exit.isFailure(yield* Effect.exit(contextfulGate.run(input)))).toBe(true);
+      expect(handles.childRuns.spawned).toHaveLength(1);
+      expect(handles.childRuns.spawned[0]?.input).toEqual(expect.objectContaining({ checkLabel: "pins" }));
+      expect(handles.checks.creates.map(check => check.name)).toContain("flare-dispatch/native-gate:windows.x86_64-msvc");
+      expect(handles.checks.updates.some(check => check.conclusion === "cancelled")).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("refuses an unknown native leaf or absent Linux inventory before fanout", () => {
+    return Effect.gen(function* () {
+      for (const parts of ["pins\nwindows.unknown\n", "windows.x86_64-msvc\n"]) {
+        const { layer, handles } = makeCFRuntimeTest({ sandboxProgram: {
+          [DISCOVER_HEAD]: { stdout: parts, exitCode: 0 }, [DISCOVER]: { stdout: parts, exitCode: 0 },
+        } });
+        expect(Exit.isFailure(yield* Effect.exit(contextfulGate.run(input).pipe(Effect.provide(layer))))).toBe(true);
+        expect(handles.childRuns.spawned).toHaveLength(0);
+      }
+    });
+  });
+
   it.effect("joins a successful child beyond the native ten-minute checkpoint ceiling", () => {
     let now = 0;
     const sleeps: number[] = [];

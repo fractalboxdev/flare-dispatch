@@ -28,3 +28,4 @@ interfaces or assume they exist.
 | [0015](./0015-native-discovery-window.md) | accepted | Native nonce discovery uses the immutable D1 admission timestamp; partial or over-budget recent evidence refuses without another POST. |
 | [0016](./0016-native-controller-deadline.md) | accepted | Native admission binds an immutable operator duration and D1 deadline; replay cannot refresh policy or grant an expired POST. |
 | [0017](./0017-native-release-scope.md) | accepted | Release discovery consumes the immutable head plan, native cells import verified artifacts, and formula publication requires its exact inventory. |
+| [0018](./0018-native-gate-scope.md) | accepted | Native gate leaves retain exact comparison scope and require the complete nonnative predecessor wave. |
