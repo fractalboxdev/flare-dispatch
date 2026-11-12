@@ -56,12 +56,19 @@ import {
 } from "./agentic.ts";
 import { appLoginOf, appOptionsOf, appServices, readsWithoutApp } from "./github.ts";
 
-const listOf = (value: unknown): readonly string[] => {
+/**
+ * The rendered `{{intake.webhookEvents}}`: `null` or unset admits every supported event, and a list admits only its
+ * events, so an empty list admits none (FD-INT-027). Wrangler delivers a JSON var as its value, a `.dev.vars` entry as
+ * its JSON text. A value that is neither admits none, so a malformed var never widens what intake admits.
+ */
+export const webhookEventsOf = (value: unknown): readonly string[] | undefined => {
+  if (value === undefined || value === null) return undefined;
   if (Array.isArray(value)) return value.map(String);
-  if (typeof value !== "string" || value.trim() === "") return [];
+  if (typeof value !== "string") return [];
+  if (value.trim() === "") return undefined;
   try {
     const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed) ? parsed.map(String) : [];
+    return parsed === null ? undefined : Array.isArray(parsed) ? parsed.map(String) : [];
   } catch {
     return [];
   }
@@ -76,14 +83,14 @@ const policyRulesFor = (env: ControlPlaneEnv) => {
 /** Intake's configuration from the bindings; every repository may run every run its manifest lists. */
 export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
   const raw = env as unknown as Readonly<Record<string, unknown>>;
-  const events = listOf(raw["WEBHOOK_EVENTS"]);
+  const events = webhookEventsOf(raw["WEBHOOK_EVENTS"]);
   return {
     catalog: catalogRuns(deployment(env)),
     profile: profileOf(env),
     appId: Number(env.GITHUB_APP_ID ?? 0),
     appLogin: appLoginOf(env),
     webhookSecret: env.WEBHOOK_SECRET === "" ? undefined : env.WEBHOOK_SECRET,
-    webhookEvents: events.length === 0 ? undefined : events,
+    webhookEvents: events,
     allows: () => true,
     confidentiality: repositoryConfidentiality(env),
     policyRules: policyRulesFor(env),

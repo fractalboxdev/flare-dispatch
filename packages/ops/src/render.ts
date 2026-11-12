@@ -14,7 +14,7 @@ export class RenderFailed extends Schema.TaggedError<RenderFailed>()("RenderFail
   paths: Schema.Array(Schema.String),
 }) {}
 
-/** The value at a dotted path of the overlay, or undefined. */
+/** The value at a dotted path of the overlay, or undefined; a `null` value is a value. */
 export const valueAt = (overlay: unknown, path: string): unknown => {
   let at: unknown = overlay;
   for (const key of path.split(".")) {

@@ -168,6 +168,34 @@ describe("renderer", () => {
     });
   });
 
+  it("[FD-INT-027] renders intake.webhookEvents as null where the overlay sets no list, keeping an empty list empty", () => {
+    const template = `{"vars": {"WEBHOOK_EVENTS": "{{intake.webhookEvents}}"}}`;
+    const varsOf = (o: typeof placeholderOverlay) =>
+      parseJsonc(Effect.runSync(renderTemplate("cp", template, o)))["vars"];
+    expect(varsOf(placeholderOverlay)).toEqual({ WEBHOOK_EVENTS: null });
+    expect(varsOf({ ...placeholderOverlay, intake: {} })).toEqual({ WEBHOOK_EVENTS: null });
+    expect(varsOf({ ...placeholderOverlay, intake: { webhookEvents: [] } })).toEqual({
+      WEBHOOK_EVENTS: [],
+    });
+    expect(
+      varsOf({ ...placeholderOverlay, intake: { webhookEvents: ["push", "pull_request"] } }),
+    ).toEqual({ WEBHOOK_EVENTS: ["push", "pull_request"] });
+  });
+
+  it("renders dispatchers and dispatch.oidcAudience, none and empty where the overlay sets neither", () => {
+    const template = `{"vars": {"DISPATCHERS": "{{dispatchers}}", "AUD": "{{dispatch.oidcAudience}}"}}`;
+    const varsOf = (o: typeof placeholderOverlay) =>
+      parseJsonc(Effect.runSync(renderTemplate("cp", template, o)))["vars"];
+    expect(varsOf(placeholderOverlay)).toEqual({ DISPATCHERS: [], AUD: "" });
+    expect(
+      varsOf({
+        ...placeholderOverlay,
+        dispatchers: ["ci@example.com"],
+        dispatch: { oidcAudience: "https://dispatch.example.com" },
+      }),
+    ).toEqual({ DISPATCHERS: ["ci@example.com"], AUD: "https://dispatch.example.com" });
+  });
+
   it("[FD-OPS-004] a placeholder whose value the overlay lacks fails the render, naming it", () => {
     const err = Effect.runSync(
       Effect.flip(renderTemplate("cp", `{"x": "{{kv.SESSIONS}}"}`, placeholderOverlay)),
