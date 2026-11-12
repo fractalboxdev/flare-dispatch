@@ -228,6 +228,8 @@ The dispatch action (`actions/flare-dispatch-action`) is specified in [interface
 
 A release-approval event is a merge, a close or a label on the release pull request that a `release-notes` execution opened. Intake decides from it whether to start one publish execution under [runs/agentic.md](runs/agentic.md) FD-AGT-085 to FD-AGT-087.
 
+A release pull request is one whose author is the App's bot, `<app slug>[bot]`, and whose body ends with the `release-notes` marker. A label's principal is the event's `sender`, whose permission intake reads from GitHub; a merge needs no read, since only a principal with write permission can merge. A rejection by a principal with write permission is recorded per pull request, so no later approval publishes it. The publish request's dedup key is `release-notes:<owner>/<repo>:release-pr-<number>`.
+
 - **FD-INT-066** · phase 3 · `V-UNIT` — When a `pull_request` `closed` or `labeled` event names a pull request authored by the GitHub App that carries the release-notes execution marker, the dispatcher Worker must apply [runs/agentic.md](runs/agentic.md) FD-AGT-085 to FD-AGT-087 to it, starting at most one publish execution per release pull request across redeliveries, a label and a merge, and must ignore the event otherwise.
 
 ### Cooldown

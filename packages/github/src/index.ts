@@ -87,6 +87,7 @@ export {
   type QuotaOptions,
 } from "./rate-limit.ts";
 export {
+  canWrite,
   CheckRunSummary,
   GithubRead,
   githubReadLayer,
@@ -95,6 +96,7 @@ export {
   PullSummary,
   refPatternMatches,
   RepoFile,
+  RepoPermission,
   type GithubReadError,
 } from "./read.ts";
 export {

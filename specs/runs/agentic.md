@@ -291,6 +291,8 @@ A proposal's **suppression key** is `<owner>/<name>:<head branch>`: the reposito
 
 ### `release-notes`
 
+A `release-notes` execution either proposes a release or publishes an approved one. The approved commit is the merge commit for a merge, and the head of the commit range the marker names for a `release:approve` label. The publish execution reads the version's notes file at the release pull request's head as of the approval.
+
 - **FD-AGT-081** · phase 3 · `V-UNIT` — `release-notes` must read the commit range from the newest `v<semver>` tag reachable from the default branch to the default-branch head inside an `Activity`.
 - **FD-AGT-082** · phase 3 · `V-UNIT` — If the commit range is empty, then `release-notes` must conclude `skipped` with the reason `not-applicable: empty-range`.
 - **FD-AGT-083** · phase 3 · `V-UNIT` — `release-notes` must compute the next version from Conventional Commits: a `!` or `BREAKING CHANGE` footer bumps major, `feat` bumps minor, and any other type bumps patch.

@@ -1,7 +1,8 @@
 // `release-notes`, the proposing execution: the commit range from the newest `v<semver>` tag reachable from the
 // default branch to its head, read inside an Activity; a `skipped` verdict on an empty range; the next version from
 // Conventional Commits; one `judgment` call for the highlights; and a release pull request, not a draft, on
-// `flare-dispatch/release` whose body carries the execution, version and head marker that approval intake reads
+// `flare-dispatch/release` whose body carries the execution, version and head marker that approval intake reads.
+// The publish execution intake starts on an approval drafts and publishes that version's release
 // (specs/runs/agentic.md § `release-notes`).
 import type { RunResult } from "@fractalboxdev/mameko-run";
 import { Effect, Schema } from "effect";
@@ -14,15 +15,33 @@ import {
   ExecutionIdentity,
   ModelClient,
   modelFailureVerdict,
+  RecipeIntents,
   Shell,
   StagedWrites,
 } from "./services.ts";
 import { flattenLine } from "./triage-prs.ts";
 
+const CommitSha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/));
+
+/** An approved release: what intake read off the release pull request when it started the publish (FD-AGT-085). */
+export const ReleasePublishInput = Schema.Struct({
+  /** The version the release pull request's marker names, `v<major>.<minor>.<patch>`. */
+  version: Schema.String.check(Schema.isPattern(/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/)),
+  /** The approved commit, which the release's tag points at. */
+  commit: CommitSha,
+  /** The release pull request's head when it was approved, which holds the version's notes file. */
+  notesCommit: CommitSha,
+  /** The release pull request's number. */
+  pullRequest: Schema.Number,
+});
+export type ReleasePublishInput = typeof ReleasePublishInput.Type;
+
 export const ReleaseNotesInput = Schema.Struct({
   repo: Schema.Struct({ owner: Schema.String, name: Schema.String }),
   /** The default branch; the execution's checkout holds its head. */
   baseBranch: Schema.String,
+  /** Present on a publish execution, which drafts and publishes this release instead of proposing one. */
+  publish: Schema.optionalKey(ReleasePublishInput),
 });
 export type ReleaseNotesInput = typeof ReleaseNotesInput.Type;
 
@@ -38,6 +57,8 @@ export const PROMPT_MAX_COMMITS = 400;
 export const DESCRIPTION_MAX_CHARS = 200;
 /** Characters of the notes the pull-request body holds before it points at the notes file instead. */
 export const BODY_NOTES_MAX_CHARS = 50_000;
+/** Characters of a GitHub release body; longer notes are cut at a line and point at the notes file. */
+export const RELEASE_BODY_MAX_CHARS = 125_000;
 
 // ---------------------------------------------------------------------------
 // Versions (FD-AGT-081, FD-AGT-083)
@@ -339,8 +360,59 @@ const highlightsOf = (version: string, range: CommitRange) =>
     return sanitizeModelText(text).replace(URL_IN_TEXT, "[link]").replace(HTML_COMMENT, "");
   });
 
+// ---------------------------------------------------------------------------
+// Publishing an approved release (FD-AGT-088)
+
 /**
- * The proposing `release-notes` body. A suppressed key reads nothing and opens nothing (FD-AGT-043). The commit range
+ * The version's notes file at the release pull request's approved head, as an Activity: a checkout that lacks that
+ * commit fetches it first. A failed read fails the publish rather than draft a release without its notes.
+ */
+export const approvedNotesActivity = (publish: ReleasePublishInput) =>
+  Activity.make({
+    name: "approved-notes",
+    success: Schema.String,
+    error: ReadFailed,
+    execute: Effect.gen(function* () {
+      const shell = yield* Shell;
+      const present = yield* shell.run(`git cat-file -e '${publish.notesCommit}^{commit}'`);
+      if (present.exitCode !== 0) yield* git(`git fetch -q origin ${publish.notesCommit}`, "notes");
+      return yield* git(
+        `git show ${publish.notesCommit}:${releaseNotesPath(publish.version)}`,
+        "notes",
+      );
+    }),
+  });
+
+/** The notes as a release body, cut at the last whole line under GitHub's limit when they are longer. */
+export const releaseBody = (version: string, notes: string) => {
+  if (notes.length <= RELEASE_BODY_MAX_CHARS) return notes;
+  const pointer = `\n\nThe full notes are in \`${releaseNotesPath(version)}\`.\n`;
+  const cut = notes.slice(0, RELEASE_BODY_MAX_CHARS - pointer.length);
+  return `${cut.slice(0, Math.max(0, cut.lastIndexOf("\n"))).trimEnd()}${pointer}`;
+};
+
+/**
+ * The publish execution (FD-AGT-088): one `release.draft` intent for the marker's version at the approved commit,
+ * carrying the notes the release pull request held when it was approved, then one `release.publish` intent for that
+ * tag. The appliers create a draft only where no release exists and publish only a draft, so the drain leaves a
+ * release that is already published unchanged (FD-GH-085, FD-GH-086).
+ */
+export const runReleasePublish = (publish: ReleasePublishInput) =>
+  Effect.gen(function* () {
+    const notes = yield* approvedNotesActivity(publish);
+    const intents = yield* RecipeIntents;
+    yield* intents.append("release-draft", "release.draft", {
+      tag: publish.version,
+      target: publish.commit,
+      name: publish.version,
+      body: releaseBody(publish.version, notes),
+    });
+    yield* intents.append("release-publish", "release.publish", { tag: publish.version });
+    return { _tag: "success" } satisfies RunResult;
+  });
+
+/**
+ * The proposing `release-notes` body, or the publish execution's when the input names an approved release. A suppressed key reads nothing and opens nothing (FD-AGT-043). The commit range
  * is read inside an Activity (FD-AGT-081); an empty range concludes `skipped` with `not-applicable: empty-range` before
  * any model call (FD-AGT-082). The next version follows the range's Conventional Commits (FD-AGT-083), and the notes
  * leave as one staged write on `flare-dispatch/release`, a pull request with `draft` false whose body ends with the
@@ -348,6 +420,7 @@ const highlightsOf = (version: string, range: CommitRange) =>
  */
 export const runReleaseNotes = (input: ReleaseNotesInput) =>
   Effect.gen(function* () {
+    if (input.publish !== undefined) return yield* runReleasePublish(input.publish);
     const suppressed = yield* checkSuppression(suppressionKey(input.repo, RELEASE_NOTES_BRANCH));
     if (suppressed) return { _tag: "success" } satisfies RunResult;
     const range = yield* commitRangeActivity;
