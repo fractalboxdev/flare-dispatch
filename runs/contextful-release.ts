@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect";
 import {
   AcceptanceFailed, artifact, checkpointSleep, defineRun, GitHubApiError, github, handoffChildAdmission, io,
-  isTerminalChildStatus, RunSkipped, sandbox, step, StepFailed, type ChildStatusRecord,
+  isTerminalChildStatus, nativeExecution, NativeReceiptRefused, RunSkipped, sandbox, step, StepFailed, type ChildStatusRecord,
 } from "@fractalboxdev/flare-dispatch-core";
 import {
   DURABLE_EXEC_RETRY_ON, durableExec, ensureWorkspace, fanOut, waitForAnyChildDurably, waitForChildren, workspace,
@@ -95,6 +95,31 @@ const CELL_BUDGET_MS = (CELL_QUEUE_SEC + CELL_MAX_DURATION_SEC + CELL_SETTLE_MAR
  */
 export const SPAWN_ORDER = (["contextful-full", "contextful-edge", "contextful-control"] as const)
   .flatMap((profile) => CELLS.filter((cell) => cell.profile === profile));
+
+const DeclaredReleaseCell = Schema.Struct({
+  profile: Schema.Literal(...PROFILES),
+  target: Schema.Literal(...LINUX, ...DARWIN, "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"),
+});
+
+const discoverReleasePlan = (repo: string, sha: string) => Effect.gen(function* () {
+  const checkout = yield* workspace({ repo, sha });
+  const result = yield* sandbox.exec({ container: checkout.container, cwd: checkout.dir,
+    command: ["cargo", "run", "--locked", "-q", "-p", "contextful-ci", "--", "release", "--plan"],
+    timeoutSec: 1800 });
+  if (result.exitCode !== 0 || result.stdout.length > 65536)
+    return yield* Effect.die(new Error("authoritative release plan unavailable"));
+  const lines = result.stdout.trim().split("\n");
+  if (lines.length === 0 || lines.length > 64)
+    return yield* Effect.die(new Error("authoritative release plan inventory invalid"));
+  const cells = yield* Effect.forEach(lines, (line) => {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length !== 2) return Effect.die(new Error("authoritative release plan cell invalid"));
+    return Schema.decodeUnknown(DeclaredReleaseCell)({ profile: fields[0], target: fields[1] }).pipe(Effect.orDie);
+  });
+  if (new Set(cells.map(cell => `${cell.profile}/${cell.target}`)).size !== cells.length)
+    return yield* Effect.die(new Error("authoritative release plan contains duplicate cells"));
+  return cells;
+});
 
 const ReleaseInput = Schema.Struct({
   repo: Schema.String,
@@ -257,11 +282,70 @@ const publishOrRateLimit = (
         : Effect.fail(error)),
   );
 
+const nativeRelease = (input: typeof ReleaseCellInput.Type) => Effect.gen(function* () {
+  if (input.profile !== "contextful-edge" && input.profile !== "contextful-full")
+    return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release profile unsupported" }));
+  if (input.target !== "x86_64-pc-windows-msvc" && input.target !== "aarch64-pc-windows-msvc")
+    return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release target unsupported" }));
+  const handle = yield* step("admit-native-release", () => nativeExecution.admitRelease({ head: input.sha,
+    profile: input.profile as "contextful-edge" | "contextful-full", target: input.target as "x86_64-pc-windows-msvc" | "aarch64-pc-windows-msvc" }));
+  const deadline = yield* step("native-release-deadline", () => io.now.pipe(Effect.map(now => now + RELEASE_BUILD_TIMEOUT_SEC * 1000)));
+  for (let index = 0; ; index++) {
+    const observed = yield* step(`observe-native-release-${index}`, () => nativeExecution.observeRelease(handle));
+    if (observed.status === "ready") break;
+    const now = yield* step(`native-release-clock-${index}`, () => io.now);
+    if (now >= deadline) return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release deadline exceeded" }));
+    yield* step(`sleep-native-release-${index}`, () => io.sleep("30 seconds"));
+  }
+  const name = stem(input.profile, input.tag.slice(1), input.target);
+  const readText = (path: string) => Effect.gen(function* () {
+    const file = yield* nativeExecution.readReleaseFile(handle, path);
+    return yield* Effect.tryPromise({ try: async () => {
+      if (file.size > 65536) { await file.body.cancel(); throw new Error("native release metadata exceeds its bound"); }
+      const reader = file.body.getReader();
+      const bytes = new Uint8Array(file.size); let count = 0;
+      try {
+        for (;;) {
+          const part = await reader.read(); if (part.done) break;
+          if (count + part.value.length > bytes.length) throw new Error("native metadata size mismatch");
+          bytes.set(part.value, count); count += part.value.length;
+        }
+        if (count !== bytes.length) throw new Error("native metadata truncated");
+        return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+      } finally { await reader.cancel(); reader.releaseLock(); }
+    }, catch: () => new NativeReceiptRefused({ reason: "native release metadata refused" }) });
+  });
+  const manifest = yield* step("read-native-release-manifest", () => readText(`dist/${name}.release.json`));
+  const parsed = yield* Schema.decodeUnknown(Schema.parseJson(Schema.Struct({
+    profile: Schema.String, target: Schema.String, archive: Schema.String,
+    sha256: Schema.String.pipe(Schema.pattern(/^[a-f0-9]{64}$/)), sbom: Schema.String,
+  })))(manifest).pipe(Effect.mapError(() => new NativeReceiptRefused({ reason: "native release manifest invalid" })));
+  if (parsed.profile !== input.profile || parsed.target !== input.target || parsed.archive !== `${name}.tar.gz` || parsed.sbom !== `${name}.cdx.json`)
+    return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release manifest conflicts" }));
+  const checksum = yield* step("read-native-release-checksum", () => readText(`dist/${parsed.archive}.sha256`));
+  if (checksum.trim() !== `${parsed.sha256}  ${parsed.archive}`)
+    return yield* Effect.fail(new NativeReceiptRefused({ reason: "native release checksum conflicts" }));
+  const assets = [parsed.archive, `${parsed.archive}.sha256`, parsed.sbom];
+  for (const assetName of assets) yield* step(`import-native-${assetName}`, () => Effect.gen(function* () {
+    const file = yield* nativeExecution.readReleaseFile(handle, `dist/${assetName}`);
+    if (assetName === parsed.archive && file.sha256 !== parsed.sha256) {
+      yield* Effect.promise(() => file.body.cancel());
+      return yield* Effect.fail(new NativeReceiptRefused({ reason: "native archive digest conflicts" }));
+    }
+    yield* artifact.uploadVerified({ name: assetName, body: file.body, size: file.size, sha256: file.sha256,
+      contentType: assetName.endsWith(".json") ? "application/json" : assetName.endsWith(".gz") ? "application/gzip" : "text/plain" });
+    if (!input.dryRun) yield* github.publishReleaseAsset({ repo: input.repo, releaseId: input.releaseId, artifactName: assetName,
+      contentType: assetName.endsWith(".json") ? "application/json" : assetName.endsWith(".gz") ? "application/gzip" : "text/plain", sha256: file.sha256 });
+  }));
+  return { profile: input.profile, target: input.target, manifest, assets };
+});
+
 export const contextfulReleaseCell = defineRun({
   name: "contextful-release-cell",
+  // 1.4.0 — native Windows cells import verified remote release assets.
   // 1.3.0 — every Linux cell stages its platform's image descriptor and layer.
   // 1.2.0 — a rate-limited asset upload waits out its retry hint durably.
-  version: "1.3.0",
+  version: "1.4.0",
   sandboxImage: "release",
   inputs: ReleaseCellInput,
   outputs: ReleaseCellOutput,
@@ -269,12 +353,14 @@ export const contextfulReleaseCell = defineRun({
   run: (input) =>
     Effect.gen(function* () {
       requireValidRequest(input.repo, input.tag, input.sha);
-      if (!CELLS.some((cell) => cell.profile === input.profile && cell.target === input.target)) {
-        return yield* Effect.die(new Error("release cell is outside the ten-cell matrix"));
+      const cells = yield* step("discover-release-plan", () => discoverReleasePlan(input.repo, input.sha));
+      if (!cells.some((cell) => cell.profile === input.profile && cell.target === input.target)) {
+        return yield* Effect.die(new Error("release cell is outside the authoritative head plan"));
       }
       if (!Number.isSafeInteger(input.releaseId) || (!input.dryRun && input.releaseId <= 0)) {
         return yield* Effect.die(new Error("release cell requires a valid draft release id"));
       }
+      if (input.target.endsWith("-pc-windows-msvc")) return yield* nativeRelease(input);
       const version = input.tag.slice(1);
       let ws = yield* step("checkout", () => workspace({ repo: input.repo, sha: input.sha }));
       for (let rebuild = 0; rebuild <= OUTPUT_REBUILDS; rebuild++) {
@@ -309,7 +395,7 @@ export const contextfulReleaseCell = defineRun({
         // Each asset publishes from R2 in its own step; an asset already
         // uploaded with the same digest is kept, so a retry is a no-op.
         if (!input.dryRun) {
-          const stagger = CELLS.findIndex((cell) => cell.profile === input.profile && cell.target === input.target)
+          const stagger = cells.findIndex((cell) => cell.profile === input.profile && cell.target === input.target)
             * PUBLISH_STAGGER_MS;
           let waitedMs = 0;
           for (const asset of collected.assets) {
@@ -339,7 +425,7 @@ export const contextfulReleaseCell = defineRun({
 
 export const contextfulReleaseFormula = defineRun({
   name: "contextful-release-formula",
-  version: "1.1.0",
+  version: "1.2.0",
   sandboxImage: "release",
   inputs: FormulaInput,
   outputs: FormulaOutput,
@@ -347,7 +433,13 @@ export const contextfulReleaseFormula = defineRun({
   run: (input) => step("generate-and-upload", () => Effect.gen(function* () {
     requireValidRequest(input.repo, input.tag, input.sha);
     const manifests = JSON.parse(input.manifests) as unknown[];
-    if (manifests.length !== CELLS.length) return yield* Effect.die(new Error("formula needs ten release manifests"));
+    const cells = yield* discoverReleasePlan(input.repo, input.sha);
+    const keys = manifests.map(raw => {
+      const parsed = Schema.decodeUnknownSync(DeclaredReleaseCell)(raw);
+      return `${parsed.profile}/${parsed.target}`;
+    });
+    if (keys.length !== cells.length || new Set(keys).size !== keys.length || cells.some(cell => !keys.includes(`${cell.profile}/${cell.target}`)))
+      return yield* Effect.die(new Error("formula needs exactly the authoritative release inventory"));
     const checkout = yield* workspace({ repo: input.repo, sha: input.sha });
     const formula = yield* sandbox.exec({
       container: checkout.container, cwd: checkout.dir,
@@ -376,13 +468,14 @@ export const contextfulReleaseFormula = defineRun({
 
 export const contextfulRelease = defineRun({
   name: "contextful-release",
+  // 1.5.0 — consumes the authoritative head plan, including native Windows cells.
   // 1.4.0 — each profile's image is an index of its amd64 and arm64 manifests.
   // 1.3.0 — a `dry-run/v<version>` tag push starts a dry run of `v<version>`.
   // 1.2.0 — publishes the formula step's release notes as the release body.
   // 1.1.0 — release pool, sliding window of cells.
-  version: "1.4.0",
-  // The parent makes no sandbox call and hands its admission row off after
-  // its first spawn. On the release pool it queues only behind other
+  version: "1.5.0",
+  // The parent discovers the immutable head's release plan and hands its
+  // admission row off after its first spawn. On the release pool it queues only behind other
   // releases, never behind pull-request gates on the lean pool.
   sandboxImage: "release",
   inputs: ReleaseInput,
@@ -426,6 +519,9 @@ export const contextfulRelease = defineRun({
     if (sourceVersion !== input.tag.slice(1)) {
       return yield* Effect.die(new Error("release tag version differs from Cargo.toml"));
     }
+    const cells = yield* step("discover-release-plan", () => discoverReleasePlan(input.repo, tag.commitSha));
+    const spawnOrder = (["contextful-full", "contextful-edge", "contextful-control"] as const)
+      .flatMap((profile) => cells.filter((cell) => cell.profile === profile));
     const release = dryRun ? { id: 0 } : yield* step("draft-release", () => Effect.gen(function* () {
       const existing = yield* github.releaseByTag({ repo: input.repo, tag: input.tag });
       if (existing !== undefined) {
@@ -444,8 +540,8 @@ export const contextfulRelease = defineRun({
     // id derives from its input, so the re-spawn finds the same children.
     // A respawn's input carries its `attempt`, so its instance id differs from
     // every earlier attempt's; the first attempt's input is unchanged.
-    type Queued = { readonly cell: (typeof CELLS)[number]; readonly attempt: number };
-    const queue: Queued[] = SPAWN_ORDER.map((cell) => ({ cell, attempt: 0 }));
+    type Queued = { readonly cell: (typeof cells)[number]; readonly attempt: number };
+    const queue: Queued[] = spawnOrder.map((cell) => ({ cell, attempt: 0 }));
     const running: { readonly index: number; readonly id: string; readonly expiresAt: number; readonly attempt: number }[] = [];
     const settledByCell = new Map<number, ChildStatusRecord>();
     const timedOut = new Set<number>();
@@ -484,7 +580,7 @@ export const contextfulRelease = defineRun({
         queue.splice(0, batch.length);
         if (spawned === 0) yield* step("handoff-admission", () => handoffChildAdmission());
         batch.forEach(({ cell, attempt }, index) => running.push({
-          index: CELLS.indexOf(cell),
+          index: cells.indexOf(cell),
           id: handles[index]!.executionId,
           expiresAt: spawnedAt + CELL_BUDGET_MS,
           attempt,
@@ -517,19 +613,19 @@ export const contextfulRelease = defineRun({
         // A cell the platform lost takes the next free slot ahead of the queue.
         if (record.status === "failure" && record.failureTag !== undefined &&
           INFRASTRUCTURE_FAILURES.has(record.failureTag) && attempt < CELL_RETRIES) {
-          queue.unshift({ cell: CELLS[index]!, attempt: attempt + 1 });
+          queue.unshift({ cell: cells[index]!, attempt: attempt + 1 });
           continue;
         }
         settledByCell.set(index, record);
       }
     }
-    const failedCells = CELLS.filter((_, index) => {
+    const failedCells = cells.filter((_, index) => {
       const child = settledByCell.get(index);
       return child !== undefined && cellFailed(child);
     });
     if (budgetClosed !== undefined && failedCells.length === 0 && timedOut.size === 0) {
       return yield* Effect.fail(new RunSkipped({
-        reason: `${budgetClosed} — ${queue.length} of ${CELLS.length} release cells not started`,
+        reason: `${budgetClosed} — ${queue.length} of ${cells.length} release cells not started`,
       }));
     }
     if (failedCells.length > 0 || timedOut.size > 0) {
@@ -539,7 +635,7 @@ export const contextfulRelease = defineRun({
         cells.map((cell) => `\`${cell.profile}/${cell.target}\``).join(", ");
       const verdict = [
         ["Failed", failedCells],
-        ["Timed out", CELLS.filter((_, index) => timedOut.has(index))],
+        ["Timed out", cells.filter((_, index) => timedOut.has(index))],
         [budgetClosed === undefined ? "Not started" : `Not started (${budgetClosed})`, queue.map(({ cell }) => cell)],
       ] as const;
       return yield* Effect.fail(new AcceptanceFailed({ exitCode: 1, summaryMd: `**Release cells**\n\n${verdict
@@ -547,8 +643,8 @@ export const contextfulRelease = defineRun({
         .map(([label, cells]) => `- ${label}: ${names(cells)}`).join("\n")}` }));
     }
     // Matrix order, whatever order the cells settled in.
-    const children = CELLS.flatMap((_, index) => settledByCell.get(index) ?? []);
-    if (children.length !== CELLS.length || children.some((child) => child.status !== "success" || !child.summaryJson)) {
+    const children = cells.flatMap((_, index) => settledByCell.get(index) ?? []);
+    if (children.length !== cells.length || children.some((child) => child.status !== "success" || !child.summaryJson)) {
       return yield* Effect.die(new Error("one or more release cells failed"));
     }
     const manifests = children.map((child) => {
@@ -592,7 +688,7 @@ export const contextfulRelease = defineRun({
       return yield* Effect.die(new Error("release needs a Linux amd64 and arm64 image descriptor for every profile"));
     }
     if (dryRun) return { tag: input.tag, sha: tag.commitSha, dryRun: true, releaseId: 0,
-      cells: CELLS.length, assets: CELLS.length * 3 + formulaAssets.length };
+      cells: cells.length, assets: cells.length * 3 + formulaAssets.length };
     for (const profile of PROFILES) {
       const platforms = LINUX.map((target) => images.find((image) =>
         image.profile === profile && image.arch === IMAGE_ARCH[target])!);
@@ -608,6 +704,6 @@ export const contextfulRelease = defineRun({
     yield* step("publish-release", () => github.publishRelease({ repo: input.repo, releaseId: release.id,
       ...(notes === undefined ? {} : { body: `Release ${input.tag}\n\n${notes}` }) }));
     return { tag: input.tag, sha: tag.commitSha, dryRun: false, releaseId: release.id,
-      cells: CELLS.length, assets: CELLS.length * 3 + formulaAssets.length };
+      cells: cells.length, assets: cells.length * 3 + formulaAssets.length };
   }),
 });
