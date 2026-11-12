@@ -17,12 +17,13 @@ const ALLOWED = "id-token";
 const DEADLINE_INPUT = "deadline_minutes";
 
 /**
- * A `timeout-minutes` expression that takes its value from the `deadline_minutes` input alone: the input itself, or
- * the input through `fromJSON`, read from `inputs` or `github.event.inputs`. Expression function and context names
- * are case-insensitive in GitHub Actions.
+ * A `timeout-minutes` expression that takes its value from the `deadline_minutes` input alone, through `fromJSON`,
+ * read from `inputs` or `github.event.inputs`. `timeout-minutes` takes a number and the launcher dispatches the input
+ * as a string, so the bare input is not accepted. Expression function and context names are case-insensitive in
+ * GitHub Actions.
  */
 const FROM_DEADLINE =
-  /^\$\{\{\s*(?:fromJSON\(\s*(?:github\.event\.)?inputs\.deadline_minutes\s*\)|(?:github\.event\.)?inputs\.deadline_minutes)\s*\}\}$/i;
+  /^\$\{\{\s*fromJSON\(\s*(?:github\.event\.)?inputs\.deadline_minutes\s*\)\s*\}\}$/i;
 
 const fail = (path: string, detail: string): Finding => ({
   check: CHECK,
@@ -37,7 +38,7 @@ export const runnerWorkflowPath = (workflow: string) => `.github/workflows/${wor
 /** The failure of a deploy that carries the `gha` kind and names no runner repository or workflow; nothing is read. */
 export const ghaRunnerUnset: Finding = fail(
   PATH,
-  "the overlay carries the gha kind and sets no gha.runnerRepo or gha.workflow, so the runner workflow's permissions cannot be checked",
+  "the overlay carries the gha kind and sets no gha.runnerRepo or gha.workflow, so the runner workflow's permissions and timeout-minutes cannot be checked",
 );
 
 /**
@@ -79,7 +80,7 @@ const timeoutProblem = (timeout: unknown): string | undefined => {
   if (timeout === undefined || timeout === null)
     return "sets no timeout-minutes, so it runs to GitHub's 360-minute default past deadline_at";
   if (typeof timeout === "string" && FROM_DEADLINE.test(timeout.trim())) return undefined;
-  return `sets timeout-minutes ${typeof timeout === "string" ? timeout : JSON.stringify(timeout)}, which is not the ${DEADLINE_INPUT} input`;
+  return `sets timeout-minutes ${typeof timeout === "string" ? timeout : JSON.stringify(timeout)}, which does not read the ${DEADLINE_INPUT} input through fromJSON`;
 };
 
 /**
@@ -87,8 +88,8 @@ const timeoutProblem = (timeout: unknown): string | undefined => {
  * `id-token: write`; a job's permissions are its own `permissions`, else the workflow's, and a job with neither runs at
  * the repository's default permissions and fails. FD-EXEC-087: one failure when the `workflow_dispatch` trigger
  * declares no `deadline_minutes` input, and one per job whose `timeout-minutes` is not
- * `${{ fromJSON(inputs.deadline_minutes) }}` or `${{ inputs.deadline_minutes }}`. `text` is `null` when the runner
- * repository holds no such file.
+ * `${{ fromJSON(inputs.deadline_minutes) }}` or `${{ fromJSON(github.event.inputs.deadline_minutes) }}`. `text` is
+ * `null` when the runner repository holds no such file.
  */
 export const runnerWorkflowCheck = async (
   runnerRepo: string,

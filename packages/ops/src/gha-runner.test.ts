@@ -42,13 +42,11 @@ const timeoutFailure = (job: string, problem: string) => ({
 });
 
 describe("the runner workflow's timeout-minutes", () => {
-  it("[FD-EXEC-087] passes a runner job whose timeout-minutes is the deadline_minutes input, as given or through fromJSON", async () => {
+  it("[FD-EXEC-087] passes a runner job whose timeout-minutes is the deadline_minutes input through fromJSON", async () => {
     for (const timeout of [
       "${{ fromJSON(inputs.deadline_minutes) }}",
-      "${{ inputs.deadline_minutes }}",
       "${{fromJSON(inputs.deadline_minutes)}}",
       "${{ fromJson( github.event.inputs.deadline_minutes ) }}",
-      "${{ github.event.inputs.deadline_minutes }}",
       "'${{ fromJSON(inputs.deadline_minutes) }}'",
     ])
       expect(await check(runnerWorkflow(timeout))).toEqual([]);
@@ -63,9 +61,11 @@ describe("the runner workflow's timeout-minutes", () => {
     ]);
   });
 
-  it("[FD-EXEC-087] fails a runner job whose timeout-minutes is a literal or an expression not taken from the deadline_minutes input", async () => {
+  it("[FD-EXEC-087] fails a runner job whose timeout-minutes is a literal, the string-typed deadline_minutes input without fromJSON, or an expression not taken from the input", async () => {
     for (const [timeout, shown] of [
       ["60", "60"],
+      ["${{ inputs.deadline_minutes }}", "${{ inputs.deadline_minutes }}"],
+      ["${{ github.event.inputs.deadline_minutes }}", "${{ github.event.inputs.deadline_minutes }}"],
       ["${{ 60 }}", "${{ 60 }}"],
       ["${{ fromJSON(inputs.epoch) }}", "${{ fromJSON(inputs.epoch) }}"],
       ["${{ fromJSON(inputs.deadline_minutes) + 30 }}", "${{ fromJSON(inputs.deadline_minutes) + 30 }}"],
@@ -73,7 +73,10 @@ describe("the runner workflow's timeout-minutes", () => {
       ["${{ vars.deadline_minutes }}", "${{ vars.deadline_minutes }}"],
     ] as const)
       expect(await check(runnerWorkflow(timeout))).toEqual([
-        timeoutFailure("runner", `sets timeout-minutes ${shown}, which is not the deadline_minutes input`),
+        timeoutFailure(
+          "runner",
+          `sets timeout-minutes ${shown}, which does not read the deadline_minutes input through fromJSON`,
+        ),
       ]);
   });
 
@@ -91,7 +94,7 @@ describe("the runner workflow's timeout-minutes", () => {
       "      - run: echo notify",
     ].join("\n");
     expect(await check(text)).toEqual([
-      timeoutFailure("setup", "sets timeout-minutes 10, which is not the deadline_minutes input"),
+      timeoutFailure("setup", "sets timeout-minutes 10, which does not read the deadline_minutes input through fromJSON"),
       timeoutFailure(
         "notify",
         "sets no timeout-minutes, so it runs to GitHub's 360-minute default past deadline_at",

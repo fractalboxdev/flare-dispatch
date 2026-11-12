@@ -129,7 +129,7 @@ describe("the runner workflow check of the drift check", () => {
       stage: "drift",
       ok: false,
       detail:
-        "gha.workflow: the overlay carries the gha kind and sets no gha.runnerRepo or gha.workflow, so the runner workflow's permissions cannot be checked",
+        "gha.workflow: the overlay carries the gha kind and sets no gha.runnerRepo or gha.workflow, so the runner workflow's permissions and timeout-minutes cannot be checked",
     });
     expect(w.calls.filter((c) => c.includes("acme/runner"))).toEqual([]);
     expect(w.calls.filter(isWrite)).toEqual([]);
