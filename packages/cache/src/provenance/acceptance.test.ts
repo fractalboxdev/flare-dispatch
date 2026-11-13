@@ -36,7 +36,8 @@ const hex = (n: number) => n.toString(16).padStart(64, "0");
 const NOW = Date.now();
 const EXECUTION = "01JDZ8Q6V3M2K9T4WXYZ5ABCDE";
 const NONCE = "9f2c4e1a7b3d5f60a1b2c3d4e5f60718";
-const CODE_HASH = sha(4);
+/** The key helper's `cdhash` as the enrollment route records it: lowercase hex of 20 bytes (FD-PROV-031). */
+const CODE_HASH = "4".repeat(40);
 
 const keyPair = async (kid: string) => {
   const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
@@ -268,7 +269,7 @@ describe("result-acceptance check", () => {
         arrange: async ({ device, state }) => {
           state.devices.set("device-mac-1", {
             ...state.devices.get("device-mac-1")!,
-            codeHash: sha(99),
+            codeHash: "9".repeat(40),
           });
           return { result: submission(), envelope: await signed(device.private) };
         },
@@ -465,7 +466,7 @@ describe("result-acceptance check", () => {
     w.state.devices.set("device-mac-1", {
       ...w.state.devices.get("device-mac-1")!,
       revokedAt: NOW - 1,
-      codeHash: sha(99),
+      codeHash: "9".repeat(40),
     });
     w.state.leases.set(9, "mac-1");
     w.state.epoch = 9;
