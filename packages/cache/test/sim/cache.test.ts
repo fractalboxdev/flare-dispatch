@@ -64,6 +64,22 @@ describe("simulation: reclaim and revoke across epochs", () => {
     expect(reached.refusedWorkspaceKey).toBeGreaterThan(0);
   }, 300_000);
 
+  it("[FD-CACHE-071] an artifact commit is accepted and recorded under the execution's current epoch and answered stale, recording no artifact, under an earlier one", async () => {
+    const { violations, reached } = await runAll("reclaim", simulateReclaim);
+    expect(messagesFor(violations, "FD-CACHE-071")).toEqual([]);
+    expect(reached.currentArtifactCommit).toBeGreaterThan(0);
+    expect(reached.staleArtifactCommit).toBeGreaterThan(0);
+    expect(reached.staleArtifactBegin).toBeGreaterThan(0);
+  }, 300_000);
+
+  it("[FD-CACHE-003] every epoch above 1 starts its gate job in an empty workspace and fetches the commit, while an earlier epoch's workspace is still on the host or still being written", async () => {
+    const { violations, reached } = await runAll("reclaim", simulateReclaim);
+    expect(messagesFor(violations, "FD-CACHE-003")).toEqual([]);
+    expect(reached.restartedWorkspace).toBeGreaterThan(0);
+    expect(reached.leftoverOnHost).toBeGreaterThan(0);
+    expect(reached.runningEarlier).toBeGreaterThan(0);
+  }, 300_000);
+
   it("replays a seed exactly", async () => {
     const signer = await signerOnce();
     const first = await simulateReclaim(7, signer);

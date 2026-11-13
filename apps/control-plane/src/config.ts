@@ -1,11 +1,12 @@
 // The Worker's bindings, and the two `json` configurations host-cloudflare reads, derived from the profile so one
 // document decides both.
 import { apiConfigFromEnv, ConfigInvalid, type ApiEnv } from "@fractalboxdev/flare-dispatch-api/config";
-import { deploymentOf } from "@fractalboxdev/flare-dispatch-catalog";
 import type { ConcludeKind, QuotaObject } from "@fractalboxdev/flare-dispatch-github";
 import type { TickUnit } from "@fractalboxdev/flare-dispatch-intake";
 import {
+  PRESIGNER_BINDINGS,
   spendConfigOfVar,
+  unsetBindings,
   type MonitorNamespace,
   type SpendUnreadable,
 } from "@fractalboxdev/flare-dispatch-ops";
@@ -18,6 +19,7 @@ import type {
 import type { CacheEnv } from "./cache.ts";
 import {
   buildProfile,
+  deploymentOf,
   deviceSlotDefaults,
   drawsReserve,
   type Deployment,
@@ -111,33 +113,25 @@ export interface ControlPlaneEnv extends CacheEnv {
   };
 }
 
-const set = (value: string | undefined): value is string => value !== undefined && value !== "";
-
-/** The values the presigner signs with that this deploy leaves unset, by binding name. */
+/**
+ * The values the presigner signs with that this deploy leaves unset, by binding name: the ops package's
+ * `PRESIGNER_BINDINGS`, which the deploy stage's composition check reads too (FD-ARCH-039).
+ */
 export const presignerMissingOf = (env: ControlPlaneEnv): ReadonlyArray<string> =>
-  (
-    [
-      ["R2_ACCOUNT_ID", env.R2_ACCOUNT_ID],
-      ["CACHE_BUCKET_NAME", env.CACHE_BUCKET_NAME],
-      ["R2_PRESIGN_ACCESS_KEY_ID", env.R2_PRESIGN_ACCESS_KEY_ID],
-      ["R2_PRESIGN_SECRET_ACCESS_KEY", env.R2_PRESIGN_SECRET_ACCESS_KEY],
-    ] as const
-  ).flatMap(([name, value]) => (set(value) ? [] : [name]));
+  unsetBindings(env, PRESIGNER_BINDINGS);
 
 /**
  * The presigner's signing configuration, or `undefined` on a deploy missing the token, the account id or the bucket
  * name: it signs with the presign token and nothing else, on the account's S3 endpoint (FD-CACHE-091).
  */
 export const presignerConfigOf = (env: ControlPlaneEnv): R2PresignerConfig | undefined =>
-  set(env.R2_ACCOUNT_ID) &&
-  set(env.CACHE_BUCKET_NAME) &&
-  set(env.R2_PRESIGN_ACCESS_KEY_ID) &&
-  set(env.R2_PRESIGN_SECRET_ACCESS_KEY)
+  presignerMissingOf(env).length === 0
     ? {
-        accountId: env.R2_ACCOUNT_ID,
-        bucket: env.CACHE_BUCKET_NAME,
-        accessKeyId: env.R2_PRESIGN_ACCESS_KEY_ID,
-        secretAccessKey: env.R2_PRESIGN_SECRET_ACCESS_KEY,
+        // Each is set: `PRESIGNER_BINDINGS` names all four.
+        accountId: env.R2_ACCOUNT_ID as string,
+        bucket: env.CACHE_BUCKET_NAME as string,
+        accessKeyId: env.R2_PRESIGN_ACCESS_KEY_ID as string,
+        secretAccessKey: env.R2_PRESIGN_SECRET_ACCESS_KEY as string,
       }
     : undefined;
 

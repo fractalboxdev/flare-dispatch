@@ -25,10 +25,11 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
+/** Each Worker holds the secrets the control plane's composition reads: the App key and the presign token. */
 const settings: DeployedSettings = {
   bindings: [],
   vars: {},
-  secrets: [],
+  secrets: ["GITHUB_APP_PRIVATE_KEY", "R2_PRESIGN_ACCESS_KEY_ID", "R2_PRESIGN_SECRET_ACCESS_KEY"],
   crons: ["* * * * *"],
   routes: [],
   compatibility_date: "",
@@ -36,10 +37,14 @@ const settings: DeployedSettings = {
   containers: [],
 };
 
+/** The docs Worker serves static assets and runs no cron trigger. */
+const settingsOf = (worker: string): DeployedSettings =>
+  worker === "docs" ? { ...settings, crons: [] } : settings;
+
 const fakeTarget = (calls: string[], opts: { probe?: boolean } = {}) =>
   Layer.succeed(DeployTarget, {
-    deployedSettings: () => Effect.succeed(settings),
-    lastRecord: () => Effect.succeed(settings),
+    deployedSettings: (r) => Effect.succeed(settingsOf(r.worker)),
+    lastRecord: (r) => Effect.succeed(settingsOf(r.worker)),
     appRegistration: Effect.succeed(APP_PERMISSIONS),
     requiredChecks: Effect.succeed([...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
     awsBudgets: Effect.succeed({ account: "", observedAt: 0, budgets: [], actions: [] }),

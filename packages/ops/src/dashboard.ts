@@ -1,8 +1,10 @@
 // The dashboard: the executions view and its JSON route (FD-OPS-068, FD-OPS-069), the execution page with its outbox
 // rows and every refusal reason (FD-AGT-018, FD-AGT-038), the per-class overview with active alarms (FD-OPS-070) and
-// the fleet view (FD-OPS-071), read from the control plane's D1 tables. The queries name their columns; no route reads
-// an execution's input payload or a secret. The renderers are pure.
+// the 28-day cache hit rate per cache tier and executor kind (FD-CACHE-090), and the fleet view (FD-OPS-071), read
+// from the control plane's D1 tables. The queries name their columns; no route reads an execution's input payload or a
+// secret. The renderers are pure.
 import { refusalView } from "@fractalboxdev/flare-dispatch-agentic";
+import { cacheHitRates, type HitRate } from "@fractalboxdev/flare-dispatch-cache/metrics";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { activeAlarms, type ActiveAlarm } from "./alarms.ts";
 
@@ -234,11 +236,15 @@ export const classFigures = async (
   });
 };
 
-/** The overview: per-class figures, the active alarms and the control state (null until mameko exposes it). */
+/**
+ * The overview: per-class figures, the active alarms, the control state (null until mameko exposes it) and the 28-day
+ * cache hit rate per executor kind, lookup level and cache tier (FD-CACHE-090).
+ */
 export interface Overview {
   readonly classes: readonly ClassFigures[];
   readonly alarms: readonly ActiveAlarm[];
   readonly controlState: string | null;
+  readonly cacheHitRates: readonly HitRate[];
 }
 
 export const overview = async (
@@ -249,6 +255,7 @@ export const overview = async (
   classes: await classFigures(db, classes, now),
   alarms: await activeAlarms(db),
   controlState: null,
+  cacheHitRates: await cacheHitRates(db, now),
 });
 
 /** One executor in the fleet view (FD-OPS-071). */
@@ -429,7 +436,10 @@ ${rows}
 ${page.next === null ? "" : `<p><a href="/?${esc(params.toString())}">Older →</a></p>`}`;
 };
 
-/** The overview section: per-class figures, active alarms with their runbook entry, and the control state. */
+/**
+ * The overview section: per-class figures, active alarms with their runbook entry, the control state, and the cache
+ * hit rate per executor kind, level and tier, where a level's `miss` row counts the lookups no tier answered.
+ */
 export const renderOverview = (o: Overview): string => {
   const classes = o.classes
     .map(
@@ -450,12 +460,22 @@ export const renderOverview = (o: Overview): string => {
               `<tr><td>${esc(a.name)}</td><td class="${a.severity}">${a.severity}</td><td>${esc(a.runbook ?? "—")}</td><td class="mono">${esc(JSON.stringify(a.detail))}</td></tr>`,
           )
           .join("")}</tbody></table>`;
+  const cache =
+    o.cacheHitRates.length === 0
+      ? "<p>No cache lookup in the last 28 days.</p>"
+      : `<table><thead><tr><th>Executor kind</th><th>Level</th><th>Tier</th><th>Hits / lookups</th><th>Hit rate</th><th>Bytes restored</th></tr></thead><tbody>${o.cacheHitRates
+          .map(
+            (r) =>
+              `<tr><td>${esc(r.executor_kind)}</td><td>${esc(r.level)}</td><td>${r.tier === null ? "miss" : esc(r.tier)}</td><td>${r.hits} / ${r.lookups}</td><td>${(r.hit_rate * 100).toFixed(1)}%</td><td>${r.bytes_restored}</td></tr>`,
+          )
+          .join("")}</tbody></table>`;
   return `<h2>Classes, last 24 h</h2>
 <table><thead><tr><th>Class</th><th>Queued</th><th>Queue age p50</th><th>p95</th><th>Placement by executor kind</th></tr></thead><tbody>
 ${classes}
 </tbody></table>
 <h2>Control state</h2><p>${esc(o.controlState ?? "unavailable")}</p>
-<h2>Active alarms</h2>${alarms}`;
+<h2>Active alarms</h2>${alarms}
+<h2>Cache hit rate, last 28 days</h2>${cache}`;
 };
 
 /** The fleet view (FD-OPS-071). */

@@ -35,15 +35,15 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 | `hostnames.<worker>` | Custom-domain hostname per Worker |
 | `access.teamDomain`, `access.aud` | Cloudflare Access team domain and application AUD |
 | `operators` | Access identities allowed on operator routes |
-| `dispatchers` | Access identities allowed to dispatch through `fd` and `/mcp` ([interfaces.md](interfaces.md) FD-IFC-027) |
+| `dispatchers` | Access identities allowed to dispatch through `fd` and `/mcp` ([interfaces.md](interfaces.md) FD-IFC-027); the control plane's `DISPATCHERS` var carries them, none where the overlay names none |
 | `dispatch.scoped` | Entries `{ identity, runs, repositories, classCeiling }` for automated callers of read-only scan runs ([interfaces.md](interfaces.md) FD-IFC-089 to FD-IFC-093) |
 | `containment` | Access identities allowed the tightening operator routes ([interfaces.md](interfaces.md) FD-IFC-095) |
 | `scan.bundleDigest`, `scan.bundleFile`, `scan.bundleKeys` | The pinned scan bundle's SHA-256, the path of its envelope beside the overlay, and each public signing key with its UTC RFC 3339 `notBefore` (inclusive) and `notAfter` (exclusive) deploy-verification window ([runs/gate.md](runs/gate.md) § Security gate) |
 | `scan.advisoryEcosystems`, `scan.advisoryMaxAgeHours` | The OSV ecosystems the `advisory-refresh` ops run stores; the snapshot age a scan accepts, default 48 |
 | `records.url` | The HTTPS URL that receives job and verdict records ([github-output.md](github-output.md) § Job and verdict records) |
 | `github.appId`, `github.fixtureRepo` | GitHub App id; the repository the synthetic webhook canary pushes to |
-| `intake.webhookEvents` | The webhook events intake admits ([intake.md](intake.md) FD-INT-027) |
-| `dispatch.oidcAudience` | The Actions OIDC audience of a dispatch ([interfaces.md](interfaces.md) FD-IFC-024) |
+| `intake.webhookEvents` | The webhook events intake admits ([intake.md](intake.md) FD-INT-027); the control plane's `WEBHOOK_EVENTS` var carries the list, `null` where the overlay sets none, so the Worker tells an absent list from an empty one |
+| `dispatch.oidcAudience` | The Actions OIDC audience of a dispatch ([interfaces.md](interfaces.md) FD-IFC-024); the control plane's `DISPATCH_OIDC_AUDIENCE` var carries it, empty where the overlay sets none, which refuses every Actions token |
 | `executors.planeId` | This control plane's `plane_id`, which every device's `connect` signature binds ([interfaces.md](interfaces.md) FD-IFC-085) |
 | `alerts.sink` | An HTTPS webhook URL or an email address |
 | `alerts.webhookSilentHours` | The delivery gap that raises `webhook-silent`, default 24 |

@@ -5,18 +5,32 @@
 // Miniflare by the unit suites; here the bucket keeps every run in one process and on one clock.
 //
 // - `simulateReclaim`: an execution is reclaimed onto other executors and its lease revoked, while the executors of
-//   earlier epochs keep asking for URLs, using their compile-cache tokens and committing manifests for their uploads
-//   (FD-CACHE-051, FD-CACHE-040), and every executor tries to reach what an earlier epoch left behind (FD-CACHE-002).
+//   earlier epochs keep asking for URLs, using their compile-cache tokens and committing manifests and artifacts for
+//   their uploads (FD-CACHE-051, FD-CACHE-040, FD-CACHE-071), and every executor tries to reach what an earlier epoch
+//   left behind (FD-CACHE-002). Each epoch's executor starts its job workspace on one of two hosts that earlier
+//   epochs' workspaces may still occupy, and its start record goes through `checkWorkspaceStart` (FD-CACHE-003).
 // - `simulateSweep`: entries are committed and read over 40 days while the cache sweep ticks (FD-CACHE-062).
 //
 // `scenarios` is what the `sim` job runs (packages/ops/scripts/harness.ts): each seed fails on any violation.
-import { Effect, Exit } from "effect";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { Effect, Exit, Layer, Scope } from "effect";
+import { CommandExit, GateExec, processGateExec } from "../../../catalog/src/command.ts";
+import { checkedOutWorkspace } from "../../../catalog/src/job.ts";
 import {
   seededRandom,
   throwOnViolations,
   type SimScenario,
   type SimViolation,
 } from "../../../ops/src/verification/harness.ts";
+import {
+  ARTIFACT_SCHEMA,
+  artifactPath,
+  beginArtifactUpload,
+  commitArtifact,
+} from "../../src/artifacts.ts";
 import { compileObjectKey, handleCompileCache } from "../../src/compile-cache.ts";
 import { sha256Hex } from "../../src/crypto.ts";
 import { leaseCacheFields, type LeaseState, type UploadGrant } from "../../src/lease.ts";
@@ -31,7 +45,11 @@ import {
 import { protectedCloud, pullRequestNamespace } from "../../src/namespaces.ts";
 import { presignForExecution, PresignRefused } from "../../src/presign.ts";
 import { sweepCache } from "../../src/sweep.ts";
-import { grantCarriesNoWorkspace } from "../../src/workspace.ts";
+import {
+  checkWorkspaceStart,
+  grantCarriesNoWorkspace,
+  type WorkspaceStart,
+} from "../../src/workspace.ts";
 import {
   failureOf,
   layers,
@@ -184,6 +202,115 @@ interface Holder {
   readonly kind: (typeof KINDS)[number];
   readonly grant: UploadGrant;
   readonly write: string | null;
+  readonly workspace: JobWorkspace;
+}
+
+/**
+ * The gate job workspace an epoch's executor runs in. When its epoch ends the executor either stops, which closes the
+ * job's scope and removes the directory; is lost before the release runs, which leaves the directory on the host; or
+ * keeps running, writing build output into it.
+ */
+interface JobWorkspace {
+  readonly host: number;
+  readonly dir: string;
+  readonly scope: Scope.Closeable;
+  fate: "current" | "stopped" | "left" | "running";
+}
+
+/** The commit every epoch's gate job checks out. */
+const SHA = "0123456789abcdef0123456789abcdef01234567";
+/** The hosts the executors of one execution share, each with its own `FD_WORKSPACE_ROOT`. */
+const HOSTS = 2;
+
+/** The entries in a directory, 0 where it no longer exists. */
+const entriesOf = (dir: string): Promise<number> =>
+  readdir(dir).then(
+    (entries) => entries.length,
+    () => 0,
+  );
+
+/** The real gate executor, whose workspaces are created and removed on this host's file system. */
+const processExec = Effect.runSync(
+  Effect.gen(function* () {
+    return yield* GateExec;
+  }).pipe(Effect.provide(processGateExec)),
+);
+
+/**
+ * A `GateExec` over the real workspace whose commands the simulation answers. The first command a job runs in its
+ * workspace yields the start record: the entries in the directory at that moment, and whether the command fetches the
+ * commit. A fetch then places the checkout, as `git` would.
+ */
+const recordingGateExec = (epoch: number, starts: WorkspaceStart[]) =>
+  Layer.succeed(GateExec, {
+    ...processExec,
+    run: (options) =>
+      Effect.promise(async () => {
+        const entries = await entriesOf(options.cwd);
+        const fetchedCommit = new RegExp(`\\bgit fetch\\b[^&]*--depth 1 origin ${SHA}\\b`).test(
+          options.command,
+        );
+        if (starts.length === 0)
+          starts.push({ epoch, entriesAtStart: entries, fetchedCommit, placed: [] });
+        if (fetchedCommit) {
+          await mkdir(join(options.cwd, ".git"), { recursive: true });
+          await writeFile(join(options.cwd, ".git", "HEAD"), SHA);
+          await writeFile(join(options.cwd, "package.json"), "{}");
+        }
+        return { exit: CommandExit.Exited({ code: 0 }), output: new Uint8Array() };
+      }),
+  });
+
+/** The control plane's artifact tables (D1) in an in-memory SQLite database; `batch` runs in one transaction. */
+const sqliteArtifactDb = () => {
+  const sqlite = new DatabaseSync(":memory:");
+  for (const statement of ARTIFACT_SCHEMA) sqlite.exec(statement);
+  const statement = (sql: string, params: readonly SQLInputValue[] = []) => ({
+    bind: (...values: SQLInputValue[]) => statement(sql, values),
+    first: async () => sqlite.prepare(sql).get(...params) ?? null,
+    all: async () => ({ results: sqlite.prepare(sql).all(...params), success: true, meta: {} }),
+    run: async () => {
+      sqlite.prepare(sql).run(...params);
+      return { results: [], success: true, meta: {} };
+    },
+  });
+  const db = {
+    prepare: (sql: string) => statement(sql),
+    batch: async (statements: readonly ReturnType<typeof statement>[]) => {
+      sqlite.exec("begin");
+      try {
+        const out = [];
+        for (const s of statements) out.push(await s.run());
+        sqlite.exec("commit");
+        return out;
+      } catch (e) {
+        sqlite.exec("rollback");
+        throw e;
+      }
+    },
+  };
+  const artifactRows = (executionId: string, epoch: number, name: string) =>
+    Number(
+      (
+        sqlite
+          .prepare(
+            "select count(*) as n from artifacts where execution_id = ? and epoch = ? and name = ?",
+          )
+          .get(executionId, epoch, name) as { n: number }
+      ).n,
+    );
+  return {
+    db: db as unknown as D1Database,
+    artifactRows,
+    close: () => sqlite.close(),
+  };
+};
+
+/** An artifact an executor uploaded through its URL and has not had committed. */
+interface ArtifactUpload {
+  readonly epoch: number;
+  readonly name: string;
+  committed: boolean;
 }
 
 /** A cache object an executor uploaded through its URL, under entry `entry` of `namespace`. */
@@ -203,7 +330,8 @@ const hexOf = (random: () => number) =>
  * One execution of a pull request, reclaimed onto another executor of a seeded kind at seeded times and sometimes
  * revoked, which leaves no current epoch until the next reclaim. Between those events, the holder of the current
  * epoch or of an earlier one asks `exec.presign` for cache and log `PUT`s, uses its compile-cache token, commits a
- * manifest for its uploads, or tries to fetch an earlier epoch's uploads and to write a workspace-shaped key.
+ * manifest for its uploads, starts and commits an artifact, or tries to fetch an earlier epoch's uploads and to write a
+ * workspace-shaped key. Each epoch's executor checks the commit out in a gate job workspace on a seeded host first.
  */
 export const simulateReclaim = async (
   seed: number,
@@ -219,6 +347,11 @@ export const simulateReclaim = async (
   /** The epoch the control plane's lease carries; `null` once the lease is revoked, until the next reclaim. */
   let live: number | null = null;
   const uploads: Upload[] = [];
+  const artifacts: ArtifactUpload[] = [];
+  const artifactDb = sqliteArtifactDb();
+  const hostsRoot = await mkdtemp(join(tmpdir(), "fd-sim-hosts-"));
+  const hostRoots = Array.from({ length: HOSTS }, (_, i) => join(hostsRoot, `host-${i}`));
+  for (const root of hostRoots) await mkdir(root);
   const violations: SimViolation[] = [];
   const trace: string[] = [];
   const reached: Record<string, number> = {
@@ -232,11 +365,17 @@ export const simulateReclaim = async (
     currentCommit: 0,
     refusedTransfer: 0,
     refusedWorkspaceKey: 0,
+    staleArtifactBegin: 0,
+    staleArtifactCommit: 0,
+    currentArtifactCommit: 0,
+    restartedWorkspace: 0,
+    leftoverOnHost: 0,
+    runningEarlier: 0,
   };
   const flag = (id: string, message: string) =>
     violations.push({ id, message: `seed ${seed} at +${w.now - START} ms: ${message}` });
   const ended = () => (live === null ? "the revoke" : `the reclaim to ${live}`);
-  const provide = Effect.provide(layers(w, bucket, signer));
+  const provide = Effect.provide(layers(w, bucket, signer, artifactDb.db));
   const presign = (
     epoch: number,
     objects: readonly { key: string; method: "GET" | "PUT"; length: number | null }[],
@@ -245,7 +384,64 @@ export const simulateReclaim = async (
       presignForExecution({ execution_id: executionId, epoch, objects }).pipe(provide),
     );
 
+  /** The executor of the epoch that just ended stops, is lost with its workspace left on the host, or keeps running. */
+  const endWorkspace = async (h: Holder) => {
+    const fate = pick(["stopped", "left", "running"] as const);
+    h.workspace.fate = fate;
+    if (fate === "stopped") await Effect.runPromise(Scope.close(h.workspace.scope, Exit.void));
+    trace.push(`workspace ${h.epoch} ${fate}`);
+  };
+
+  /**
+   * The new epoch's executor starts a gate job on a seeded host: catalog's `checkedOutWorkspace` with the real
+   * workspace under that host's root, which may still hold an earlier epoch's workspace. Its start record goes through
+   * `checkWorkspaceStart`.
+   */
+  const startWorkspace = async (epoch: number): Promise<JobWorkspace> => {
+    const host = Math.floor(random() * HOSTS);
+    const earlier = holders.filter((h) => h.workspace.fate !== "stopped");
+    for (const h of earlier)
+      if (h.workspace.host === host && (await entriesOf(h.workspace.dir)) > 0) {
+        reached.leftoverOnHost!++;
+        break;
+      }
+    if (earlier.some((h) => h.workspace.fate === "running")) reached.runningEarlier!++;
+    const starts: WorkspaceStart[] = [];
+    const scope = Effect.runSync(Scope.make());
+    const previousRoot = process.env["FD_WORKSPACE_ROOT"];
+    process.env["FD_WORKSPACE_ROOT"] = hostRoots[host]!;
+    const exit = await Effect.runPromiseExit(
+      checkedOutWorkspace({
+        repo: `https://github.com/${REPO}.git`,
+        sha: SHA,
+        ref: "refs/pull/7/head",
+      }).pipe(Scope.provide(scope), Effect.provide(recordingGateExec(epoch, starts))),
+    ).finally(() => {
+      if (previousRoot === undefined) delete process.env["FD_WORKSPACE_ROOT"];
+      else process.env["FD_WORKSPACE_ROOT"] = previousRoot;
+    });
+    const dir = Exit.isSuccess(exit) ? exit.value : "";
+    const start = starts[0];
+    trace.push(
+      `workspace ${epoch} host ${host} ${start === undefined ? "no command" : `${start.entriesAtStart} entries ${start.fetchedCommit ? "fetched" : "not fetched"}`}`,
+    );
+    if (Exit.isFailure(exit)) flag("FD-CACHE-003", `epoch ${epoch}'s checkout failed`);
+    else if (start === undefined)
+      flag("FD-CACHE-003", `epoch ${epoch}'s job ran no command in its workspace`);
+    else {
+      if (epoch > 1) reached.restartedWorkspace!++;
+      for (const violation of checkWorkspaceStart(start))
+        flag(violation.slice(0, violation.indexOf(":")), violation);
+      for (const h of earlier)
+        if (h.workspace.dir === dir)
+          flag("FD-CACHE-003", `epoch ${epoch} started in epoch ${h.epoch}'s workspace`);
+    }
+    return { host, dir, scope, fate: "current" };
+  };
+
   const reclaim = async () => {
+    const previous = holders.find((h) => h.epoch === live);
+    if (previous !== undefined) await endWorkspace(previous);
     const epoch = holders.length + 1;
     const executorKind = pick(KINDS);
     const deadlineAt = w.now + 3 * HOUR;
@@ -272,11 +468,13 @@ export const simulateReclaim = async (
       deadlineAt,
     };
     w.leases.set(executionId, lease);
+    const workspace = await startWorkspace(epoch);
     holders.push({
       epoch,
       kind: executorKind,
       grant: fields.upload_grant,
       write: fields.cache_namespaces.write,
+      workspace,
     });
     if (epoch > 1) reached.reclaims!++;
     live = epoch;
@@ -295,8 +493,15 @@ export const simulateReclaim = async (
           );
   };
 
-  /** A cache-object or log `PUT` by the holder of `h`'s epoch. */
+  /**
+   * A cache-object or log `PUT` by the holder of `h`'s epoch, after a build step that writes output into its
+   * workspace while its executor runs.
+   */
   const put = async (h: Holder, step: number) => {
+    if (h.workspace.fate === "current" || h.workspace.fate === "running") {
+      await mkdir(join(h.workspace.dir, "target"), { recursive: true });
+      await writeFile(join(h.workspace.dir, "target", `out-${step}`), `epoch ${h.epoch}`);
+    }
     const log = random() < 0.4;
     const namespace = h.write;
     const entry = log || namespace === null ? undefined : hexOf(random);
@@ -406,6 +611,85 @@ export const simulateReclaim = async (
   };
 
   /**
+   * The holder of `h`'s epoch starts an artifact upload and, handed a URL, uploads the body through it. Under an
+   * earlier epoch the request is answered `stale` and nothing is signed.
+   */
+  const beginArtifact = async (h: Holder, step: number) => {
+    const name = `report-${step}.html`;
+    const body = `<p>epoch ${h.epoch} step ${step}</p>`;
+    const signedBefore = w.signed.length;
+    const exit = await Effect.runPromiseExit(
+      beginArtifactUpload({
+        execution_id: executionId,
+        epoch: h.epoch,
+        name,
+        size: body.length,
+        sha256: await sha256Hex(body),
+        content_type: "text/html",
+      }).pipe(provide),
+    );
+    const answer = Exit.isSuccess(exit) ? exit.value.status : `refused ${String(failureOf(exit))}`;
+    trace.push(`artifact-begin ${h.epoch}/${live ?? "-"} ${answer}`);
+    if (h.epoch !== live) {
+      reached.staleArtifactBegin!++;
+      if (answer !== "stale")
+        flag(
+          "FD-CACHE-051",
+          `epoch ${h.epoch}'s artifact upload after ${ended()} was answered ${answer}`,
+        );
+      if (w.signed.length !== signedBefore)
+        flag(
+          "FD-CACHE-051",
+          `epoch ${h.epoch}'s artifact upload after ${ended()} got a URL signed`,
+        );
+      return;
+    }
+    if (answer !== "ok") {
+      flag("FD-CACHE-071", `the current epoch ${h.epoch}'s artifact upload was answered ${answer}`);
+      return;
+    }
+    await bucket.put(artifactPath(executionId, h.epoch, name), body);
+    artifacts.push({ epoch: h.epoch, name, committed: false });
+  };
+
+  /**
+   * The holder of `h`'s epoch commits an artifact it uploaded and never had committed. Before its lease ends the commit
+   * is accepted and recorded; after a reclaim or a revoke it is `stale` and records no artifact.
+   */
+  const commitArtifactOf = async (h: Holder) => {
+    const pending = artifacts.filter((a) => a.epoch === h.epoch && !a.committed);
+    if (pending.length === 0) return;
+    const a = pick(pending);
+    const stale = h.epoch !== live;
+    const exit = await Effect.runPromiseExit(
+      commitArtifact(
+        { execution_id: executionId, epoch: h.epoch, name: a.name },
+        { repo: REPO, private: true },
+      ).pipe(provide),
+    );
+    const ack = Exit.isSuccess(exit) ? exit.value.status : `refused ${String(failureOf(exit))}`;
+    const rows = artifactDb.artifactRows(executionId, h.epoch, a.name);
+    trace.push(`artifact-commit ${h.epoch}/${live ?? "-"} ${ack}`);
+    if (stale) {
+      reached.staleArtifactCommit!++;
+      if (ack !== "stale")
+        flag(
+          "FD-CACHE-071",
+          `epoch ${h.epoch}'s artifact commit after ${ended()} was answered ${ack}`,
+        );
+      if (rows !== 0)
+        flag("FD-CACHE-071", `epoch ${h.epoch}'s ${a.name} became an artifact after ${ended()}`);
+      return;
+    }
+    if (ack !== "accepted" || rows !== 1) {
+      flag("FD-CACHE-071", `the current epoch ${h.epoch}'s artifact commit was answered ${ack}`);
+      return;
+    }
+    reached.currentArtifactCommit!++;
+    a.committed = true;
+  };
+
+  /**
    * The current holder tries to fetch an upload an earlier epoch never got committed, and to write a workspace-shaped
    * key. An entry an earlier epoch committed while it was current is ordinary cache, readable by a later epoch.
    */
@@ -482,7 +766,7 @@ export const simulateReclaim = async (
 
   /**
    * The control plane revokes the lease: the placement goes, so the lease answers no epoch. The revoked holder at once
-   * asks for a URL, uses its token and commits, and every one is refused.
+   * asks for a URL, uses its token, commits a manifest and an artifact, and every one is refused.
    */
   const revoke = async (step: number) => {
     const revoked = holders.find((h) => h.epoch === live);
@@ -491,34 +775,50 @@ export const simulateReclaim = async (
     live = null;
     reached.revokes!++;
     trace.push(`revoke ${revoked.epoch}`);
+    await endWorkspace(revoked);
     await put(revoked, step);
     await compile(revoked, step);
     await commit(revoked);
+    await commitArtifactOf(revoked);
   };
 
-  await reclaim();
-  const steps = 14 + Math.floor(random() * 10);
-  for (let step = 1; step <= steps; step++) {
-    w.now += Math.floor(random() * 6 * MINUTE);
-    const roll = random();
-    if (roll < 0.15 && holders.length < 6) {
-      await reclaim();
-      continue;
+  const play = async () => {
+    await reclaim();
+    const steps = 14 + Math.floor(random() * 10);
+    for (let step = 1; step <= steps; step++) {
+      w.now += Math.floor(random() * 6 * MINUTE);
+      const roll = random();
+      if (roll < 0.15 && holders.length < 6) {
+        await reclaim();
+        continue;
+      }
+      if (roll < 0.2 && live !== null) {
+        await revoke(step);
+        continue;
+      }
+      // After a reclaim an executor of an earlier epoch keeps acting about half the time; after a revoke every
+      // executor's epoch is an earlier one.
+      const current = holders.find((x) => x.epoch === live);
+      const earlier = holders.filter((x) => x !== current);
+      const h =
+        current === undefined || (earlier.length > 0 && random() < 0.5) ? pick(earlier) : current;
+      if (roll < 0.45) await put(h, step);
+      else if (roll < 0.55) await commit(h);
+      else if (roll < 0.63) await beginArtifact(h, step);
+      else if (roll < 0.71) await commitArtifactOf(h);
+      else if (roll < 0.83) await transfer();
+      else await compile(h, step);
     }
-    if (roll < 0.2 && live !== null) {
-      await revoke(step);
-      continue;
-    }
-    // After a reclaim an executor of an earlier epoch keeps acting about half the time; after a revoke every
-    // executor's epoch is an earlier one.
-    const current = holders.find((x) => x.epoch === live);
-    const earlier = holders.filter((x) => x !== current);
-    const h =
-      current === undefined || (earlier.length > 0 && random() < 0.5) ? pick(earlier) : current;
-    if (roll < 0.5) await put(h, step);
-    else if (roll < 0.62) await commit(h);
-    else if (roll < 0.77) await transfer();
-    else await compile(h, step);
+  };
+
+  try {
+    await play();
+  } finally {
+    for (const h of holders)
+      if (h.workspace.fate !== "stopped")
+        await Effect.runPromise(Scope.close(h.workspace.scope, Exit.void));
+    await rm(hostsRoot, { recursive: true, force: true });
+    artifactDb.close();
   }
   return { violations, reached, trace };
 };
@@ -675,7 +975,7 @@ export const simulateSweep = async (
 export const scenarios: readonly SimScenario[] = [
   {
     name: "reclaim",
-    ids: ["FD-CACHE-051", "FD-CACHE-040", "FD-CACHE-002"],
+    ids: ["FD-CACHE-051", "FD-CACHE-040", "FD-CACHE-071", "FD-CACHE-002", "FD-CACHE-003"],
     run: async (seed) =>
       throwOnViolations((await simulateReclaim(seed, await signerOnce())).violations),
   },

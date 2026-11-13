@@ -11,7 +11,7 @@ import {
   TriageIssuesInput,
   TriagePrsInput,
 } from "@fractalboxdev/flare-dispatch-agentic";
-import { buildProfile, type Deployment } from "@fractalboxdev/flare-dispatch-profile";
+import { buildProfile, deploymentOf, type Deployment } from "@fractalboxdev/flare-dispatch-profile";
 import type { Capability } from "@fractalboxdev/mameko-run";
 import { Match, type Schema } from "effect";
 import {
@@ -364,6 +364,5 @@ export const lookupRun = (deployment: Deployment, run: string): RunLookup => {
   );
 };
 
-/** `production` unless the process says `development`, so a device with no configuration refuses host execution. */
-export const deploymentOf = (value: string | undefined): Deployment =>
-  value === "development" ? "development" : "production";
+/** The profile package's reading of a `DEPLOYMENT` value, which the runner entry and the Worker share. */
+export { deploymentOf };

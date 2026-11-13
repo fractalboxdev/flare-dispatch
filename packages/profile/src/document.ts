@@ -22,6 +22,10 @@ import type { Predicate, Profile } from "./schema.ts";
  */
 export type Deployment = "production" | "development";
 
+/** `production` unless the value says `development`, so a device or Worker with no configuration refuses host execution. */
+export const deploymentOf = (value: string | undefined): Deployment =>
+  value === "development" ? "development" : "production";
+
 /**
  * The roadmap phase the document serves. A kind, launcher or verifier enters the profile only in the phase whose
  * Layer the dispatcher supplies, because mameko rejects a control plane that uses a port with no Layer

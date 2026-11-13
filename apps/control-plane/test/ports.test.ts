@@ -4,13 +4,21 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { R2Presigner } from "@fractalboxdev/flare-dispatch-cache";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
-import { parseJsonc, placeholderOverlay, renderTemplate } from "@fractalboxdev/flare-dispatch-ops";
+import {
+  APP_BINDINGS,
+  composedPorts,
+  parseJsonc,
+  placeholderOverlay,
+  PRESIGNER_BINDINGS,
+  renderTemplate,
+} from "@fractalboxdev/flare-dispatch-ops";
 import { buildProfile, missingPorts } from "@fractalboxdev/flare-dispatch-profile";
 import { ObjectStorePresigner } from "@fractalboxdev/mameko-ports";
 import { type Context, Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import { isolateServices } from "../src/composition.ts";
-import type { ControlPlaneEnv } from "../src/config.ts";
+import { presignerConfigOf, type ControlPlaneEnv } from "../src/config.ts";
+import { appOptionsOf } from "../src/github.ts";
 import { suppliedPorts } from "../src/ports.ts";
 
 const env = (extra: Partial<ControlPlaneEnv>) =>
@@ -44,6 +52,34 @@ const PRESIGN = {
   R2_PRESIGN_ACCESS_KEY_ID: "PRESIGNKEY",
   R2_PRESIGN_SECRET_ACCESS_KEY: "presign-secret",
 };
+
+const APP = { GITHUB_APP_ID: "1", GITHUB_APP_PRIVATE_KEY: "key" };
+
+describe("the deploy check and the Worker read one condition per port", () => {
+  it("[FD-ARCH-039] blanking any binding the ops package names drops the port exactly where the Worker builds no live Layer", () => {
+    const full = env({ ...APP, ...PRESIGN });
+    expect(appOptionsOf(full)).toBeDefined();
+    expect(presignerConfigOf(full)).toBeDefined();
+    expect(composedPorts(full)).toEqual(
+      expect.arrayContaining(["actuator", "actuator-rate-limit", "object-store-presigner"]),
+    );
+    for (const name of APP_BINDINGS)
+      for (const blank of [undefined, ""]) {
+        const without = env({ ...APP, ...PRESIGN, [name]: blank });
+        expect(appOptionsOf(without)).toBeUndefined();
+        expect(composedPorts(without)).not.toContain("actuator");
+        expect(composedPorts(without)).not.toContain("actuator-rate-limit");
+        expect(presignerConfigOf(without)).toBeDefined();
+      }
+    for (const name of PRESIGNER_BINDINGS)
+      for (const blank of [undefined, ""]) {
+        const without = env({ ...APP, ...PRESIGN, [name]: blank });
+        expect(presignerConfigOf(without)).toBeUndefined();
+        expect(composedPorts(without)).not.toContain("object-store-presigner");
+        expect(appOptionsOf(without)).toBeDefined();
+      }
+  });
+});
 
 const isolateOf = async (extra: Partial<ControlPlaneEnv>) =>
   (await isolateServices(

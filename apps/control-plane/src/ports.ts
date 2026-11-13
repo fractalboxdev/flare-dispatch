@@ -1,28 +1,9 @@
 // The mameko application ports the composition supplies a Layer for, by port id, which configuration validation reads
-// (MAMEKO-HOST-046). Each entry names the Layer `composition.ts` builds for it.
-import { presignerConfigOf, type ControlPlaneEnv } from "./config.ts";
+// (MAMEKO-HOST-046). The ops package's `composedPorts` names the Layer `composition.ts` builds for each entry, and the
+// deploy stage reads the same function over the rendered vars and the Worker's secrets (FD-ARCH-039), so the Worker
+// and the deploy check agree on one list.
+import { composedPorts } from "@fractalboxdev/flare-dispatch-ops";
+import type { ControlPlaneEnv } from "./config.ts";
 
-const hasApp = (env: ControlPlaneEnv) =>
-  env.GITHUB_APP_ID !== undefined &&
-  env.GITHUB_APP_ID !== "" &&
-  env.GITHUB_APP_PRIVATE_KEY !== undefined &&
-  env.GITHUB_APP_PRIVATE_KEY !== "";
-
-export const suppliedPorts = (env: ControlPlaneEnv): readonly string[] => [
-  // `ConfigurationSourceLive` and `GateDecisionSourceLive` from the profile package.
-  "configuration-source",
-  "gate-decision-source",
-  // `alarmPortFromEnv` from the operability package.
-  "alarm-port",
-  // `githubLiveLayer`'s applier of every GitHub kind and its rate limit over the `InstallationQuota` objects.
-  // CredentialMinter remains absent until mameko calls it and the complete grant/expiry/revocation contract is served.
-  ...(hasApp(env) ? ["actuator", "actuator-rate-limit"] : []),
-  // `presignerLayer`: the cache package's `R2PresignerLive` under `ObjectStorePresignerLive`, on a deploy holding the
-  // presign token (FD-CACHE-091).
-  ...(presignerConfigOf(env) === undefined ? [] : ["object-store-presigner"]),
-  // `PostureSource` and the agentic package's `localPortsLayer` (`agentic.ts`).
-  "posture-source",
-  "local-registration",
-  "writeback-gate",
-  "reuse-policy",
-];
+export const suppliedPorts = (env: ControlPlaneEnv): readonly string[] =>
+  composedPorts(env);

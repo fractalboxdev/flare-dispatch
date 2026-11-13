@@ -17,7 +17,9 @@ import {
   appRegistrationCheck,
   awsBudgetCheck,
   awsBudgetUnset,
+  deployedCronCheck,
   failed,
+  holdsOnlySecrets,
   modelRegistryCheck,
   policyRootKeyCheck,
   policyRulesCheck,
@@ -258,6 +260,16 @@ export const renderAll = (overlayText: string, workers: readonly WorkerTemplate[
   });
 
 /**
+ * A check over one rendered configuration, given the account's view of the Worker: its deployed settings, or `null`
+ * where the account holds no such Worker.
+ */
+export type ExtraCheck = (
+  worker: string,
+  config: WorkerConfig,
+  deployed: DeployedSettings | null,
+) => readonly Finding[];
+
+/**
  * The profile step over a decoded overlay (FD-OPS-021): the overlay delivers the spend configuration the profile's
  * spend lines are validated against (FD-PROF-054).
  */
@@ -283,7 +295,7 @@ export const driftFindings = (
   workers: readonly WorkerTemplate[],
   rendered: readonly RenderedWorker[],
   manifest: AppPermissions,
-  extra: (worker: string, config: WorkerConfig) => readonly Finding[] = () => [],
+  extra: ExtraCheck = () => [],
   more: ProfileStep = () => Effect.succeed([]),
   access: CommittedAccess | null = null,
 ) =>
@@ -295,9 +307,11 @@ export const driftFindings = (
     ];
     for (const w of workers) findings.push(...templateInvariants(w.worker, parseJsonc(w.template)));
     for (const r of rendered) {
-      findings.push(...unrenderedCheck(r.worker, r.text), ...extra(r.worker, r.config));
       const deployed = yield* target.deployedSettings(r);
+      findings.push(...unrenderedCheck(r.worker, r.text), ...extra(r.worker, r.config, deployed));
       findings.push(...policyRootKeyCheck(r.worker, r.config, deployed));
+      if (deployed !== null && !holdsOnlySecrets(deployed))
+        findings.push(...deployedCronCheck(r.worker, r.config, deployed.crons));
       const record = yield* target.lastRecord(r);
       if (deployed !== null && record !== null)
         findings.push(...settingsDrift(r.worker, record, deployed));
@@ -333,7 +347,7 @@ export const fdDoctor = (
   overlayText: string,
   workers: readonly WorkerTemplate[],
   manifest: AppPermissions,
-  extra?: (worker: string, config: WorkerConfig) => readonly Finding[],
+  extra?: ExtraCheck,
   more?: ProfileStep,
   access?: AccessFor,
 ) =>
@@ -380,7 +394,7 @@ export const fdDeploy = (
   overlayText: string,
   workers: readonly WorkerTemplate[],
   manifest: AppPermissions,
-  extra?: (worker: string, config: WorkerConfig) => readonly Finding[],
+  extra?: ExtraCheck,
   more?: ProfileStep,
   access?: AccessFor,
 ) =>

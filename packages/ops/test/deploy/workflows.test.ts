@@ -54,6 +54,7 @@ import {
 } from "../../src/cli/index.ts";
 import { accessStore } from "../../src/access-application.test-support.ts";
 import {
+  COMPOSITION_SECRETS,
   deploy as deployOn,
   fd,
   isWrite,
@@ -283,7 +284,19 @@ const deployedBy = async (argv: readonly string[]) => {
   const received = new Map<string, string>();
   const target = () =>
     Layer.succeed(DeployTarget, {
-      deployedSettings: () => Effect.succeed(null),
+      // Each Worker holds the secrets the control plane's composition reads, as the operator sets them before the
+      // first deploy (FD-ARCH-039).
+      deployedSettings: () =>
+        Effect.succeed({
+          bindings: [],
+          vars: {},
+          secrets: COMPOSITION_SECRETS.map(([name]) => name),
+          crons: [],
+          routes: [],
+          compatibility_date: "",
+          compatibility_flags: [],
+          containers: [],
+        }),
       lastRecord: () => Effect.succeed(null),
       appRegistration: Effect.succeed(APP_PERMISSIONS),
       requiredChecks: Effect.succeed([...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
