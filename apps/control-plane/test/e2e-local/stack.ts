@@ -222,6 +222,8 @@ export interface StackOptions {
    * endpoint, say) reach it. Without it the Worker has no public origin, as the rendered configuration gives none.
    */
   readonly publicOrigin?: boolean;
+  /** Worker secrets beyond the ones every stack sets, such as `PROVENANCE_KEY` and `LOG_KEY`. */
+  readonly secrets?: Readonly<Record<string, string>>;
 }
 
 /** An App key pair, as the operator's `GITHUB_APP_PRIVATE_KEY` secret holds the private half. */
@@ -275,6 +277,7 @@ export const startStack = async (options: StackOptions = {}): Promise<Stack> => 
       COMPILE_CACHE_SECRET,
       LINK_KEY,
       ...(options.publicOrigin === true ? { PUBLIC_ORIGIN: front.url } : {}),
+      ...options.secrets,
       // The template renders neither; the overlay holds both (`dispatchers`, `dispatch.oidcAudience`).
       DISPATCHERS: JSON.stringify(overlay.dispatchers ?? []),
       DISPATCH_OIDC_AUDIENCE: overlay.dispatch?.oidcAudience ?? "",

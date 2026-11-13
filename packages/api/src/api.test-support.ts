@@ -18,6 +18,7 @@ import {
   Intake,
   OidcKey,
   Operations,
+  ProvenancePolicies,
   type DispatchSubmission,
   type ExecutionRecord,
   type OperatorCall,
@@ -165,6 +166,8 @@ export interface Doubles {
   opsFailure: ReturnType<typeof apiError> | undefined;
   /** Each repository's confidentiality mode; a repository absent here is `unclassified`. */
   readonly confidentiality: Map<string, ConfidentialityMode>;
+  /** The verification policy's versions; a suite sets the publisher over in-memory stores. */
+  provenancePolicies: ProvenancePolicies["Service"];
 }
 
 export const makeDoubles = (): Doubles => {
@@ -180,6 +183,11 @@ export const makeDoubles = (): Doubles => {
     oidcKeys: undefined,
     opsFailure: undefined,
     confidentiality: new Map(),
+    provenancePolicies: {
+      served: () => Effect.fail(apiError("not_found", "no verification policy is published")),
+      publish: () => Effect.fail(apiError("unavailable", "this harness publishes no policy")),
+      keyHistory: Effect.fail(apiError("unavailable", "this harness records no key history")),
+    },
   };
   return doubles;
 };
@@ -269,6 +277,11 @@ export const portsContext = (doubles: Doubles) =>
         Effect.succeed({ executorId: body.executor_id, postureTier: "unmanaged" }),
     }),
     Context.add(OidcKey, { keys: Effect.sync(() => doubles.oidcKeys) }),
+    Context.add(ProvenancePolicies, {
+      served: (version) => doubles.provenancePolicies.served(version),
+      publish: (envelope, now) => doubles.provenancePolicies.publish(envelope, now),
+      keyHistory: Effect.suspend(() => doubles.provenancePolicies.keyHistory),
+    }),
   );
 
 export interface Harness {

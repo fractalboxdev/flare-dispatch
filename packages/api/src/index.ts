@@ -15,6 +15,7 @@ export * from "./router.ts";
 export { canonicalJson, idempotencyOf, submissionOf, submit } from "./routes/dispatch.ts";
 export { d1Executions, recordOf, reportedStatus } from "./live/executions.ts";
 export { oidcKeyFromSecret } from "./live/oidc-key.ts";
+export { provenancePolicies } from "./live/provenance-policy.ts";
 export {
   appleAttestationVerifier,
   attestationVerifier,

@@ -239,6 +239,49 @@ export const OpenIdConfiguration = Schema.Struct({
 
 export const Health = Schema.Struct({ status: Schema.Literal("ok") });
 
+/**
+ * One version of the verification policy as the operator publishes it and the well-known route serves it: a DSSE
+ * envelope signed by the policy root key (specs/provenance.md § Verification policy).
+ */
+export const ProvenancePolicyEnvelope = Schema.Struct({
+  payloadType: Schema.String,
+  payload: Schema.String,
+  signatures: Schema.Array(Schema.Struct({ keyid: Schema.String, sig: Schema.String })),
+});
+export type ProvenancePolicyEnvelope = typeof ProvenancePolicyEnvelope.Type;
+
+export const PublishPolicyBody = Schema.Struct({ envelope: ProvenancePolicyEnvelope });
+
+/** One key the control plane has used: valid from `not_before` up to, not including, `not_after`; absent while active. */
+export const KeyHistoryEntryView = Schema.Struct({
+  kid: Schema.String,
+  jwk: Schema.Struct({
+    kty: Schema.String,
+    crv: Schema.String,
+    x: Schema.String,
+    y: Schema.String,
+  }),
+  not_before: Schema.Number,
+  not_after: Schema.optionalKey(Schema.Number),
+});
+
+/**
+ * The control plane's key history (FD-PROV-047): every provenance key and private-log key it has used, with the window
+ * it recorded. A policy version's `provenance_keys` and its private log's `keys` must carry these entries unchanged.
+ */
+export const KeyHistoryView = Schema.Struct({
+  provenance_keys: Schema.Array(KeyHistoryEntryView),
+  log_keys: Schema.Array(KeyHistoryEntryView),
+});
+export type KeyHistoryView = typeof KeyHistoryView.Type;
+
+/** What publishing a policy version answers: the version and its transparency-log entry (FD-PROV-046). */
+export const PolicyPublished = Schema.Struct({
+  policy_version: Schema.String,
+  log_index: Schema.Number,
+  integrated_time: Schema.Number,
+});
+
 // --- Operability -----------------------------------------------------------------------------------------------------
 
 /** One executor of the fleet view: kind, heartbeat age, drain and quarantine flags, slots per class (FD-OPS-071). */
@@ -395,7 +438,32 @@ export class WellKnownGroup extends HttpApiGroup.make("wellKnown")
       ...errors,
     }),
     HttpApiEndpoint.get("jwks", "/.well-known/jwks.json", { success: Jwks, ...errors }),
+    HttpApiEndpoint.get("provenancePolicy", "/.well-known/flare-dispatch/provenance-policy.json", {
+      /** Absent for the current version; an earlier version by its `policy_version` (FD-PROV-044). */
+      query: { policy_version: Schema.optionalKey(Schema.String) },
+      success: ProvenancePolicyEnvelope,
+      ...errors,
+    }),
     HttpApiEndpoint.get("health", "/health", { success: Health }),
+  )
+  .middleware(ErrorModel) {}
+
+/**
+ * Publishing a verification-policy version and reading the key history it must carry: operators' routes, apart from
+ * mameko's operator operations (FD-OPS-077). The control plane appends the version to the transparency log before the
+ * well-known route serves it (FD-PROV-046).
+ */
+export class ProvenancePolicyGroup extends HttpApiGroup.make("provenancePolicy")
+  .add(
+    HttpApiEndpoint.put("publish", "/v1/provenance-policy", {
+      payload: PublishPolicyBody,
+      success: PolicyPublished,
+      ...errors,
+    }),
+    HttpApiEndpoint.get("keyHistory", "/v1/provenance-policy/key-history", {
+      success: KeyHistoryView,
+      ...errors,
+    }),
   )
   .middleware(ErrorModel) {}
 
@@ -515,5 +583,6 @@ export class FlareDispatchApi extends HttpApi.make("flare-dispatch")
   .add(OperabilityGroup)
   .add(ExecutorsGroup)
   .add(WellKnownGroup)
+  .add(ProvenancePolicyGroup)
   .add(LogsGroup)
   .add(ArtifactsGroup) {}

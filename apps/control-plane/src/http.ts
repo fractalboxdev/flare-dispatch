@@ -22,11 +22,26 @@ import {
   oidcKeyFromSecret,
   Operations,
   opsGroup,
+  provenancePolicies,
+  provenancePolicyGroup,
   RequestId,
   routerGroup,
   toFetchHandler,
   wellKnownGroup,
 } from "@fractalboxdev/flare-dispatch-api";
+import {
+  LogAppendFailed,
+  parseProvenanceKey,
+  PRIVATE_LOG_NAME,
+  privateLogAppend,
+} from "@fractalboxdev/flare-dispatch-cache";
+import {
+  d1KeyHistoryStore,
+  d1PolicyStore,
+  KeyHistoryStore,
+  PolicyStore,
+  PolicyTransparencyLog,
+} from "@fractalboxdev/flare-dispatch-cache/provenance-policy";
 import { handleIntake, WEBHOOK_MAX_BYTES } from "@fractalboxdev/flare-dispatch-intake";
 import {
   livenessReport,
@@ -85,6 +100,7 @@ export const router = mount(
   opsGroup,
   operabilityGroup(OperabilityHandlers),
   executorsGroup,
+  provenancePolicyGroup,
   logsGroup(LogsHandlers),
   artifactsGroup(ArtifactsHandlers),
   mcpGroup,
@@ -113,6 +129,40 @@ const operations = (env: ControlPlaneEnv) =>
     }),
   });
 
+/**
+ * The verification policy's versions in D1, the control plane's key history beside them, and the private log the
+ * `TransparencyLog` object writes, which every version is appended to before it is served (FD-PROV-046). A deploy with
+ * no `TRANSPARENCY_LOG` binding fails each publish, and serves nothing it has not logged.
+ */
+const policies = (env: ControlPlaneEnv) => {
+  const db = env.DB as unknown as D1Database;
+  const api = apiEnvOf(env);
+  const ns = env.TRANSPARENCY_LOG;
+  return provenancePolicies({
+    provenance: parseProvenanceKey(api.PROVENANCE_KEY),
+    log: parseProvenanceKey(api.LOG_KEY),
+  }).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(PolicyStore)(d1PolicyStore(db)),
+        Layer.succeed(KeyHistoryStore)(d1KeyHistoryStore(db)),
+        Layer.succeed(PolicyTransparencyLog)({
+          append:
+            ns === undefined
+              ? () =>
+                  Effect.fail(
+                    new LogAppendFailed({
+                      log: "private",
+                      message: "this deploy binds no TRANSPARENCY_LOG object",
+                    }),
+                  )
+              : privateLogAppend(ns.get(ns.idFromName(PRIVATE_LOG_NAME))),
+        }),
+      ),
+    ),
+  );
+};
+
 const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateServices>) =>
   Layer.mergeAll(
     Layer.merge(intakePort, intakeCancellation).pipe(Layer.provide(Layer.succeedContext(isolate))),
@@ -132,6 +182,7 @@ const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateS
     cacheReads(env),
     Layer.succeed(OpsStore)({ db: env.DB, now: Date.now }),
     spendViewOf(env),
+    policies(env),
   );
 
 /** One request through the router, with the isolate's services and the ones its routes read. */
