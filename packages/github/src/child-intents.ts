@@ -1,9 +1,9 @@
 // The `check.conclude` intents of a fan-out parent's children (specs/github-output.md FD-GH-020). Once a parent is
 // terminal, each child that owns a check run and has no conclusion applied gets one `cp:check:conclude` row carrying
 // `{ verdict }`: the child's own recorded outcome, or `failure` "parent closed before this part settled" for a child
-// that settled none. mameko's coordinator exposes no `insertIntent` (MAMEKO-OUT-052) at the pinned commit, and that
+// that settled none. mameko's coordinator exposes no `insertIntent` (MAMEKO-OUT-054) at the pinned commit, and that
 // guard refuses a terminal execution, which every child of an ended parent is after the parent-ended cascade
-// (MAMEKO-RUN-084); the rows go in through host-cloudflare's `insertOutboxRows`, which leaves a key that already has a
+// (MAMEKO-RUN-088); the rows go in through host-cloudflare's `insertOutboxRows`, which leaves a key that already has a
 // row as it is.
 import { insertOutboxRows, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { newRow } from "@fractalboxdev/mameko-kernel";

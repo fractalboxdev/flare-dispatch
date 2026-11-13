@@ -7,11 +7,13 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./runs": "./src/runs.ts"
+    "./runs": "./src/runs.ts",
+    "./run-digests": "./src/run-digests.json"
   },
   "scripts": {
     "test": "vitest run",
-    "gen:schemas": "node --experimental-strip-types --no-warnings src/generate-schemas.ts"
+    "gen:schemas": "node --experimental-strip-types --no-warnings src/generate-schemas.ts",
+    "gen:run-digests": "node --experimental-strip-types --no-warnings src/generate-run-digests.ts"
   },
   "dependencies": {
     "@fractalboxdev/flare-dispatch-agentic": "workspace:*",

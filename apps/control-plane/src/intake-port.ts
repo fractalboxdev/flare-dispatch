@@ -95,7 +95,7 @@ export const API_CANCEL_CAUSE = "operator-cancel";
 
 /**
  * The `Cancellation` port: mameko records the execution `cancelled(operator-cancel)` with its outcome row and cancels its
- * workflow and lease, queued or claimed; a terminal execution is left unchanged (MAMEKO-ADM-065).
+ * workflow and lease, queued or claimed; a terminal execution is left unchanged (MAMEKO-ADM-067).
  */
 export const intakeCancellation = Layer.effect(
   Cancellation,

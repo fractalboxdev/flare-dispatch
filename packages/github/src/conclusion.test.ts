@@ -61,7 +61,7 @@ describe("checkConclusion", () => {
       });
   });
 
-  it("[FD-GH-027] MAMEKO-ADM-059, MAMEKO-PROF-018 no capacity reason concludes neutral", () => {
+  it("[FD-GH-027] MAMEKO-ADM-061, MAMEKO-PROF-018 no capacity reason concludes neutral", () => {
     for (const category of CAPACITY)
       expect(
         checkConclusion({ _tag: "failure", category, reason: `${category}: context overflow` })

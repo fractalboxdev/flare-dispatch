@@ -32,7 +32,7 @@ export type TriageVerdict = (typeof TRIAGE_VERDICTS)[number];
 
 /** The other open issues one classification may name as the original (FD-AGT-074). */
 export const DUPLICATE_CANDIDATE_LIMIT = 40;
-/** Issues classified per execution: at most two intents each stay inside mameko's 256 (MAMEKO-RUN-071). */
+/** Issues classified per execution: at most two intents each stay inside mameko's 256 (MAMEKO-RUN-075). */
 export const MAX_OPEN_ISSUES = 100;
 /** Issues per page of the open-issue read. */
 export const ISSUES_PAGE_SIZE = 100;

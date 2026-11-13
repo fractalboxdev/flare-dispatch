@@ -222,7 +222,7 @@ const refused = (step: string, kind: string, detail: string) =>
 /**
  * `RecipeIntents` over the runner's `Intents`, each keyed `run:<step>:<index>`. An emission mameko refuses
  * (`DuplicateIntentKey`, `IntentLimitExceeded`) fails the whole run in the runner with `infra: <tag>` and sends none of
- * its intents (MAMEKO-RUN-070, MAMEKO-RUN-071), so here it is logged.
+ * its intents (MAMEKO-RUN-074, MAMEKO-RUN-075), so here it is logged.
  */
 export const runnerIntentsLayer: Layer.Layer<RecipeIntents, never, Intents> = Layer.effect(
   RecipeIntents,

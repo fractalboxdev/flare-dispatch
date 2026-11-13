@@ -1,5 +1,5 @@
 // FlareDispatch's `supersessionKey` binding through mameko's admission on host-cloudflare's D1 under workerd: intake
-// submits each request with the key the binding returns, and admission's supersession (MAMEKO-ADM-061, MAMEKO-ADM-062)
+// submits each request with the key the binding returns, and admission's supersession (MAMEKO-ADM-063, MAMEKO-ADM-064)
 // acts on that key alone.
 import {
   catalogRuns,
@@ -62,7 +62,7 @@ const plane = async () => {
       // No run this fixture admits declares a cooldown, so no request is held.
       Layer.succeed(HeldCheckReporter, { queued: () => Effect.void, dropped: () => Effect.void }),
       // Every request resolves to `interactive`, whose terminal outcome is not `deferred`, so no coalescing of a
-      // (run, scope) queue (MAMEKO-ADM-041) acts beside supersession.
+      // (run, scope) queue (MAMEKO-ADM-043) acts beside supersession.
       recordingResolver([], () => ({
         _tag: "Class",
         class: "interactive",

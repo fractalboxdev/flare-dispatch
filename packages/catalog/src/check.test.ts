@@ -10,6 +10,7 @@ import { Effect } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CommandExit, runCommand } from "./command.ts";
 import { deploymentOf, lookupRun, type CheckStep } from "./index.ts";
+import RUN_DIGESTS from "./run-digests.json" with { type: "json" };
 
 const entry = fileURLToPath(new URL("./runner-entry.ts", import.meta.url));
 
@@ -33,7 +34,12 @@ const startJobSocket = (path: string) =>
         for (let i = buffer.indexOf("\n"); i >= 0; i = buffer.indexOf("\n")) {
           const m = JSON.parse(buffer.slice(0, i)) as { type: string; id?: string };
           buffer = buffer.slice(i + 1);
-          const type = m.type === "job.prepare" ? "job.prepare.ok" : m.type === "job.stop" ? "job.stop.ok" : "socket.error";
+          const type =
+            m.type === "job.prepare"
+              ? "job.prepare.ok"
+              : m.type === "job.stop"
+                ? "job.stop.ok"
+                : "socket.error";
           socket.write(`${JSON.stringify({ type, ref: m.id })}\n`);
         }
       });
@@ -119,6 +125,7 @@ const runEntry = (
         workflow_version: 1,
         execution_id: "01JCHECK",
         run: "check",
+        run_digest: RUN_DIGESTS.check,
         run_version: "2.0.0",
         scope_id: "scope",
         request_context: null,

@@ -136,7 +136,7 @@ export const isolationOf = (profile: Profile, request: IsolationRequest): Isolat
 /**
  * What mameko's `requestConstraints` reads of a request: its facts, with the profile's predicates evaluated, and the
  * constraint parameters, with each declared constraint's predicate evaluated. Admission takes the same pair through its
- * placement binding (MAMEKO-ADM-089).
+ * placement binding (MAMEKO-ADM-091).
  */
 export const placementInputs = (profile: Profile, request: PlacementRequest) => {
   const { placement } = profile;

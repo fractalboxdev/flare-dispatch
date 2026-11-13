@@ -120,7 +120,7 @@ export interface OpsIntent {
 
 /**
  * Inserts one ops intent, keyed `ops:<key>` with no execution, through mameko's outbox insert (FD-GH-089,
- * MAMEKO-OUT-056). A row already present for the key stays as it is.
+ * MAMEKO-OUT-058). A row already present for the key stays as it is.
  */
 export const insertOpsIntent = (db: D1Like, intent: OpsIntent) =>
   Effect.gen(function* () {

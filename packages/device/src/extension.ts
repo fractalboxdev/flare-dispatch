@@ -1,5 +1,5 @@
 // FlareDispatch's device extension: the plane's process beside mameko's device executor, answering the extension
-// interface on file descriptor 3 (MAMEKO-EXEC-140). It holds L1 per cache namespace — the cache package's L1, which
+// interface on file descriptor 3 (MAMEKO-EXEC-149). It holds L1 per cache namespace — the cache package's L1, which
 // reads through to L2 on a miss and uploads to L2 after a put — and `LocalContent` per tenant scope, and restores a
 // cache entry only for a namespace a lease it was handed may read (FD-EXEC-007). Its `statement` operation answers the
 // unsigned DSSE envelope the statement builder writes (specs/provenance.md § Statement flow). Peer cache is not an

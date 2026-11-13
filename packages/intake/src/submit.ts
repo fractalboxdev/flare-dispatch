@@ -133,9 +133,9 @@ export interface Admitted {
   readonly className: string;
   readonly duplicate: boolean;
   /**
-   * Admission concluded the execution at once: its reason (`capacity: queue full`, MAMEKO-ADM-040), `expired` or
-   * `deferred` for a class whose terminal outcome is that and which concludes with no reason (MAMEKO-ADM-040,
-   * MAMEKO-ADM-042), or the reason of a `cancelled` conclusion (MAMEKO-ADM-063). Null when admission did not conclude it.
+   * Admission concluded the execution at once: its reason (`capacity: queue full`, MAMEKO-ADM-042), `expired` or
+   * `deferred` for a class whose terminal outcome is that and which concludes with no reason (MAMEKO-ADM-042,
+   * MAMEKO-ADM-044), or the reason of a `cancelled` conclusion (MAMEKO-ADM-065). Null when admission did not conclude it.
    */
   readonly concluded: string | null;
   readonly notBefore: number | null;
@@ -210,7 +210,7 @@ const dataClassRefusal = (
     Match.exhaustive,
   );
 
-/** Records a request rejected before admission (MAMEKO-ADM-091). */
+/** Records a request rejected before admission (MAMEKO-ADM-093). */
 export const shed = (repo: string, run: string | null, reason: string) =>
   ShedRecorder.use((s) => s.record({ scopeId: repo, run, reason, estimatedCost: null }));
 
@@ -258,7 +258,7 @@ const placementRequest = (
   };
 };
 
-/** The facts and constraint parameters admission's placement binding answers for the request (MAMEKO-ADM-089). */
+/** The facts and constraint parameters admission's placement binding answers for the request (MAMEKO-ADM-091). */
 const admissionPlacement = (
   profile: Profile,
   s: Submission,
@@ -431,7 +431,7 @@ export const submit = (
     };
     // mameko's `admit` writes the execution, dedup key and placement rows under this id in one transaction, with the
     // eligible kinds, the constraints, the isolation and the deadline it derives from the class and these facts
-    // (MAMEKO-ADM-023, MAMEKO-ADM-105, MAMEKO-LEASE-084).
+    // (MAMEKO-ADM-023, MAMEKO-ADM-107, MAMEKO-LEASE-084).
     const admitInput: IntakeAdmitInput = {
       executionId: id,
       scopeId: s.repo,

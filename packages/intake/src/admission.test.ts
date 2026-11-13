@@ -149,7 +149,7 @@ describe("the workflow start at admission", () => {
 });
 
 describe("placement at admission", () => {
-  it("MAMEKO-ADM-035 an unplaceable request concludes placement: no eligible executor, with no placement and no start", async () => {
+  it("MAMEKO-ADM-037 an unplaceable request concludes placement: no eligible executor, with no placement and no start", async () => {
     const h = await harness({
       resolve: () => ({
         _tag: "Class",
@@ -168,7 +168,7 @@ describe("placement at admission", () => {
     expect(h.recorded.started).toEqual([]);
   });
 
-  it("[FD-PROF-037] a fork pull request concludes placement: no eligible executor while no pool open to its class runs separated (MAMEKO-ADM-103)", async () => {
+  it("[FD-PROF-037] a fork pull request concludes placement: no eligible executor while no pool open to its class runs separated (MAMEKO-ADM-105)", async () => {
     const h = await harness();
     await h.run(
       handleIntake(
@@ -305,7 +305,7 @@ describe("a held request's release", () => {
     ).toHaveLength(0);
   });
 
-  it("[FD-INT-057] MAMEKO-ADM-042 concludes a held batch request released into the class's full global bound deferred, and arms no window", async () => {
+  it("[FD-INT-057] MAMEKO-ADM-044 concludes a held batch request released into the class's full global bound deferred, and arms no window", async () => {
     const { h, id } = await held();
     const [request] = await h.run(IntakeStore.use((s) => s.due(NOW + 60_000, 1)));
     expect(request!.admit.className).toBe("batch");
@@ -381,13 +381,13 @@ describe("supersession and serial groups at admission", () => {
       { status: "pending", reason: null, key: null, sha: HEAD },
       { status: "pending", reason: null, key: `${REPO}:12:check:ci`, sha: second },
     ]);
-    // The superseded member's workflow is cancelled with the cause its row records (MAMEKO-ADM-062).
+    // The superseded member's workflow is cancelled with the cause its row records (MAMEKO-ADM-064).
     const cancelledId = h.rows("select id from executions where status = 'cancelled'")[0]!.id;
     expect(h.recorded.workflowCancels).toEqual([{ executionId: cancelledId, cause: "superseded" }]);
   });
 
   it("[FD-PROF-029] a fork pull request's check re-run joins no supersession group and cancels no newer member", async () => {
-    // A separated `lean` pool places the fork requests, so the newer head's execution stays pending (MAMEKO-ADM-103).
+    // A separated `lean` pool places the fork requests, so the newer head's execution stays pending (MAMEKO-ADM-105).
     const production = buildProfile("production");
     const h = await harness({
       settings: {

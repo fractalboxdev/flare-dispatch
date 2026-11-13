@@ -176,6 +176,7 @@ const runLease = (lease: Record<string, unknown>) =>
         workflow_version: lease["workflow_version"],
         execution_id: lease["execution_id"],
         run: lease["run"],
+        run_digest: lease["run_digest"],
         run_version: lease["run_version"],
         scope_id: lease["scope_id"],
         request_context: lease["request_context"],

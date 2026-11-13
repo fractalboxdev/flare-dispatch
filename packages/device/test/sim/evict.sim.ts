@@ -1,6 +1,6 @@
 // The device extension's V-SIM scenario for L1 eviction under the free-disk floor (specs/verification.md § V-SIM).
 // A seed fixes a workload of `cache.put` and `cache.get` lines and the disk the device's other files use; whenever free
-// disk falls below the floor, the scenario plays the device executor (MAMEKO-EXEC-123) and sends
+// disk falls below the floor, the scenario plays the device executor (MAMEKO-EXEC-129) and sends
 // `cache.evict(floor - free)` over the extension interface, then checks the answer against L1's files on disk and a
 // model of the read order. `scenarios` is what the `sim` job runs (packages/ops/scripts/harness.ts).
 import { createHash } from "node:crypto";
@@ -81,10 +81,9 @@ export const simulateEviction = async (seed: number): Promise<EvictOutcome> => {
     };
     let id = 0;
     const send = async (message: Record<string, unknown>) =>
-      (await Effect.runPromise(answerLine(state, JSON.stringify({ id: String(++id), ...message })))) as Record<
-        string,
-        unknown
-      > | null;
+      (await Effect.runPromise(
+        answerLine(state, JSON.stringify({ id: String(++id), ...message })),
+      )) as Record<string, unknown> | null;
     await send({
       type: "proxies",
       lease: {

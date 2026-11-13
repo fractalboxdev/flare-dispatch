@@ -78,7 +78,7 @@ const observe = (key: string, o: Parameters<InstallationQuota["Service"]["observ
   });
 
 describe("applier rate limit", () => {
-  it("MAMEKO-OUT-038 grants one permit per call and counts it against the installation", async () => {
+  it("MAMEKO-OUT-040 grants one permit per call and counts it against the installation", async () => {
     const answers = await withQuota(
       Effect.gen(function* () {
         yield* observe("7", { limit: 100, remaining: 12 });
@@ -92,7 +92,7 @@ describe("applier rate limit", () => {
     expect(answers).toEqual(["granted", "granted", "wait"]);
   });
 
-  it("MAMEKO-OUT-038 keys the budget by installation", async () => {
+  it("MAMEKO-OUT-040 keys the budget by installation", async () => {
     const answers = await withQuota(
       Effect.gen(function* () {
         yield* observe("7", { limit: 100, remaining: 0, resetAt: NOW + 5000 });
@@ -105,7 +105,7 @@ describe("applier rate limit", () => {
     expect(answers).toEqual(["wait", "granted"]);
   });
 
-  it("[FD-GH-056] MAMEKO-OUT-057 a row keyed by its repository takes its permit from its installation's quota", async () => {
+  it("[FD-GH-056] MAMEKO-OUT-059 a row keyed by its repository takes its permit from its installation's quota", async () => {
     const answers = await withQuota(
       Effect.gen(function* () {
         yield* observe("7", { limit: 100, remaining: 0, resetAt: NOW + 5000 });
@@ -144,7 +144,7 @@ describe("applier rate limit", () => {
     expect(answer).toEqual({ _tag: "wait", retryAt: NOW + quotaOptionsDefault.concurrentRetryMs });
   });
 
-  it("[FD-GH-058] MAMEKO-OUT-041 at the reserve only check.open and check.conclude rows get a permit", async () => {
+  it("[FD-GH-058] MAMEKO-OUT-043 at the reserve only check.open and check.conclude rows get a permit", async () => {
     const answers = await withQuota(
       Effect.gen(function* () {
         yield* observe("7", { limit: 100, remaining: 10, resetAt: NOW + 5000 });
@@ -196,7 +196,7 @@ describe("applier rate limit", () => {
     expect(answers).toEqual([{ _tag: "wait", retryAt: NOW + 60_000 }, "granted"]);
   });
 
-  it("[FD-GH-062] MAMEKO-OUT-038 caps apply permits per minute; lookup and reconcile do not count", async () => {
+  it("[FD-GH-062] MAMEKO-OUT-040 caps apply permits per minute; lookup and reconcile do not count", async () => {
     const answers = await withQuota(
       Effect.gen(function* () {
         const tags: string[] = [];
@@ -268,7 +268,7 @@ describe("applier rate limit", () => {
     expect(answers).toEqual(["granted", "wait"]);
   });
 
-  it("[FD-GH-063] MAMEKO-OUT-039 a 9th concurrent call waits until a permit is released", async () => {
+  it("[FD-GH-063] MAMEKO-OUT-041 a 9th concurrent call waits until a permit is released", async () => {
     const result = await withQuota(
       Effect.gen(function* () {
         const limit = yield* ActuatorRateLimit;
@@ -300,7 +300,7 @@ describe("applier rate limit", () => {
     });
   });
 
-  it("MAMEKO-OUT-039 releasing an unknown or already released permit changes nothing", async () => {
+  it("MAMEKO-OUT-041 releasing an unknown or already released permit changes nothing", async () => {
     const tags = await withQuota(
       Effect.gen(function* () {
         const limit = yield* ActuatorRateLimit;
@@ -516,7 +516,11 @@ describe("shared installation quota", () => {
         },
       });
     const writer = Layer.provideMerge(
-      githubClientLayer({ fetch, token: () => Effect.succeed("t"), baseUrl: "https://github.test" }),
+      githubClientLayer({
+        fetch,
+        token: () => Effect.succeed("t"),
+        baseUrl: "https://github.test",
+      }),
       installationQuotaObjectLayer(objectOf),
     );
     const answers = await atNow(
@@ -559,7 +563,7 @@ describe("shared installation quota", () => {
     expect(out.share).toMatchObject({ limitKey: "7" });
   });
 
-  it("[FD-GH-063] MAMEKO-OUT-039 a permit no drainer released stops counting once the drainer's claim on its row has expired", async () => {
+  it("[FD-GH-063] MAMEKO-OUT-041 a permit no drainer released stops counting once the drainer's claim on its row has expired", async () => {
     const { objectOf } = objects();
     const run = isolate(objectOf);
     const out = await atNow(

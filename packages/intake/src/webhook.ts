@@ -76,7 +76,7 @@ const cancelUnavailable =
 /**
  * `merge_group` `checks_requested`: the base branch's required gating runs open their check runs on the group's head
  * (FD-GH-075). `destroyed`: every non-terminal execution on the head ends `cancelled(merge-group-destroyed)` through
- * mameko's cancel of one execution (FD-GH-076, MAMEKO-ADM-065); the mapping concludes its check run `cancelled`.
+ * mameko's cancel of one execution (FD-GH-076, MAMEKO-ADM-067); the mapping concludes its check run `cancelled`.
  */
 const mergeGroup = (event: WebhookEvent, fields: WebhookFields, repo: string, sha: string) =>
   Effect.gen(function* () {
@@ -109,7 +109,7 @@ const mergeGroup = (event: WebhookEvent, fields: WebhookFields, repo: string, sh
  * `pull_request` `closed`: intake records its close time and the lifecycle event's `updated_at`, so replayed or older
  * deliveries cannot replace a newer reopen (FD-CACHE-064). Every supersession group of the pull request,
  * `<owner>/<repo>:<number>:*`, is cancelled with cause `pr-closed` through mameko's group cancel (FD-PROF-030,
- * MAMEKO-ADM-064). A closed pull request submits no run.
+ * MAMEKO-ADM-066). A closed pull request submits no run.
  */
 const pullRequestClosed = (
   repo: string,

@@ -26,17 +26,21 @@ import {
   ExecutorChannel as MamekoExecutorChannel,
   type ClaimedLease,
 } from "@fractalboxdev/mameko-host-cloudflare";
+import type { ExecutorKind } from "@fractalboxdev/mameko-kernel";
+import { type ExecutionRecord, ObjectStorePresigner } from "@fractalboxdev/mameko-ports";
 import { DurableObject } from "cloudflare:workers";
 import { Context, Effect, Match } from "effect";
 import { guardLease } from "./agentic.ts";
-import { isolateServices } from "./composition.ts";
+import { isolateServices, presignerLayer } from "./composition.ts";
 import { leaseCache } from "./cache.ts";
+import { leaseCacheAt } from "./cache-execution.ts";
 import { type ChannelSocket, cloudStatementOnFrame } from "./provenance.ts";
 import { imageDigestOf, invalidateLeaseNonce, leaseNonce, requestLeaseFields } from "./lease.ts";
 import {
   channelConfig,
   deployment,
   executionConfig,
+  presignerConfigOf,
   profileOf,
   type ControlPlaneEnv,
 } from "./config.ts";
@@ -47,12 +51,6 @@ type ChannelEnv = ControlPlaneEnv & {
 type EngineEnv = ControlPlaneEnv & {
   readonly MAMEKO_EXECUTION_CONFIG: ReturnType<typeof executionConfig>;
 };
-
-const hex = (bytes: ArrayBuffer) =>
-  Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
-
-const sha256 = async (text: string) =>
-  hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
 
 /** A lease's progress timeout, from `defineRun`'s default. */
 const PROGRESS_TIMEOUT_MS = 300_000;
@@ -77,6 +75,58 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
   override async webSocketMessage(ws: unknown, message: string | ArrayBuffer): Promise<void> {
     await super.webSocketMessage(ws, message);
     await cloudStatementOnFrame(this.bindings, ws as ChannelSocket, message, Date.now());
+  }
+
+  /**
+   * Signs each `exec.presign` URL with the object-store presigner over the presign token, on the bucket's S3 endpoint
+   * (MAMEKO-HOST-051, FD-CACHE-091). A deploy without the presign token, the account id or the bucket name signs none,
+   * so mameko answers the request `refused`.
+   */
+  protected override presign(
+    key: string,
+    method: "GET" | "PUT",
+    length: number | null,
+    expiresAt: number,
+  ): Promise<{ readonly url: string; readonly expiresAt: number } | null> {
+    if (presignerConfigOf(this.bindings) === undefined) return Promise.resolve(null);
+    return Effect.runPromise(
+      ObjectStorePresigner.use((p) => p.presign(key, method, length, expiresAt)).pipe(
+        Effect.provide(presignerLayer(this.bindings)),
+      ),
+    );
+  }
+
+  /**
+   * The profile's `cache_namespaces` binding for a claim (MAMEKO-LEASE-088): the namespaces of the execution's repository
+   * and run for the claiming executor's kind, computed from the execution and intake's record and never from the run
+   * inputs (FD-CACHE-016), and none for a `confidential-compute` repository or a sealed-sandbox run (FD-CACHE-008).
+   * mameko writes the answer onto the lease's `cache_namespaces` inside the claim.
+   */
+  protected override cacheNamespaces(
+    execution: ExecutionRecord,
+    executorKind: string,
+  ): Promise<{ readonly read: readonly string[]; readonly write: string | null } | null> {
+    const env = this.env;
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const record = yield* (yield* IntakeStore).get(execution.executionId);
+        if (record === null) return null;
+        const entry = Match.value(lookupRun(deployment(env), execution.run)).pipe(
+          Match.tag("Available", ({ entry }) => entry),
+          Match.orElse(() => null),
+        );
+        const fields = yield* Effect.promise(() =>
+          leaseCacheAt(
+            env,
+            record,
+            { epoch: 0, kind: executorKind as ExecutorKind },
+            execution.deadlineAt ?? 0,
+            entry?.sealedSandbox === true,
+          ),
+        );
+        return fields.cache_namespaces;
+      }).pipe(Effect.provide(d1IntakeStore(env.DB))),
+    );
   }
 
   /**
@@ -111,10 +161,8 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
           Match.tag("Available", ({ entry }) => entry),
           Match.orElse(() => null),
         );
-        const run = entry?.spec ?? null;
         return yield* guardLease(env, {
           run: row.run,
-          run_digest: yield* Effect.promise(() => sha256(`${row.run}@${run?.version ?? ""}`)),
           ...requestLeaseFields(entry, record, row),
           image_digest: yield* imageDigestOf(entry, row.kind ?? "device", env.GATE_IMAGE_DIGEST),
           deadline_at: row.deadline_at,

@@ -43,7 +43,7 @@ export interface IntakeLayerOptions {
   readonly queued?: (className: string) => Effect.Effect<void>;
   /** Starts an admitted execution's `Execution` workflow (MAMEKO-ADM-029). */
   readonly startExecution?: AdmissionPorts["startExecution"];
-  /** Cancels a superseded or group-cancelled member's workflow and lease (MAMEKO-ADM-062, MAMEKO-ADM-066). */
+  /** Cancels a superseded or group-cancelled member's workflow and lease (MAMEKO-ADM-064, MAMEKO-ADM-068). */
   readonly cancelExecution?: AdmissionPorts["cancelExecution"];
   readonly alarms?: AdmissionPorts["alarms"];
 }
@@ -194,7 +194,7 @@ export const profileRequestOf = (r: ClassRequest, callerProtected: boolean): Pro
  * `resolveRequestClass` (MAMEKO-ADM-005). A gating run on a pull-request trigger reads its target branch's required
  * set, the `protection-snapshot` input, through the 10 min cache; an unreadable set arrives as `Unavailable` with the
  * reason FD-PROF-015 and FD-PROF-016 act on. The alarm the binding returns is raised with the run and repository
- * (MAMEKO-ADM-093), and a clamped class input is logged (FD-PROF-020).
+ * (MAMEKO-ADM-095), and a clamped class input is logged (FD-PROF-020).
  */
 export const profileClassResolver = Layer.effect(
   ClassResolver,

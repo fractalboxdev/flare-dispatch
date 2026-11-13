@@ -822,7 +822,7 @@ describe("cooldown", () => {
     ]);
   });
 
-  it("[FD-INT-057] MAMEKO-ADM-041 a held batch request released while the run's earlier execution still queues takes its place, and the earlier one is recorded deferred", async () => {
+  it("[FD-INT-057] MAMEKO-ADM-043 a held batch request released while the run's earlier execution still queues takes its place, and the earlier one is recorded deferred", async () => {
     const h = await harness();
     await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
     await h.adjust(10_000);

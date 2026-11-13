@@ -1144,6 +1144,9 @@ importers:
       effect:
         specifier: 4.0.6
         version: 4.0.6
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   vendor/mameko/packages/store-sqlite:
     dependencies:

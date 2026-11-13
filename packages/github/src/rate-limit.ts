@@ -42,7 +42,7 @@ export interface QuotaOptions {
   readonly concurrentRetryMs: number;
   /**
    * How long a granted permit counts as outstanding without a release: the drainer's claim on the row, after which
-   * the row's call has expired unanswered (MAMEKO-OUT-039). It frees the slot of a drainer that stopped before it
+   * the row's call has expired unanswered (MAMEKO-OUT-041). It frees the slot of a drainer that stopped before it
    * released, which a shared ledger outlives.
    */
   readonly permitLifetimeMs: number;
@@ -193,9 +193,7 @@ const fresh = (options: QuotaOptions): InstallationState => ({
 });
 
 const stateOf = (options: QuotaOptions, ledger: QuotaLedger, limitKey: string) =>
-  Object.hasOwn(ledger.installations, limitKey)
-    ? ledger.installations[limitKey]!
-    : fresh(options);
+  Object.hasOwn(ledger.installations, limitKey) ? ledger.installations[limitKey]! : fresh(options);
 
 const withState = (
   ledger: QuotaLedger,
@@ -237,7 +235,7 @@ export const observeQuota = (
 
 /**
  * Decides one permit request at `now` against the ledger. A permit outstanding for `permitLifetimeMs` is released
- * first, since the drainer's claim on its row has expired (MAMEKO-OUT-039).
+ * first, since the drainer's claim on its row has expired (MAMEKO-OUT-041).
  */
 export const acquirePermit = (
   options: QuotaOptions,
@@ -401,7 +399,7 @@ const RECORDS_PERMIT = `${RECORDS_LIMIT_KEY}-permit:`;
 /**
  * mameko's actuator rate limit, served by the installation quota under the installation id, the key the client observes
  * each response under (FD-GH-056). A row keyed by its repository, as mameko keys a row when the binding is not applied
- * (MAMEKO-OUT-057), takes its permit from the quota of the installation that serves the repository. Any other key, an
+ * (MAMEKO-OUT-059), takes its permit from the quota of the installation that serves the repository. Any other key, an
  * installation id or the App's own key, is the quota key as it stands. A repository no installation serves keeps its
  * own key, since the applier refuses its row without a call; a directory read that fails answers `wait`, so no call
  * goes out under a quota it was not counted against. The `records` key is granted without the quota: its

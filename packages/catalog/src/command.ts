@@ -1,10 +1,10 @@
 // `GateExec`: the one interface through which a gate job reaches a workspace and a command. mameko's `Exec` and
-// `Workspace` Layers (MAMEKO-RUN-036 to MAMEKO-RUN-039) replace `processGateExec` once they exist; every recipe
+// `Workspace` Layers (MAMEKO-RUN-040 to MAMEKO-RUN-043) replace `processGateExec` once they exist; every recipe
 // depends on the interface only.
 //
 // `processGateExec` runs a command, through `/bin/sh -c` or as an argv with no shell, as a supervised child process. The child leads its own process group, so a timeout
 // or a stopped runner kills everything the command started. Its output reaches the runner's stderr: the runner's
-// stdout carries only the result line, and any other line there loses the result (MAMEKO-EXEC-132).
+// stdout carries only the result line, and any other line there loses the result (MAMEKO-EXEC-141).
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -80,7 +80,10 @@ export class GateExec extends Context.Service<
     readonly runArgv: (options: ArgvOptions) => Effect.Effect<CommandRun>;
     readonly readFile: (path: string) => Effect.Effect<Uint8Array, WorkspaceReadFailed>;
     /** Replaces an existing file's bytes and keeps its mode. */
-    readonly writeFile: (path: string, bytes: Uint8Array) => Effect.Effect<void, WorkspaceWriteFailed>;
+    readonly writeFile: (
+      path: string,
+      bytes: Uint8Array,
+    ) => Effect.Effect<void, WorkspaceWriteFailed>;
     /** Creates a file that does not exist yet, readable by every user and writable by none (mode 0444). */
     readonly createReadOnly: (
       path: string,

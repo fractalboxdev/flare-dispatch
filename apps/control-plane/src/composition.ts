@@ -59,13 +59,7 @@ import {
   writebackRecords,
   writeCredentialIn,
 } from "./agentic.ts";
-import {
-  appLoginOf,
-  appOptionsOf,
-  appServices,
-  botLoginOf,
-  readsWithoutApp,
-} from "./github.ts";
+import { appLoginOf, appOptionsOf, appServices, botLoginOf, readsWithoutApp } from "./github.ts";
 
 /**
  * The rendered `{{intake.webhookEvents}}`: `null` or unset admits every supported event, and a list admits only its
@@ -146,8 +140,8 @@ export const startExecutionOf =
 
 /**
  * The cancel of an execution a supersession, a group cancel or a per-execution cancel recorded `cancelled`: its
- * `ExecutionEngine` records the cancel, which ends its wait for a lease or a result (MAMEKO-ADM-062), and a leased
- * execution's executor gets `exec.cancel` over its channel (MAMEKO-ADM-066).
+ * `ExecutionEngine` records the cancel, which ends its wait for a lease or a result (MAMEKO-ADM-064), and a leased
+ * execution's executor gets `exec.cancel` over its channel (MAMEKO-ADM-068).
  */
 export const cancelExecutionOf =
   (env: Pick<ControlPlaneEnv, "DB" | "EXECUTION" | "CHANNEL">) =>
@@ -238,13 +232,17 @@ export const reproductionGuard = Layer.effect(
     const base = yield* Actuators;
     const store = yield* IntakeStore;
     return reproductionGuardedActuators(base, (executionId) =>
-      store.get(executionId).pipe(
-        Effect.map(
-          (record) =>
-            record !== null &&
-            isReproduction(record.placementConstraint === null ? [] : [record.placementConstraint]),
+      store
+        .get(executionId)
+        .pipe(
+          Effect.map(
+            (record) =>
+              record !== null &&
+              isReproduction(
+                record.placementConstraint === null ? [] : [record.placementConstraint],
+              ),
+          ),
         ),
-      ),
     );
   }),
 );
@@ -286,7 +284,9 @@ export const withDeliveryTimes = (env: Pick<ControlPlaneEnv, "DB">) =>
  */
 const presignerUnconfigured = (missing: ReadonlyArray<string>) => {
   const refuse = () =>
-    Effect.die(`object-store presigner: this deploy leaves ${missing.join(", ")} unset, so it signs no URL`);
+    Effect.die(
+      `object-store presigner: this deploy leaves ${missing.join(", ")} unset, so it signs no URL`,
+    );
   return Layer.mergeAll(
     Layer.succeed(R2Presigner, { presign: refuse }),
     Layer.succeed(ObjectStorePresigner, { presign: refuse }),

@@ -606,7 +606,7 @@ export const makeCheckRunApplier = Effect.gen(function* () {
 
   // Neither read guesses: `absent` sends an adoptable row again and voids a reconcile-only one, so a read without
   // an answer is `undetermined`, the row stays ambiguous and the drainer asks again after back-off
-  // (MAMEKO-OUT-025, MAMEKO-OUT-064).
+  // (MAMEKO-OUT-027, MAMEKO-OUT-066).
   const undetermined = (e: ReadFailure) =>
     Match.value(e).pipe(
       Match.tag("AmbiguousCheckRun", ({ count }) => `check run: ${count} carry the execution id`),

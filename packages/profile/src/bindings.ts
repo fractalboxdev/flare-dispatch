@@ -405,7 +405,7 @@ export interface CheckOpenPayload {
 /**
  * The `check.open` payload of an execution that owns a check, and none (null) for every other execution, one that
  * carries `local-only` included, so admission inserts `cp:check:open` for exactly the executions that own a check
- * (FD-GH-005, FD-PROF-043, MAMEKO-OUT-050).
+ * (FD-GH-005, FD-PROF-043, MAMEKO-OUT-052).
  */
 export const checkOpenPayload = (r: CheckOpenRequest): CheckOpenPayload | null =>
   r.check === null || r.labels.includes(LOCAL_ONLY)
