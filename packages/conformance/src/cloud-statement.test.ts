@@ -36,7 +36,8 @@ import {
   type D1Like,
 } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { LeaseStore, PlacementStore } from "@fractalboxdev/mameko-ports";
-import { type Context, Effect, Layer } from "effect";
+import { type Context, Effect, Fiber, Layer } from "effect";
+import { TestClock } from "effect/testing";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isolateServices } from "../../../apps/control-plane/src/composition.ts";
@@ -421,14 +422,26 @@ describe("the cloud builder's statement of an accepted cloud execution", () => {
       intent!.envelopeDigest,
     ]);
 
-    // The tick's drain: with no TRANSPARENCY_LOG object the append fails and the intent stays pending for a retry.
+    // One tick of the log-append step on the test clock set to `at`: the clock passes the tick's minute, so each retry
+    // the step makes before the next tick runs at its due time (FD-PROV-041).
+    const tick = (env: ControlPlaneEnv, at: number) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(at);
+          const step = yield* Effect.forkChild(logAppendStep(env, at).effect);
+          yield* TestClock.adjust(60_000);
+          return yield* Fiber.join(step);
+        }).pipe(Effect.provide(TestClock.layer()), Effect.orDie),
+      );
+    // The tick's drain: with no TRANSPARENCY_LOG object the append and the tick's retries at 5 s, 15 s and 35 s fail,
+    // and the intent stays pending for a later tick.
     const now = Date.now();
-    await Effect.runPromise(logAppendStep(w.env, now).effect.pipe(Effect.orDie));
+    await tick(w.env, now);
     const pending = await Effect.runPromise(
       w.logAppends.get(intent!.envelopeDigest).pipe(Effect.orDie),
     );
     expect(LogAppendStatus.$is("Pending")(pending!.status)).toBe(true);
-    // Bound, the private log takes the envelope's bytes on the next due drain, and the intent records its entry.
+    // Bound, the private log takes the envelope's bytes on a later tick's drain, and the intent records its entry.
     const appended: string[] = [];
     const logged = {
       ...w.env,
@@ -449,7 +462,8 @@ describe("the cloud builder's statement of an accepted cloud execution", () => {
         }),
       },
     } as unknown as ControlPlaneEnv;
-    await Effect.runPromise(logAppendStep(logged, now + 5_000).effect.pipe(Effect.orDie));
+    // The fourth failure's 40 s delay falls past the first tick, so the tick two minutes on drains it.
+    await tick(logged, now + 120_000);
     expect(appended).toEqual([intent!.envelope]);
     const done = await Effect.runPromise(
       w.logAppends.get(intent!.envelopeDigest).pipe(Effect.orDie),
