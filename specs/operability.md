@@ -233,6 +233,7 @@ FlareDispatch's alarm port records each alarm for the dashboard and sends it to 
 | `advisory-snapshot-stale` | page | An advisory snapshot in `scan.advisoryEcosystems` is older than 24 h | R17 |
 | `record-undelivered` | page | A `job.record` or `verdict.record` row reaches `refused` or `expired` ([github-output.md](github-output.md) FD-GH-102) | R18 |
 | `delivery-key-paused` | notify | A delivery key stays paused for more than 10 min ([MAMEKO-OPS-049](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md)) | R15 |
+| `private-log-refused` | page | The `TransparencyLog` object refuses a private-log write that would change an existing leaf or tile or reduce the tree size ([provenance.md](provenance.md) FD-PROV-038) | R17 |
 
 Other files and mameko define their own alarms (spend, admission, delivery); every alarm travels the same alarm port.
 
@@ -277,6 +278,7 @@ FlareDispatch surfaces no `resolve`, because no FlareDispatch intent kind is `re
 | R17 Advisory snapshot stale | `advisory-snapshot-stale` | Read the `advisory-refresh` run's failure; confirm the OSV archive answers; re-run the tick | FD-OPS-100 to FD-OPS-102 |
 | R18 Record undelivered | `record-undelivered` | Confirm `records.url` answers and the signing key matches; compare the execution with the receiver's records | [github-output.md](github-output.md) FD-GH-102 |
 | R19 Containment | A security incident | A `containment` identity: read `GET /v1/ops/delivery-keys`; `pause-key` each key; `halt halt-all`; read the keys again and `pause-key` each new one; `GET /v1/executions?class=release`; `cancel` each non-terminal execution; `quarantine` each affected executor. An `operators` identity ends it: `halt run`, then `resume-key` each key | [interfaces.md](interfaces.md) FD-IFC-094 to FD-IFC-101, [intake.md](intake.md) FD-INT-071 |
+| R20 Private log write refused | `private-log-refused` | Leave every object under `tlog/private/` in the `CACHE` bucket in place; read the alarm's reason and path, and compare the published checkpoint's tree size and root with the `TransparencyLog` object's leaves | [provenance.md](provenance.md) FD-PROV-038, FD-PROV-074 |
 
 ## Requirements
 

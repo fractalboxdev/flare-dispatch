@@ -21,6 +21,7 @@ export {
   ExecutorChannel,
   IntakeUnits,
   LivenessMonitor,
+  TransparencyLog,
 } from "./durable-objects.ts";
 export {
   AgentPool,

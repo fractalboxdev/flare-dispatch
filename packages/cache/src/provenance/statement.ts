@@ -198,13 +198,28 @@ const slsaPredicate = (
   },
 });
 
-const testResultPredicate = (input: StatementBody) => {
+const testResultPredicate = (
+  input: StatementBody,
+  builderVersion: Readonly<Record<string, string>> | undefined,
+) => {
   const passed = input.commands.filter((c) => c.exit_status === 0).map((c) => c.name);
   const failed = input.commands.filter((c) => c.exit_status !== 0).map((c) => c.name);
   return {
     result: input.outcome === "success" && failed.length === 0 ? "PASSED" : "FAILED",
     configuration: [
       { name: "lease", annotations: leaseBinding(input) },
+      // The builder, as the SLSA predicate's `runDetails.builder` names it, with the device's code hash.
+      ...(builderVersion === undefined
+        ? []
+        : [
+            {
+              name: "builder",
+              annotations: {
+                id: `${input.lease.executor_kind}:${input.lease.executor_id}`,
+                ...builderVersion,
+              },
+            },
+          ]),
       {
         name: "run-definition",
         digest: digestSet(input.lease.run.definition_digest),
@@ -224,7 +239,8 @@ const testResultPredicate = (input: StatementBody) => {
  * The in-toto Statement v1 for one execution: the given subjects, or the commit when there are none, since in-toto
  * Statement v1 requires at least one; the SLSA provenance v1 predicate for a build recipe and the test-result predicate
  * for a gate recipe (FD-PROV-005, FD-PROV-006, FD-PROV-007). `builderVersion` is the SLSA builder's `version`, such as
- * the device key helper's code hash; a builder with none omits it.
+ * the device key helper's code hash, and the test-result predicate's `builder` configuration descriptor; a builder with
+ * none omits both.
  */
 export const statementOf = (
   body: StatementBody,
@@ -238,5 +254,5 @@ export const statementOf = (
       : subject,
   ...(body.lease.run.kind === "build"
     ? { predicateType: SLSA_PROVENANCE_V1, predicate: slsaPredicate(body, builderVersion) }
-    : { predicateType: TEST_RESULT_V0_1, predicate: testResultPredicate(body) }),
+    : { predicateType: TEST_RESULT_V0_1, predicate: testResultPredicate(body, builderVersion) }),
 });

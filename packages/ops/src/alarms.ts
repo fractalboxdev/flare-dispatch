@@ -19,6 +19,7 @@ export const RUNBOOK: Readonly<Record<string, string>> = {
   "executions-lost": "R8",
   "operator-control": "R9",
   "delivery-key-paused": "R15",
+  "private-log-refused": "R20",
 };
 
 /** The D1 table the dashboard reads active alarms from. */

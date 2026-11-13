@@ -8,6 +8,13 @@ import {
   runQueuedUnit,
   type TickUnit,
 } from "@fractalboxdev/flare-dispatch-intake";
+import { parseProvenanceKey } from "@fractalboxdev/flare-dispatch-cache/provenance";
+import {
+  PRIVATE_LOG_PREFIX,
+  TransparencyLog as PrivateLogObject,
+  type TransparencyLogConfig,
+} from "@fractalboxdev/flare-dispatch-cache/transparency-log";
+import { alarmPortFromEnv } from "@fractalboxdev/flare-dispatch-ops";
 import { FlareDispatchLivenessMonitor } from "@fractalboxdev/flare-dispatch-ops/worker";
 import {
   ExecutionEngine as MamekoExecutionEngine,
@@ -142,6 +149,29 @@ export class IntakeUnits extends DurableObject<ControlPlaneEnv> {
 export { EpochAnchor } from "@fractalboxdev/mameko-host-cloudflare";
 /** One per repository: the cache's byte ledger (FD-CACHE-061). */
 export { CacheLedger } from "@fractalboxdev/flare-dispatch-cache/ledger-object";
+
+type LogEnv = ControlPlaneEnv & {
+  /** The `CACHE` bucket, which holds the private log under `tlog/private/`. */
+  readonly CACHE: R2Bucket;
+  /** The log key (a Worker secret): a private ES256 JWK with its `kid`, which signs each checkpoint. */
+  readonly LOG_KEY?: string;
+};
+
+/**
+ * The one `TransparencyLog` object, `idFromName("private")`: the only writer of the private transparency log
+ * (FD-PROV-074). Its checkpoints name the plane as their origin; a refused write pages through the alarm port.
+ */
+export class TransparencyLog extends PrivateLogObject<LogEnv> {
+  protected config(): TransparencyLogConfig {
+    return {
+      bucket: this.env.CACHE,
+      prefix: PRIVATE_LOG_PREFIX,
+      origin: `${this.env.PLANE_ID}/private-log`,
+      logKey: parseProvenanceKey(this.env.LOG_KEY),
+      alarms: alarmPortFromEnv(this.env),
+    };
+  }
+}
 
 /**
  * mameko's monitor whose timed wake also raises `cron-silent` (MAMEKO-OPS-010). A sweep's reclaim of a silent lease
