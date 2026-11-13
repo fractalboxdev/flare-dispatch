@@ -3,6 +3,7 @@
 // (specs/operability.md § Deploy pipeline). The stages run in that order and stop at the first that fails
 // (FD-OPS-009); the Cloudflare and GitHub reads and writes go through the `DeployTarget` port, so `fd doctor` runs the
 // same checks with no write (FD-OPS-024).
+import { readOnlyScanRunsOf, RUN_CATALOG } from "@fractalboxdev/flare-dispatch-catalog";
 import { Clock, Context, Effect, Schema } from "effect";
 import {
   accessChanges,
@@ -26,6 +27,7 @@ import {
   presignTokenCheck,
   presignTokenUnset,
   rulesetCheck,
+  scopedIdentityCheck,
   settingsDrift,
   templateInvariants,
   unrenderedCheck,
@@ -320,7 +322,8 @@ const presignFindings = (overlay: OverlayValues, rendered: RenderedWorker) =>
 
 /**
  * Every drift finding: the overlay's provider registry (FD-MDL-020, FD-MDL-022), policy sync over the overlay's
- * policy rules (FD-PROF-025), the scan bundle envelope where the overlay pins one (FD-OPS-094 to FD-OPS-097), the
+ * policy rules (FD-PROF-025), the overlay's identity lists against each other and its scoped entries against
+ * `readOnlyScanRuns`, the catalogue's read-only scan runs by default (FD-OPS-090 to FD-OPS-093), the scan bundle envelope where the overlay pins one (FD-OPS-094 to FD-OPS-097), the
  * templates' invariants, the presign token of the Worker `presigner` names
  * (FD-CACHE-091), the
  * rendered configuration, no policy root key on any Worker (FD-PROV-045), the deployed Workers against the record of the
@@ -341,12 +344,14 @@ export const driftFindings = (
   more: ProfileStep = () => Effect.succeed([]),
   access: CommittedAccess | null = null,
   presigner: string | null = null,
+  readOnlyScanRuns: ReadonlySet<string> = readOnlyScanRunsOf(RUN_CATALOG),
 ) =>
   Effect.gen(function* () {
     const target = yield* DeployTarget;
     const findings: Finding[] = [
       ...modelRegistryCheck(modelRegistryOf(overlay)),
       ...policyRulesCheck(policyRulesOf(overlay)),
+      ...scopedIdentityCheck(overlay, readOnlyScanRuns),
     ];
     const scan = overlay.scan;
     if (scan?.bundleDigest !== undefined) {
@@ -408,6 +413,7 @@ export const fdDoctor = (
   more?: ProfileStep,
   access?: AccessFor,
   presigner?: string,
+  readOnlyScanRuns?: ReadonlySet<string>,
 ) =>
   Effect.gen(function* () {
     const { overlay, rendered } = yield* renderAll(overlayText, workers);
@@ -420,6 +426,7 @@ export const fdDoctor = (
       more,
       access?.(overlay) ?? null,
       presigner ?? null,
+      readOnlyScanRuns,
     );
   });
 
@@ -457,6 +464,7 @@ export const fdDeploy = (
   more?: ProfileStep,
   access?: AccessFor,
   presigner?: string,
+  readOnlyScanRuns?: ReadonlySet<string>,
 ) =>
   Effect.gen(function* () {
     const target = yield* DeployTarget;
@@ -472,6 +480,7 @@ export const fdDeploy = (
         more,
         null,
         presigner ?? null,
+        readOnlyScanRuns,
       )),
     ];
     if (committed !== null)

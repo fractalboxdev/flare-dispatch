@@ -2,6 +2,7 @@
 // status and last verified webhook delivery, and the GitHub probes' latest results; and the liveness report
 // `GET /v1/ops/health` serves (FD-OPS-036, MAMEKO-OPS-007).
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { ADVISORY_SNAPSHOTS_MIGRATION } from "./advisory.ts";
 import { ALARM_TRANSITIONS_MIGRATIONS, ALARMS_MIGRATION } from "./alarms.ts";
 
 /** FlareDispatch's own tables, created if absent; each statement is idempotent. */
@@ -31,6 +32,7 @@ export const OPS_MIGRATIONS: readonly string[] = [
     session text not null,
     created_at integer not null,
     used_at integer)`,
+  ADVISORY_SNAPSHOTS_MIGRATION,
 ];
 
 /** Applies FlareDispatch's tables to the control plane's D1 database. */

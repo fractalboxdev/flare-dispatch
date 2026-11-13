@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.6.0",
+  "id": "FD-SMOKE-2026-0001",
+  "modified": "2026-11-01T00:00:00Z",
+  "published": "2026-11-01T00:00:00Z",
+  "summary": "Planted advisory of the gate image's OSV-Scanner smoke fixture",
+  "details": "Affects only the fixture package fd-scan-smoke-planted, which exists in the smoke fixture alone.",
+  "affected": [
+    {
+      "package": { "ecosystem": "npm", "name": "fd-scan-smoke-planted" },
+      "ranges": [{ "type": "SEMVER", "events": [{ "introduced": "0" }, { "fixed": "2.0.0" }] }]
+    }
+  ]
+}

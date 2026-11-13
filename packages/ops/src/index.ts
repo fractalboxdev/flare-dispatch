@@ -1,4 +1,5 @@
 export * from "./access.ts";
+export * from "./advisory.ts";
 export * from "./alarms.ts";
 export * from "./app-manifest.ts";
 export * from "./config.ts";

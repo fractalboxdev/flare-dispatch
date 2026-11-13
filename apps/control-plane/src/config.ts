@@ -96,6 +96,11 @@ export interface ControlPlaneEnv extends CacheEnv {
    * (FD-PROV-016). Wrangler delivers it as a number, a `.dev.vars` entry as its text.
    */
   readonly ATTESTATION_MAX_AGE_DAYS?: unknown;
+  /**
+   * The rendered `{{scan.advisoryEcosystems}}`: the OSV ecosystems `advisory-refresh` stores, none where the overlay
+   * sets none (FD-OPS-100). Wrangler delivers it as an array, a `.dev.vars` entry as its JSON text.
+   */
+  readonly ADVISORY_ECOSYSTEMS?: unknown;
   /** The gate image's digest, `sha256:<hex>`, which every lease outside a device host execution names. */
   readonly GATE_IMAGE_DIGEST?: string;
   /** The repository a `development` deployment with no GitHub App reads (`dev-repository.ts`). */
@@ -196,6 +201,30 @@ export const acceptanceSettingsOf = (
     return { attestationMaxAgeMs: DEFAULT_ATTESTATION_MAX_AGE_MS };
   const days = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
   return { attestationMaxAgeMs: Number.isFinite(days) && days > 0 ? days * DAY_MS : 0 };
+};
+
+/**
+ * `scan.advisoryEcosystems` from `ADVISORY_ECOSYSTEMS`: none where the var is unset or empty, and `ConfigInvalid`
+ * for a value that is not a list of non-empty names, so a malformed var stores nothing rather than a guessed list.
+ */
+export const advisoryEcosystemsOf = (
+  env: Pick<ControlPlaneEnv, "ADVISORY_ECOSYSTEMS">,
+): readonly string[] | ConfigInvalid => {
+  const raw = env.ADVISORY_ECOSYSTEMS;
+  if (raw === undefined || raw === null || raw === "") return [];
+  let value: unknown = raw;
+  if (typeof raw === "string")
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      value = undefined;
+    }
+  return Array.isArray(value) && value.every((e) => typeof e === "string" && e.trim() !== "")
+    ? (value as string[]).map((e) => e.trim())
+    : new ConfigInvalid({
+        path: "ADVISORY_ECOSYSTEMS",
+        message: "not a JSON list of ecosystem names",
+      });
 };
 
 /**

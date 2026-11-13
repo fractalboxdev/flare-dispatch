@@ -3,6 +3,11 @@
 // the stage report `fd` prints. A stage that fails is a report with `ok: false`; only a defect is the caller's error.
 import { AGENTIC_CATALOG, type AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
 import {
+  readOnlyScanRunsOf,
+  RUN_CATALOG,
+  type RunRegistry,
+} from "@fractalboxdev/flare-dispatch-catalog";
+import {
   CURRENT_PHASE,
   profileDocumentFor,
   validationContext,
@@ -30,6 +35,7 @@ import {
   bindingCheck,
   failed,
   profileCheck,
+  readOnlyScanCheck,
   templateInvariants,
   unrenderedCheck,
   type AgenticRegistry,
@@ -111,6 +117,11 @@ export interface OperabilityOptions<E> {
   readonly profile?: ProfileDocument;
   /** The agentic recipes the run catalogue carries; `AGENTIC_CATALOG` by default (FD-AGT-002, FD-AGT-004). */
   readonly agenticRegistry?: AgenticRegistry;
+  /**
+   * The run declarations the run catalogue carries; `RUN_CATALOG` by default. The registry validator checks their
+   * read-only scan declarations (FD-GATE-113), and the scoped-identity check reads its read-only scan runs (FD-OPS-091).
+   */
+  readonly runRegistry?: RunRegistry;
 }
 
 /** What `fd doctor` does beyond the drift check. */
@@ -133,12 +144,17 @@ export const repositoryRoot = (from: string = process.cwd()): string => {
 /**
  * The checks over one rendered configuration: the bindings its env declares (FD-OPS-019) and, on the dispatcher, the
  * pool caps (FD-OPS-020, FD-PROF-033), the components (FD-ARCH-001) and the registry validator over the agentic
- * recipes of the run catalogue it serves (FD-AGT-002, FD-AGT-004). Given the account's view of the Worker, the
+ * recipes (FD-AGT-002, FD-AGT-004) and the read-only scan declarations (FD-GATE-113) of the run catalogue it serves.
+ * Given the account's view of the Worker, the
  * dispatcher's checks add the composition check over the rendered vars and the Worker's secrets (FD-ARCH-039); a
  * Worker the account does not hold has no secrets. The pull-request drift check has no account view and leaves it out.
  */
 export const renderedChecks =
-  (specs: readonly WorkerSpec[], registry: AgenticRegistry = AGENTIC_CATALOG) =>
+  (
+    specs: readonly WorkerSpec[],
+    registry: AgenticRegistry = AGENTIC_CATALOG,
+    runs: RunRegistry = RUN_CATALOG,
+  ) =>
   (
     worker: string,
     config: WorkerConfig,
@@ -153,6 +169,7 @@ export const renderedChecks =
             ...admissionCapCheck(worker, config),
             ...architectureFindings(worker, config, CURRENT_PHASE),
             ...agenticRegistryCheck(registry),
+            ...readOnlyScanCheck(runs),
             ...(deployed === undefined
               ? []
               : deployedCompositionFindings(
@@ -212,6 +229,7 @@ export const staticDrift = (
   template: string,
   overlay: OverlayValues,
   registry: AgenticRegistry = AGENTIC_CATALOG,
+  runs: RunRegistry = RUN_CATALOG,
 ) =>
   renderTemplate(spec.worker, template, overlay).pipe(
     Effect.map((rendered) => ({
@@ -219,7 +237,7 @@ export const staticDrift = (
       findings: [
         ...templateInvariants(spec.worker, parseJsonc(template)),
         ...unrenderedCheck(spec.worker, rendered),
-        ...renderedChecks([spec], registry)(spec.worker, parseJsonc(rendered)),
+        ...renderedChecks([spec], registry, runs)(spec.worker, parseJsonc(rendered)),
       ],
     })),
   );
@@ -253,7 +271,9 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
   const root = options.root ?? repositoryRoot();
   const env = options.env ?? process.env;
   const specs = options.workers ?? V2_WORKERS;
-  const checks = renderedChecks(specs, options.agenticRegistry ?? AGENTIC_CATALOG);
+  const runRegistry = options.runRegistry ?? RUN_CATALOG;
+  const checks = renderedChecks(specs, options.agenticRegistry ?? AGENTIC_CATALOG, runRegistry);
+  const readOnlyScanRuns = readOnlyScanRunsOf(runRegistry);
   const assetsBuilt = assetsDirectoryCheck(root, specs);
   const profileDocument = options.profile ?? profileDocumentFor("production");
   const profileFindings = (overlay: OverlayValues) =>
@@ -333,6 +353,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
         profileFindings,
         access,
         presigner,
+        readOnlyScanRuns,
       ).pipe(
         Effect.tap((findings) => (failed(findings) ? drift(problemsOf(findings)) : Effect.void)),
         Effect.tapError((f) =>
@@ -372,6 +393,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
               profileFindings,
               access,
               presigner,
+              readOnlyScanRuns,
             ),
             (r) => ({
               ok: true,

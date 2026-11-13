@@ -1,0 +1,9 @@
+name: smoke
+on:
+  pull_request:
+permissions: {}
+jobs:
+  greet:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hello

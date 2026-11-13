@@ -8,7 +8,15 @@ import {
   type ProvenanceKey,
 } from "@fractalboxdev/flare-dispatch-cache/dsse";
 import { Effect, Layer } from "effect";
-import { ScanBundleStore, ScanBundleUnreadable, ScanImage, ScannerVersionUnknown } from "./ports.ts";
+import {
+  AdvisorySnapshots,
+  AdvisorySnapshotUnreadable,
+  ScanBundleStore,
+  ScanBundleUnreadable,
+  ScanImage,
+  ScannerVersionUnknown,
+  type AdvisorySnapshot,
+} from "./ports.ts";
 import { SCAN_BUNDLE_PAYLOAD_TYPE, type ScanBundleKey } from "./scan-bundle.ts";
 
 /** A v1 payload that passes the schema, with one baseline check run by `semgrep`. */
@@ -116,3 +124,22 @@ export const fakeScanImage = (
     },
     scanTools: Effect.succeed(tools),
   });
+
+/** What the fake store records for an ecosystem: a snapshot, nothing, or a read that fails. */
+export type StoredSnapshot = AdvisorySnapshot | "absent" | "unreadable";
+
+/** An advisory snapshot store over `snapshots` by ecosystem, counting its reads. */
+export const memoryAdvisorySnapshots = (snapshots: ReadonlyMap<string, StoredSnapshot> = new Map()) => {
+  const reads: string[] = [];
+  const layer = Layer.succeed(AdvisorySnapshots, {
+    read: (ecosystem) =>
+      Effect.suspend(() => {
+        reads.push(ecosystem);
+        const held = snapshots.get(ecosystem) ?? "absent";
+        if (held === "unreadable")
+          return Effect.fail(new AdvisorySnapshotUnreadable({ ecosystem, detail: "D1 answered 500" }));
+        return Effect.succeed(held === "absent" ? null : held);
+      }),
+  });
+  return { layer, reads };
+};

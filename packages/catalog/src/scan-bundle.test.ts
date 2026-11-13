@@ -6,8 +6,10 @@ import { describe, expect, it } from "vitest";
 import { ScanBundleStore, ScanImage } from "./ports.ts";
 import { Outcome } from "./reasons.ts";
 import {
+  ADVISORY_MAX_AGE_DEFAULT_HOURS,
   bucketScanBundleStore,
   decodePayload,
+  lockfileEcosystems,
   runScan,
   satisfies,
   type PreparedScan,
@@ -17,14 +19,27 @@ import {
   envelopeBytes,
   fakeScanImage,
   IMAGE_VERSIONS,
+  memoryAdvisorySnapshots,
   memoryScanBundleStore,
   signingKey,
   validPayload,
   type StoredBundle,
+  type StoredSnapshot,
 } from "./scan-bundle.test-support.ts";
 import { nodeScanImage, scanToolsIn, versionIn } from "./scan-image.ts";
 
 const TOOLS = ["semgrep"];
+
+/** The scan range's changed paths and the advisory snapshots the control-plane store records. */
+interface AdvisoryInput {
+  readonly changedPaths?: readonly string[];
+  readonly snapshots?: ReadonlyMap<string, StoredSnapshot>;
+  readonly now?: number;
+  readonly maxAgeHours?: number;
+}
+
+const NOW = Date.UTC(2026, 10, 12, 9, 0);
+const HOUR = 3_600_000;
 
 /** A scan over `objects` and an image of `versions` and `tools`, recording whether the scanners ran. */
 const scanWith = async (
@@ -32,18 +47,36 @@ const scanWith = async (
   objects: ReadonlyMap<string, StoredBundle>,
   versions: Readonly<Partial<Record<string, string>>> = IMAGE_VERSIONS,
   tools: readonly string[] = TOOLS,
+  advisory: AdvisoryInput = {},
 ) => {
   const store = memoryScanBundleStore(objects);
+  const snapshots = memoryAdvisorySnapshots(advisory.snapshots);
   const prepared: PreparedScan[] = [];
+  const scope = {
+    pin,
+    changedPaths: advisory.changedPaths ?? [],
+    now: advisory.now ?? NOW,
+    advisoryMaxAgeHours: advisory.maxAgeHours ?? ADVISORY_MAX_AGE_DEFAULT_HOURS,
+  };
   const outcome = await Effect.runPromise(
-    runScan(pin, (p) =>
+    runScan(scope, (p) =>
       Effect.sync(() => {
         prepared.push(p);
         return Outcome.success();
       }),
-    ).pipe(Effect.provide(Layer.merge(store.layer, fakeScanImage(versions, tools)))),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(store.layer, fakeScanImage(versions, tools), snapshots.layer),
+      ),
+    ),
   );
-  return { outcome, scanned: prepared.length > 0, prepared, reads: store.reads };
+  return {
+    outcome,
+    scanned: prepared.length > 0,
+    prepared,
+    reads: store.reads,
+    snapshotReads: snapshots.reads,
+  };
 };
 
 const bundle = async (payload: unknown = validPayload()) => {
@@ -123,6 +156,73 @@ describe("security-gate scan preconditions", () => {
     }
     const ok = await scanWith(digest, objects);
     expect(ok.prepared[0]!.versions).toEqual(IMAGE_VERSIONS);
+  });
+
+  it("[FD-GATE-106] records failure config: advisory snapshot missing <ecosystem> and runs no scanner where the range changes a lockfile of an ecosystem with no recorded snapshot", async () => {
+    const { bytes, digest } = await bundle();
+    const objects = new Map([[digest, bytes]]);
+    const fresh = { digest: "a".repeat(64), lastModified: NOW - HOUR };
+    for (const held of ["absent", "unreadable"] as const) {
+      const run = await scanWith(digest, objects, IMAGE_VERSIONS, TOOLS, {
+        changedPaths: ["web/pnpm-lock.yaml", "svc/Cargo.lock", "README.md"],
+        snapshots: new Map<string, StoredSnapshot>([
+          ["npm", { ecosystem: "npm", ...fresh }],
+          ["crates.io", held],
+        ]),
+      });
+      expect(run.outcome).toEqual(failure("config: advisory snapshot missing crates.io"));
+      expect(run.scanned).toBe(false);
+    }
+
+    // A range that changes no lockfile of that ecosystem reads no snapshot of it and scans.
+    const other = await scanWith(digest, objects, IMAGE_VERSIONS, TOOLS, {
+      changedPaths: ["web/pnpm-lock.yaml", "src/main.rs"],
+      snapshots: new Map<string, StoredSnapshot>([["npm", { ecosystem: "npm", ...fresh }]]),
+    });
+    expect(other.snapshotReads).toEqual(["npm"]);
+    expect(other.outcome).toEqual(Outcome.success());
+    expect(other.prepared[0]!.snapshots).toEqual({ npm: { ecosystem: "npm", ...fresh } });
+
+    // A range with no lockfile reads no snapshot at all.
+    const none = await scanWith(digest, objects, IMAGE_VERSIONS, TOOLS, {
+      changedPaths: ["src/index.ts"],
+    });
+    expect(none.snapshotReads).toEqual([]);
+    expect(none.scanned).toBe(true);
+    expect(lockfileEcosystems(["a/yarn.lock", "b/package-lock.json", "uv.lock", "go.mod", "x.lock"])).toEqual([
+      "Go",
+      "PyPI",
+      "npm",
+    ]);
+  });
+
+  it("[FD-GATE-107] records failure config: advisory snapshot stale <ecosystem> and runs no scanner where the snapshot's Last-Modified time is older than scan.advisoryMaxAgeHours", async () => {
+    const { bytes, digest } = await bundle();
+    const objects = new Map([[digest, bytes]]);
+    const snapshot = (ageHours: number): StoredSnapshot => ({
+      ecosystem: "PyPI",
+      digest: "b".repeat(64),
+      lastModified: NOW - ageHours * HOUR,
+    });
+    const scan = (ageHours: number, maxAgeHours?: number) =>
+      scanWith(digest, objects, IMAGE_VERSIONS, TOOLS, {
+        changedPaths: ["api/poetry.lock"],
+        snapshots: new Map([["PyPI", snapshot(ageHours)]]),
+        ...(maxAgeHours === undefined ? {} : { maxAgeHours }),
+      });
+
+    // The default accepts a snapshot 48 h old and refuses one a minute older.
+    expect((await scan(48)).scanned).toBe(true);
+    const stale = await scan(48 + 1 / 60);
+    expect(stale.outcome).toEqual(failure("config: advisory snapshot stale PyPI"));
+    expect(stale.scanned).toBe(false);
+
+    // The setting, not a fixed 48 h, bounds the age.
+    expect((await scan(20, 24)).scanned).toBe(true);
+    const past = await scan(25, 24);
+    expect(past.outcome).toEqual(failure("config: advisory snapshot stale PyPI"));
+    expect(past.scanned).toBe(false);
+    expect((await scan(2, 1)).outcome).toEqual(failure("config: advisory snapshot stale PyPI"));
   });
 
   it("[FD-GATE-105] reads semver ranges as npm does: caret, tilde, x-ranges, comparator sets, hyphen ranges, unions and prereleases", () => {

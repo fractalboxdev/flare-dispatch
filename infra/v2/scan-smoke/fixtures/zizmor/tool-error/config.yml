@@ -1,0 +1,2 @@
+# A malformed configuration: zizmor cannot parse it, so the scan ends in a tool error rather than a result.
+rules: [template-injection

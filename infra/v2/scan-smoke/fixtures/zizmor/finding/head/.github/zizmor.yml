@@ -1,0 +1,8 @@
+# A head suppression: ignores both audits on the planted workflow. `--config` replaces this file.
+rules:
+  template-injection:
+    ignore:
+      - smoke.yml
+  dangerous-triggers:
+    ignore:
+      - smoke.yml
