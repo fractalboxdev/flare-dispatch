@@ -1,6 +1,6 @@
 // The Worker's bindings, and the two `json` configurations host-cloudflare reads, derived from the profile so one
 // document decides both.
-import type { ApiEnv } from "@fractalboxdev/flare-dispatch-api";
+import { apiConfigFromEnv, ConfigInvalid, type ApiEnv } from "@fractalboxdev/flare-dispatch-api/config";
 import { deploymentOf } from "@fractalboxdev/flare-dispatch-catalog";
 import type { ConcludeKind, QuotaObject } from "@fractalboxdev/flare-dispatch-github";
 import type { TickUnit } from "@fractalboxdev/flare-dispatch-intake";
@@ -143,6 +143,27 @@ export const apiEnvOf = (env: ControlPlaneEnv): ApiEnv => {
     OPERATORS: textVar(raw["OPERATORS"]),
     DISPATCHERS: textVar(raw["DISPATCHERS"]),
   } as ApiEnv;
+};
+
+/**
+ * What `GET /health` answers: the deployment and plane id, or `503` `misconfigured` when the API refuses a binding,
+ * among them a provenance key equal to the OIDC key, the log key or a capability-token key (FD-PROV-033). The
+ * post-deploy probe reads anything but `200` as a failed deploy (FD-OPS-013). `/health` is public, so the body names
+ * neither the refused binding nor its value; the Worker log carries the binding and the reason for the operator.
+ */
+export const healthOf = (
+  env: ControlPlaneEnv,
+  origin: string,
+): { readonly status: 200 | 503; readonly body: Readonly<Record<string, string>> } => {
+  const config = apiConfigFromEnv(apiEnvOf(env), origin);
+  if (config instanceof ConfigInvalid) {
+    console.error(`health: misconfigured: ${config.path}: ${config.message}`);
+    return { status: 503, body: { status: "misconfigured" } };
+  }
+  return {
+    status: 200,
+    body: { status: "ok", deployment: deployment(env), plane_id: env.PLANE_ID },
+  };
 };
 
 export const profileOf = (env: ControlPlaneEnv): Profile => buildProfile(deployment(env));

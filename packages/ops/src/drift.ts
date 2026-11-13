@@ -192,6 +192,38 @@ export const admissionCapCheck = (
   });
 };
 
+/** A binding or secret name that holds the policy root key. */
+const POLICY_ROOT_KEY = /POLICY_?ROOT/i;
+
+/**
+ * The policy root key is held by the operator outside the control plane (FD-PROV-045): no binding of the rendered
+ * configuration, no Secrets Store binding, and no binding, var or secret of the deployed Worker names it. A secret
+ * shows by name only.
+ */
+export const policyRootKeyCheck = (
+  worker: string,
+  rendered: WorkerConfig,
+  deployed: DeployedSettings | null,
+): readonly Finding[] => {
+  const names = new Set<string>(bindingsOf(rendered));
+  for (const b of arr(rendered["secrets_store_secrets"]))
+    if (typeof b["binding"] === "string") names.add(b["binding"]);
+  if (deployed !== null) {
+    for (const b of deployed.bindings) names.add(b.name);
+    for (const v of Object.keys(deployed.vars)) names.add(v);
+    for (const s of deployed.secrets) names.add(s);
+  }
+  return [...names]
+    .filter((name) => POLICY_ROOT_KEY.test(name))
+    .map((name) =>
+      fail(
+        "policy-root-key",
+        `${worker}.${name}`,
+        "the Worker holds a policy root key; the operator holds it outside the control plane",
+      ),
+    );
+};
+
 /** A placeholder left in rendered configuration. */
 export const unrenderedCheck = (worker: string, rendered: string): readonly Finding[] =>
   placeholdersOf(rendered).map((p) =>

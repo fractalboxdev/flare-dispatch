@@ -726,3 +726,257 @@ describe("the source-read token helper", () => {
     expect(mintCalls.filter((c) => c.method !== "GET" && c.method !== "POST")).toEqual([]);
   });
 });
+
+describe("the check-run applier of a confidential-compute repository", () => {
+  const VAULT = "acme/vault";
+  const OPEN = "acme/open";
+  const LOG = "https://fd.example.com/v1/executions/exec-9/logs?t=token";
+  /** What the run produced: none of it may reach GitHub from the confidential repository. */
+  const SECRETS = [
+    "const apiKey = readSecret()",
+    "diff --git a/src/secret.ts",
+    "ERROR at line 12: token mismatch",
+    "The model suggests renaming",
+    "secret.spec.ts",
+    "src/secret.ts",
+  ];
+  interface Written {
+    readonly method: string;
+    readonly path: string;
+    readonly body: Record<string, unknown>;
+  }
+  interface StoredRun {
+    id: number;
+    name: string;
+    external_id: string | null;
+    status: string;
+    conclusion: string | null;
+    output: { title: string | null; summary: string | null };
+  }
+  const writes: Written[] = [];
+  let runs: StoredRun[] = [];
+  let server: Server;
+  let base = "";
+
+  const handle = (
+    method: string,
+    path: string,
+    body: Record<string, unknown>,
+  ): [number, unknown] => {
+    if (path === "/app/installations/51/access_tokens")
+      return [
+        201,
+        {
+          token: "ghs-installation-51",
+          expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+        },
+      ];
+    const repo = [VAULT, OPEN].find((r) => path.startsWith(`/repos/${r}/`));
+    if (repo === undefined) return [404, { message: "Not Found" }];
+    const rest = path.slice(`/repos/${repo}`.length);
+    if (rest === "/installation") return [200, { id: 51 }];
+    if (method !== "GET") writes.push({ method, path, body });
+    const output = (b: Record<string, unknown>) => {
+      const o = b["output"] as { title?: string; summary?: string } | undefined;
+      return o === undefined ? undefined : { title: o.title ?? null, summary: o.summary ?? null };
+    };
+    if (method === "GET" && /^\/commits\/\w+\/check-runs$/.test(rest))
+      return [200, { check_runs: runs.filter((r) => r.name.startsWith(repo)) }];
+    if (method === "GET" && /^\/check-runs\/\d+\/annotations$/.test(rest)) return [200, []];
+    if (method === "POST" && rest === "/check-runs") {
+      const run: StoredRun = {
+        id: 7000 + runs.length,
+        name: String(body["name"]),
+        external_id: (body["external_id"] as string | undefined) ?? null,
+        status: (body["status"] as string | undefined) ?? "queued",
+        conclusion: (body["conclusion"] as string | undefined) ?? null,
+        output: output(body) ?? { title: null, summary: null },
+      };
+      runs.push(run);
+      return [201, run];
+    }
+    const m = /^\/check-runs\/(\d+)$/.exec(rest);
+    if (method === "PATCH" && m !== null) {
+      const run = runs.find((r) => r.id === Number(m[1]));
+      if (run === undefined) return [404, { message: "Not Found" }];
+      if (body["status"] !== undefined) run.status = String(body["status"]);
+      if (body["conclusion"] !== undefined) run.conclusion = String(body["conclusion"]);
+      run.output = output(body) ?? run.output;
+      return [200, run];
+    }
+    return [404, { message: "Not Found" }];
+  };
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (chunk: Buffer) => (raw += chunk.toString()));
+      req.on("end", () => {
+        const path = new URL(req.url ?? "/", "http://stand-in").pathname;
+        const [status, answer] = handle(
+          req.method ?? "GET",
+          path,
+          raw === "" ? {} : (JSON.parse(raw) as Record<string, unknown>),
+        );
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify(answer));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+
+  /**
+   * The check-run applier as the control plane composes it under the App, the repository's confidentiality mode read
+   * from the deploy's synced policy rules.
+   */
+  const applyAll = (rows: readonly IntentRow[]) => {
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const env = {
+      DB: {},
+      PLANE_ID: "conformance",
+      DEPLOYMENT: "production",
+      // Each response's rate-limit headers reach a quota object that records them.
+      INSTALLATION_QUOTA: {
+        idFromName: (name: string) => name,
+        get: () => ({ observe: () => Promise.resolve() }),
+      },
+      POLICY_RULES: {
+        [VAULT]: [
+          { match: {}, confidentiality: "confidential-compute", acceptsFailingRequiredCheck: true },
+        ],
+      },
+    } as unknown as ControlPlaneEnv;
+    const services = appServices(
+      env,
+      {
+        appId: "4242",
+        privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+        fetch: (input, init) => fetch(input, init),
+        baseUrl: base,
+      },
+      Layer.succeed(AlarmPort, { deliver: () => Effect.void }),
+    );
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const actuator = (yield* Actuators).get("checkRun");
+        if (actuator === undefined) return yield* Effect.die("no checkRun actuator");
+        const answers = [];
+        for (const r of rows) answers.push((yield* actuator.apply(r))._tag);
+        return answers;
+      }).pipe(Effect.provide(services)),
+    );
+  };
+
+  /** One execution's check-run rows, each payload as the profile's bindings build it, carrying what the run produced. */
+  const rowsOf = (repo: string): IntentRow[] => {
+    const ref = {
+      name: `${repo}/flare-dispatch/check`,
+      head_sha: "f".repeat(40),
+      details_url: LOG,
+    };
+    const kindRow = (kind: string, payload: unknown): IntentRow => ({
+      executionId: "exec-9",
+      scopeId: repo,
+      intentKey: `cp:${kind.replaceAll(".", ":")}`,
+      kind,
+      payload,
+      payloadDigest: "digest",
+      effectClass: "adoptable",
+      attempts: 0,
+    });
+    return [
+      kindRow("check.open", ref),
+      kindRow("check.start", { ...ref, epoch: 4, executor_kind: "device", attempt: 1 }),
+      kindRow("check.progress", { ...ref, class: "required", bucket: "6–20", deadline_at: 0 }),
+      kindRow("check.summary", { ...ref, title: "Review", markdown: SECRETS[3] }),
+      kindRow("check.annotations", {
+        ...ref,
+        title: "lint",
+        summary: SECRETS[2],
+        annotations: [
+          {
+            path: SECRETS[5],
+            start_line: 1,
+            end_line: 1,
+            annotation_level: "failure",
+            message: SECRETS[0],
+          },
+        ],
+      }),
+      kindRow("check.conclude", {
+        ...ref,
+        verdict: { _tag: "failure", category: "finding", reason: "tests: 2 failed" },
+        attempt: 1,
+        details: {
+          class: "required",
+          executor_kind: "device",
+          executor_id: "mac-mini-7",
+          placement_reason: "device entry won",
+          queue_age_ms: 4000,
+          reserved_micro_usd: 20_000,
+          settled_micro_usd: 12_000,
+          failing_step: "unit-tests",
+          error_tag: "TestFailed",
+          markdown: `${SECRETS[0]}\n${SECRETS[1]}`,
+          quarantined: [{ test: SECRETS[4], path: SECRETS[5], line: 12, message: SECRETS[2] }],
+        },
+      }),
+    ];
+  };
+
+  it("[FD-GH-019] a confidential-compute repository's check run carries only the outcome, the reason, the class, the executor id and the log pointer", async () => {
+    writes.length = 0;
+    runs = [];
+    expect(await applyAll(rowsOf(VAULT))).toEqual([
+      "applied",
+      "applied",
+      "applied",
+      "refused",
+      "refused",
+      "applied",
+    ]);
+    const sent = JSON.stringify(writes);
+    for (const secret of [...SECRETS, "unit-tests", "TestFailed", "USD", "epoch", "6–20"])
+      expect(sent).not.toContain(secret);
+    expect(writes.map((w) => `${w.method} ${w.path}`)).toEqual([
+      `POST /repos/${VAULT}/check-runs`,
+      `PATCH /repos/${VAULT}/check-runs/7000`,
+      `PATCH /repos/${VAULT}/check-runs/7000`,
+      `PATCH /repos/${VAULT}/check-runs/7000`,
+    ]);
+    const conclusion = writes.at(-1)!.body;
+    expect(conclusion).toEqual({
+      details_url: LOG,
+      status: "completed",
+      conclusion: "failure",
+      output: {
+        title: "tests: 2 failed",
+        summary: [
+          "- Outcome: failure",
+          "- Reason: tests: 2 failed",
+          "- Class: required",
+          "- Executor: mac-mini-7",
+          `- Logs: kept on executor mac-mini-7; pointer: ${LOG}`,
+        ].join("\n"),
+      },
+    });
+  });
+
+  it("a repository the policy rules leave unclassified keeps its check run's full output", async () => {
+    writes.length = 0;
+    runs = [];
+    expect(await applyAll(rowsOf(OPEN))).toEqual([
+      "applied",
+      "applied",
+      "applied",
+      "applied",
+      "applied",
+      "applied",
+    ]);
+    const sent = JSON.stringify(writes);
+    for (const secret of [SECRETS[0], SECRETS[3], "unit-tests"]) expect(sent).toContain(secret);
+  });
+});

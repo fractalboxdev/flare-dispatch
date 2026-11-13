@@ -288,6 +288,7 @@ const deployedBy = async (argv: readonly string[]) => {
       appRegistration: Effect.succeed(APP_PERMISSIONS),
       requiredChecks: Effect.succeed([...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
       awsBudgets: Effect.succeed({ account: "", observedAt: 0, budgets: [], actions: [] }),
+      runnerWorkflow: () => Effect.succeed(null),
       applyD1Migrations: () => Effect.succeed([]),
       deployWorker: (w) =>
         Effect.sync(() => {

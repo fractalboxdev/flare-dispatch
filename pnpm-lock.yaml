@@ -704,6 +704,9 @@ importers:
       effect:
         specifier: 4.0.6
         version: 4.0.6
+      yaml:
+        specifier: 2.9.0
+        version: 2.9.0
     devDependencies:
       '@cloudflare/workers-types':
         specifier: 5.20261012.1
@@ -720,9 +723,6 @@ importers:
       vitest:
         specifier: ^3.2.0
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(lightningcss@1.33.0)(msw@2.15.0(@types/node@22.20.1)(typescript@5.9.3))(tsx@4.23.11)(yaml@2.9.0)
-      yaml:
-        specifier: 2.9.0
-        version: 2.9.0
 
   packages/profile:
     dependencies:

@@ -5,7 +5,7 @@ import { ApiConfig } from "../config.ts";
 import { FlareDispatchApi, type ExecutionView } from "../declaration.ts";
 import { apiError, type ApiError } from "../errors.ts";
 import { CurrentIdentity, inGroup } from "../identity.ts";
-import { boundIncident } from "../incident.ts";
+import { boundIncident, confidentialIncident } from "../incident.ts";
 import { Cancellation, Executions, FailureSummaries, type ExecutionRecord } from "../ports.ts";
 import { RequestId } from "../request-id.ts";
 
@@ -61,7 +61,10 @@ export const awaitExecution = (id: string, waitSeconds: number) =>
     }
   });
 
-/** The bounded `incident/v1` pack of a failed execution (FD-IFC-042 to FD-IFC-044). */
+/**
+ * The bounded `incident/v1` pack of a failed execution (FD-IFC-042 to FD-IFC-044); a `confidential-compute`
+ * repository's pack carries only the reason and the failing step names (FD-IFC-045).
+ */
 export const failureSummary = (id: string) =>
   Effect.gen(function* () {
     const record = yield* found(id);
@@ -70,7 +73,9 @@ export const failureSummary = (id: string) =>
     if (record.verdict !== "failure")
       return yield* apiError("not_failed", `execution ${id} did not fail`);
     const summaries = yield* FailureSummaries;
-    return boundIncident(yield* summaries.pack(record));
+    const mode = yield* summaries.confidentiality(record.repository);
+    const pack = yield* summaries.pack(record);
+    return boundIncident(mode === "confidential-compute" ? confidentialIncident(pack) : pack);
   });
 
 /** Only the identity that dispatched an execution, or an operator, may cancel it (FD-IFC-046). */

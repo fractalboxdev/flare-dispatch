@@ -1,5 +1,6 @@
 // The bound on a failure summary (FD-IFC-042): each field to its `incident/v1` cap, then the whole pack to 16 KiB
-// serialized, shortening the log tails first and then dropping the last list entries.
+// serialized, shortening the log tails first and then dropping the last list entries. A `confidential-compute`
+// repository's summary keeps only the reason and the failing step names (FD-IFC-045).
 import { INCIDENT_CAPS, type IncidentV1 } from "./declaration.ts";
 
 const cut = (text: string, max: number) =>
@@ -99,3 +100,23 @@ export const boundIncident = (pack: IncidentV1): IncidentV1 => {
   }
   return bounded;
 };
+
+/**
+ * The summary a `confidential-compute` repository's caller receives (FD-IFC-045): the pack's identity and, for each
+ * failure, its kind, step name and reason. No log tail, command, URL, path, diagnosis, signal, suspect ref or repro.
+ */
+export const confidentialIncident = (pack: IncidentV1): IncidentV1 => ({
+  contractVersion: pack.contractVersion,
+  incidentId: pack.incidentId,
+  class: pack.class,
+  repo: pack.repo,
+  ...(pack.ciFailures === undefined
+    ? {}
+    : {
+        ciFailures: pack.ciFailures.map(({ kind, name, conclusion }) => ({
+          kind,
+          name,
+          conclusion,
+        })),
+      }),
+});

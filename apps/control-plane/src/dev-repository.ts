@@ -45,9 +45,9 @@ export type ConfidentialityEnv = Pick<
 >;
 
 /**
- * A repository's confidentiality mode, the one source intake's admission, a lease's cache fields and the log route
- * read: the mode the repository's synced policy rules set (FD-PROF-025), else the mode a development deployment's
- * captured repository carries, else `unclassified`.
+ * A repository's confidentiality mode, the one source intake's admission, a lease's cache fields, the log route and
+ * the check-run applier read: the mode the repository's synced policy rules set (FD-PROF-025), else the mode a
+ * development deployment's captured repository carries, else `unclassified`.
  */
 export const repositoryConfidentiality = (
   env: ConfidentialityEnv,

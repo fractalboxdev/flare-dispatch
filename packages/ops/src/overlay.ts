@@ -122,7 +122,32 @@ export class OverlayRejected extends Schema.TaggedError<OverlayRejected>()("Over
   issues: Schema.Array(Schema.Struct({ path: Schema.String, message: Schema.String })),
 }) {}
 
-/** Parses and decodes an overlay document (FD-OPS-003, FD-OPS-004, FD-OPS-056). */
+/** `attestation_max_age` where the overlay sets none: 10 days (FD-PROV-016). */
+export const ATTESTATION_MAX_AGE_DEFAULT_DAYS = 10;
+/** `reattest_interval` where the overlay sets none: 7 days (FD-PROV-030). */
+export const REATTEST_INTERVAL_DEFAULT_DAYS = 7;
+/** The margin `attestation_max_age` keeps over `reattest_interval`: 48 h. */
+export const REATTEST_MARGIN_HOURS = 48;
+
+/**
+ * The cross-field rules of the overlay's provenance values: `attestation_max_age` is at least `reattest_interval` plus
+ * 48 h, each at its default where the overlay sets none (FD-PROV-077). Below that, a device that re-attests on time
+ * still outlives its last attestation, and its statements answer `attestation-expired` (FD-PROV-016).
+ */
+export const provenanceIssues = (overlay: OverlayValues): readonly DecodeIssue[] => {
+  const maxAge = overlay.provenance?.attestationMaxAgeDays ?? ATTESTATION_MAX_AGE_DEFAULT_DAYS;
+  const interval = overlay.provenance?.reattestIntervalDays ?? REATTEST_INTERVAL_DEFAULT_DAYS;
+  return maxAge * 24 >= interval * 24 + REATTEST_MARGIN_HOURS
+    ? []
+    : [
+        {
+          path: "provenance.attestationMaxAgeDays",
+          message: `attestation_max_age (${maxAge} d) is below reattest_interval (${interval} d) plus ${REATTEST_MARGIN_HOURS} h`,
+        },
+      ];
+};
+
+/** Parses and decodes an overlay document (FD-OPS-003, FD-OPS-004, FD-OPS-056, FD-PROV-077). */
 export const decodeOverlay = (text: string) =>
   Effect.gen(function* () {
     const parsed = yield* Effect.try({
@@ -130,9 +155,12 @@ export const decodeOverlay = (text: string) =>
       catch: (e) =>
         new OverlayRejected({ issues: [{ path: "", message: `not JSON: ${String(e)}` }] }),
     });
-    return yield* decodeStrict(OverlayValues, parsed).pipe(
+    const overlay = yield* decodeStrict(OverlayValues, parsed).pipe(
       Effect.mapError((issues: readonly DecodeIssue[]) => new OverlayRejected({ issues })),
     );
+    const issues = provenanceIssues(overlay);
+    if (issues.length > 0) return yield* new OverlayRejected({ issues });
+    return overlay;
   });
 
 const micro = (usd: number | undefined) => (usd === undefined ? undefined : Math.round(usd * 1e6));

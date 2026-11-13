@@ -1,5 +1,6 @@
 // The failure summary source: the unbounded `incident/v1` pack of a failed execution, from the reason its record holds
-// and the tail of its failing step's log in the `CACHE` bucket. The route bounds the pack (FD-IFC-042).
+// and the tail of its failing step's log in the `CACHE` bucket, and the repository's confidentiality mode. The route
+// bounds the pack (FD-IFC-042) and strips a `confidential-compute` repository's to the reason and step names (FD-IFC-045).
 import {
   apiError,
   FailureSummaries,
@@ -15,6 +16,7 @@ import {
 } from "@fractalboxdev/flare-dispatch-cache";
 import { Effect, Layer } from "effect";
 import type { CacheEnv } from "./cache.ts";
+import { repositoryConfidentiality, type ConfidentialityEnv } from "./dev-repository.ts";
 
 /** The failing step of an execution: its step key and the tail of its log as plain text. */
 export interface FailingStep {
@@ -27,11 +29,12 @@ export interface FailingStep {
  * names no epoch takes the highest epoch with logs. A failed execution stops at its failing step, so the last step that
  * wrote a log is the one that failed. An epoch that wrote no log has no failing step: the logs of an earlier, reclaimed
  * epoch belong to an attempt that did not fail. The step's segments are read from the newest back, until the tail reaches
- * the `incident/v1` log-tail cap.
+ * the `incident/v1` log-tail cap; with `readTail` false no segment is read and the tail is empty.
  */
 export const failingStep = async (
   bucket: Bucket,
   execution: ExecutionRecord,
+  readTail = true,
 ): Promise<FailingStep | undefined> => {
   const objects = await listLogObjects(bucket, execution.execution_id);
   if (objects.length === 0) return undefined;
@@ -48,6 +51,7 @@ export const failingStep = async (
         (a.log.stream < b.log.stream ? -1 : a.log.stream > b.log.stream ? 1 : 0) ||
         a.log.start - b.log.start,
     );
+  if (!readTail) return { stepKey: last.log.stepKey, logTail: "" };
   const texts: string[] = [];
   let length = 0;
   for (let i = segments.length - 1; i >= 0 && length < INCIDENT_CAPS.logTail; i--) {
@@ -84,21 +88,27 @@ export const incidentOf = (
 
 /**
  * The failure summaries over the deploy's `CACHE` bucket. A deploy that binds no bucket stores no step log, so its
- * packs carry the reason alone; a bucket that cannot be read answers `unavailable`.
+ * packs carry the reason alone; a bucket that cannot be read answers `unavailable`. A `confidential-compute`
+ * repository's logs stay on the device, so its pack names the failing step without reading any log content.
  */
-export const failureSummaries = (env: CacheEnv): Layer.Layer<FailureSummaries> => {
+export const failureSummaries = (
+  env: CacheEnv & ConfidentialityEnv,
+): Layer.Layer<FailureSummaries> => {
   const bucket = env.CACHE;
+  const modeOf = repositoryConfidentiality(env);
   return Layer.succeed(FailureSummaries)({
     pack: (execution) =>
       Effect.gen(function* () {
+        const readTail = modeOf(execution.repository) !== "confidential-compute";
         const failing =
           bucket === undefined
             ? undefined
             : yield* Effect.tryPromise({
-                try: () => failingStep(bucket, execution),
+                try: () => failingStep(bucket, execution, readTail),
                 catch: () => apiError("unavailable", "the execution's step logs could not be read"),
               });
         return incidentOf(execution, failing);
       }),
+    confidentiality: (repository) => Effect.sync(() => modeOf(repository)),
   });
 };

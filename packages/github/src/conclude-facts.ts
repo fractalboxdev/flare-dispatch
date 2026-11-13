@@ -11,6 +11,8 @@ export interface PlacementFacts {
   readonly claimLatencyMs: number | null;
   readonly leasedKind: string | null;
   readonly acceptedKind: string | null;
+  /** The executor of the latest lease; null before the first grant. */
+  readonly executorId: string | null;
   /** Whether the first grant went to a cloud kind; null before the first grant. */
   readonly cloudWon: boolean | null;
 }
@@ -81,6 +83,7 @@ export const conclusionFactsOf = (
     details: {
       class: record.className,
       executor_kind: p?.acceptedKind ?? p?.leasedKind ?? null,
+      executor_id: p?.executorId ?? null,
       placement_reason: placementReason(p),
       queue_age_ms: queueAge,
       reserved_micro_usd: r?.holdMicroUsd ?? 0,
@@ -96,12 +99,17 @@ export class ConcludeFactsUnavailable extends Schema.TaggedError<ConcludeFactsUn
   { message: Schema.String },
 ) {}
 
-/** The facts of an execution's conclusion; null when the control plane holds no record of the execution. */
+/**
+ * What the check-run applier reads from the control plane's records: the facts of an execution's conclusion, null when
+ * the control plane holds no record of the execution, and whether a repository's confidentiality mode is
+ * `confidential-compute`, which limits every check run's output (FD-GH-019).
+ */
 export class ConcludeFacts extends Context.Service<
   ConcludeFacts,
   {
     readonly of: (
       executionId: string,
     ) => Effect.Effect<ConclusionFacts | null, ConcludeFactsUnavailable>;
+    readonly confidentialCompute: (repo: string) => boolean;
   }
 >()("@fractalboxdev/flare-dispatch-github/ConcludeFacts") {}
