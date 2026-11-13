@@ -398,5 +398,5 @@ A rendered image declares each scanner's version as the default of its Dockerfil
 
 ## Open items
 
-- TODO(maintainer): admit and charge `advisory-refresh` as an ops run ([MAMEKO-SPD-063](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/spend.md)); until then the control plane's minute tick runs it as a step, uncharged.
+- FD-OPS-100 waits on mameko: an ops run is a request the coordinator admits with `ops_run: true` and charges to the ops reserve ([MAMEKO-SPD-063](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/spend.md)), and the pinned mameko commit gives the control plane's own schedule no admission path for one. The control plane's minute tick runs the refresh as a step, so OSV downloads draw nothing from `R_ops` and appear in no ops-run record, and FD-OPS-100 has no harness entry until `advisory-refresh` is admitted as an ops run.
 - TODO(operator): choose an alert sink that pages when no `ok` heartbeat arrives for 30 min; without one, a control plane that stops serving raises no alarm.
