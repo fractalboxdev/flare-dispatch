@@ -22,7 +22,7 @@ import { countersignAccepted, CountersignOutcome, type StatementBinding } from "
 import type { AnyDsseEnvelope, DsseEnvelope, ProvenanceKey } from "./dsse.ts";
 import { AppendOutcome } from "./log.ts";
 import { envelopeDisallowedContent, StatementContentRefused } from "./statement.ts";
-import { sha256Subjects, statementSubjects } from "./subjects.ts";
+import { statementEpoch, statementSubjects, subjectNames } from "./subjects.ts";
 
 /** The log a statement is appended to: the public Rekor log, or the control plane's private log in R2. */
 export const LogKind = Schema.Literals(["rekor", "private"]);
@@ -78,15 +78,19 @@ export class SubjectRetentionFailed extends Schema.TaggedError<SubjectRetentionF
 
 /**
  * Keeps the artifacts a logged statement names as subjects until the statement retention after its integrated time
- * (FD-PROV-075). The artifact store implements it (artifacts.ts `artifactSubjectRetention`).
+ * (FD-PROV-075). A subject names the artifact its execution stored at the statement's epoch under the subject's name;
+ * the artifact row's declared digest is the executor's claim, never checked against the bytes, so it decides nothing
+ * here. The artifact store implements it (artifacts.ts `artifactSubjectRetention`).
  */
 export class SubjectRetention extends Context.Service<
   SubjectRetention,
   {
     readonly retain: (statement: {
       readonly executionId: string;
-      /** The statement's `sha256:<hex>` subject digests. */
-      readonly subjects: readonly string[];
+      /** The epoch of the statement's lease binding; `null` for a statement with none. */
+      readonly epoch: number | null;
+      /** The names of the statement's subjects. */
+      readonly names: readonly string[];
       readonly integratedTime: number;
     }) => Effect.Effect<void, SubjectRetentionFailed>;
   }
@@ -334,7 +338,8 @@ export const applyLogAppend = (digest: string, now: number) =>
         ? logs.rekor(intent.envelope, intent.verifiers)
         : logs.private(intent.envelope);
     const retention = yield* SubjectRetention;
-    const subjects = sha256Subjects(statementSubjects(intent.envelope));
+    const names = subjectNames(statementSubjects(intent.envelope));
+    const epoch = statementEpoch(intent.envelope);
     const attempts = pending.attempts + 1;
     const retry = (warning: string, message: string) => {
       const nextAttemptAt = now + retryDelayMs(attempts);
@@ -356,7 +361,8 @@ export const applyLogAppend = (digest: string, now: number) =>
       Effect.tap((entry) =>
         retention.retain({
           executionId: intent.executionId,
-          subjects,
+          epoch,
+          names,
           integratedTime: entry.integratedTime,
         }),
       ),

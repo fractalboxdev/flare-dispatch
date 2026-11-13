@@ -50,6 +50,9 @@
     // empty (FD-GATE-101). A deploy whose drift check fails changes no var, so the deployed pin stays the previous one
     // (FD-OPS-095). No executor serves the scan runs yet (specs/runs/gate.md § Open items).
     "SCAN_BUNDLE_DIGEST": "{{scan.bundleDigest}}",
+    // The overlay's statement retention in days, 400 where it sets none: logging a statement keeps each artifact it
+    // names until the statement's integrated time plus this many days (FD-PROV-075).
+    "STATEMENT_RETENTION_DAYS": "{{provenance.statementRetentionDays}}",
     // The OSV ecosystems whose `all.zip` archive the tick's `advisory-refresh` step stores in `cas/<sha256>` once per
     // UTC day, none where the overlay sets none (FD-OPS-100).
     "ADVISORY_ECOSYSTEMS": "{{scan.advisoryEcosystems}}",

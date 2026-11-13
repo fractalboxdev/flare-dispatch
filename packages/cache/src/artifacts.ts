@@ -314,32 +314,34 @@ export const DEFAULT_STATEMENT_RETENTION_DAYS = 400;
 const DAY_MS = 24 * 3600 * 1000;
 
 /**
- * Keeps each artifact of the statement's execution whose digest the statement names as a subject until no earlier than
- * the statement's integrated time plus the statement retention (FD-PROV-075). A row whose `expires_at` is already later
- * keeps it, so the extension only lengthens the artifact retention of FD-CACHE-079. Answers how many rows it extended.
+ * Keeps each artifact the statement names as a subject until no earlier than the statement's integrated time plus the
+ * statement retention (FD-PROV-075): the rows of the statement's execution at the epoch of its lease binding whose
+ * name a subject carries, or at every epoch for a statement with no binding. The match never reads the row's
+ * `sha256`: that is the digest the executor declared at upload, which the commit does not check against the bytes,
+ * while a cloud-builder subject's digest is read from them. A row whose `expires_at` is already later keeps it, so the
+ * extension only lengthens the artifact retention of FD-CACHE-079. Answers how many rows it extended.
  */
 export const retainStatementSubjects = async (
   db: D1Database,
   statement: {
     readonly executionId: string;
-    /** `sha256:<hex>` subject digests. */
-    readonly subjects: readonly string[];
+    readonly epoch: number | null;
+    readonly names: readonly string[];
     readonly integratedTime: number;
   },
   retentionDays: number = DEFAULT_STATEMENT_RETENTION_DAYS,
 ): Promise<number> => {
-  const hexes = statement.subjects.flatMap((d) => {
-    const m = /^sha256:([0-9a-f]{64})$/.exec(d);
-    return m === null ? [] : [m[1]!];
-  });
-  if (hexes.length === 0) return 0;
+  const names = [...new Set(statement.names)];
+  if (names.length === 0) return 0;
   const keepUntil = statement.integratedTime + retentionDays * DAY_MS;
+  const first = statement.epoch === null ? 3 : 4;
   const result = await db
     .prepare(
       `update artifacts set expires_at = ?1
-       where execution_id = ?2 and expires_at < ?1 and sha256 in (${hexes.map((_, i) => `?${i + 3}`).join(", ")})`,
+       where execution_id = ?2 and expires_at < ?1${statement.epoch === null ? "" : " and epoch = ?3"}
+         and name in (${names.map((_, i) => `?${i + first}`).join(", ")})`,
     )
-    .bind(keepUntil, statement.executionId, ...hexes)
+    .bind(keepUntil, statement.executionId, ...(statement.epoch === null ? [] : [statement.epoch]), ...names)
     .run();
   return result.meta.changes;
 };

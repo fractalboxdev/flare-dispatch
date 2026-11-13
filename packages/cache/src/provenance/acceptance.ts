@@ -166,6 +166,13 @@ const sha256Subjects = (subject: readonly Descriptor[]) =>
 
 const stringOr = (value: unknown): string | null => (typeof value === "string" ? value : null);
 
+/**
+ * A code-signing hash in the one form check 11 compares: lowercase hex with no `sha256:` prefix. The registration
+ * records the key helper's `cdhash` as bare lowercase hex of 20 or 32 bytes (FD-PROV-031); a statement's code hash is
+ * read in either spelling, so a prefix or upper case never decides the check.
+ */
+const codeSigningHashOf = (value: string): string => value.toLowerCase().replace(/^sha256:/, "");
+
 /** The lease binding, subjects, code hash and model list of a statement payload; `undefined` when it carries none. */
 const claimsOf = (payload: Uint8Array): StatementClaims | undefined => {
   let json: unknown;
@@ -288,7 +295,11 @@ export const evaluateStatement = (
       )
     )
       return reject("digest-mismatch", signer);
-    if (device.codeHash === null || claims.codeHash !== device.codeHash)
+    if (
+      device.codeHash === null ||
+      claims.codeHash === null ||
+      codeSigningHashOf(claims.codeHash) !== codeSigningHashOf(device.codeHash)
+    )
       return reject("code-hash-mismatch", signer);
     const metered = yield* records.meteredModels(executionId, epoch);
     if (!sameSet(claims.models, metered)) return reject("model-mismatch", signer);
