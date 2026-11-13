@@ -474,6 +474,72 @@ describe("check.conclude from mameko's outcome row", () => {
       { conclusion: "cancelled", output: { title: "superseded" } },
     ]);
   });
+
+  const DIGEST = "sha256:feed";
+  const statement = (status: "logged" | "log-pending") => ({
+    envelope_digest: DIGEST,
+    status,
+    statement_url: `https://fd.example.com/v1/provenance/statements/${DIGEST}`,
+    inclusion_proof_url:
+      status === "logged" ? `https://fd.example.com/v1/provenance/proofs/${DIGEST}` : null,
+    subjects: [],
+  });
+  const withStatement = (status: "logged" | "log-pending") => ({
+    ...details,
+    provenance: [statement(status)],
+  });
+  /** The `cp:check:provenance:<digest>` row of a statement logged after the conclusion. */
+  const refreshRow = row(
+    "check.conclude",
+    { provenance_logged: DIGEST },
+    { intentKey: `cp:check:provenance:${DIGEST}` },
+  );
+
+  it("[FD-GH-020] a provenance update of a child the parent-ended cascade cancelled keeps parent closed, not cancelled", async () => {
+    const gh = withFacts({
+      recorded: { _tag: "cancelled", cause: "parent-ended" },
+      details: withStatement("log-pending"),
+    });
+    await apply(gh, outcomeRow({ _tag: "Cancelled", cause: "parent-ended" }));
+    gh.facts.set(
+      "exec-1",
+      facts({
+        recorded: { _tag: "cancelled", cause: "parent-ended" },
+        details: withStatement("logged"),
+      }),
+    );
+    expect(await apply(gh, refreshRow)).toEqual({ _tag: "applied", externalRef: "1000" });
+    expect(gh.runs).toMatchObject([
+      {
+        status: "completed",
+        conclusion: "failure",
+        output: { title: "parent closed before this part settled" },
+      },
+    ]);
+    expect(gh.runs[0]?.output.summary).toContain("logged, [inclusion proof]");
+  });
+
+  it("[FD-PROV-042] a provenance update whose write was lost is found only once the summary links the logged statement", async () => {
+    const failed = { _tag: "Failure", reason: "lint: 3 errors" } as const;
+    const gh = withFacts({ recorded: verdictOf(failed), details: withStatement("log-pending") });
+    await apply(gh, outcomeRow(failed));
+    expect(gh.runs[0]?.output.summary).toContain(": log-pending");
+    gh.facts.set(
+      "exec-1",
+      facts({ recorded: verdictOf(failed), details: withStatement("logged") }),
+    );
+
+    // The list answers, then the update fails after it was sent: whether it reached GitHub is unknown.
+    gh.failures.push(null, new GithubNetworkError({ sent: true, message: "reset" }));
+    expect((await apply(gh, refreshRow))._tag).toBe("unknown");
+    expect(gh.runs[0]?.output.summary).toContain(": log-pending");
+    expect(await lookup(gh, refreshRow)).toEqual({ _tag: "absent" });
+    expect(await reconcile(gh, refreshRow)).toEqual({ _tag: "absent" });
+
+    expect(await apply(gh, refreshRow)).toEqual({ _tag: "applied", externalRef: "1000" });
+    expect(gh.runs[0]?.output.summary).toContain("logged, [inclusion proof]");
+    expect(await lookup(gh, refreshRow)).toEqual({ _tag: "found", externalRef: "1000" });
+  });
 });
 
 describe("check.summary and check.annotations", () => {

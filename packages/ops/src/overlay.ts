@@ -97,7 +97,8 @@ export const OverlayValues = Schema.Struct({
   dispatchers: opt(Schema.Array(NonEmpty)),
   /** The Access identities the tightening operator routes admit (specs/interfaces.md FD-IFC-095). */
   containment: opt(Schema.Array(NonEmpty)),
-  github: Schema.Struct({ appId: NonEmpty, fixtureRepo: NonEmpty }),
+  /** The GitHub App's id and slug, and the repository the synthetic webhook canary pushes to (FD-OPS-038). */
+  github: Schema.Struct({ appId: NonEmpty, appSlug: NonEmpty, fixtureRepo: NonEmpty }),
   intake: opt(Schema.Struct({ webhookEvents: opt(Schema.Array(NonEmpty)) })),
   dispatch: opt(
     Schema.Struct({
@@ -177,6 +178,8 @@ export class OverlayRejected extends Schema.TaggedError<OverlayRejected>()("Over
 
 /** `attestation_max_age` where the overlay sets none: 10 days (FD-PROV-016). */
 export const ATTESTATION_MAX_AGE_DEFAULT_DAYS = 10;
+/** The statement retention where the overlay sets none: 400 days (FD-PROV-075). */
+export const STATEMENT_RETENTION_DEFAULT_DAYS = 400;
 /** `reattest_interval` where the overlay sets none: 7 days (FD-PROV-030). */
 export const REATTEST_INTERVAL_DEFAULT_DAYS = 7;
 /** The margin `attestation_max_age` keeps over `reattest_interval`: 48 h. */
@@ -276,16 +279,22 @@ export type RenderValues = Omit<
   /** `records.url`, empty where the overlay sets none, so the control plane declares no record kind. */
   readonly records: { readonly url: string };
   /**
-   * `advisoryEcosystems`, none where the overlay sets none, so `advisory-refresh` stores no archive, and
+   * `bundleDigest`, empty where the overlay pins none, so a scan records `config: scan bundle not pinned`
+   * (FD-GATE-101); `advisoryEcosystems`, none where the overlay sets none, so `advisory-refresh` stores no archive; and
    * `advisoryMaxAgeHours` at its 48 h default where the overlay sets none (FD-OPS-103).
    */
   readonly scan: NonNullable<OverlayValues["scan"]> & {
+    readonly bundleDigest: string;
     readonly advisoryEcosystems: readonly string[];
     readonly advisoryMaxAgeHours: number;
   };
-  /** `attestationMaxAgeDays` at its 10-day default where the overlay sets none (FD-PROV-016). */
+  /**
+   * `attestationMaxAgeDays` at its 10-day default (FD-PROV-016) and `statementRetentionDays` at its 400-day default
+   * (FD-PROV-075) where the overlay sets none.
+   */
   readonly provenance: NonNullable<OverlayValues["provenance"]> & {
     readonly attestationMaxAgeDays: number;
+    readonly statementRetentionDays: number;
   };
   readonly spend: Required<SpendValues>;
   readonly policy: { readonly rules: PolicyRules };
@@ -309,7 +318,8 @@ export type RenderValues = Omit<
  * its policy rules, dispatchers and containment identities, an empty set where it holds none, its Actions OIDC audience, empty where it sets
  * none, its `dispatch.scoped` entries, none where it sets none (FD-IFC-089), its intake webhook events, `null` where it sets none, so the rendered Worker tells an absent list (every
  * supported event) from an empty one (none) (FD-INT-027), its `attestation_max_age` in days, at its default where
- * it sets none (FD-PROV-016), its advisory ecosystems, none where it sets none (FD-OPS-100), its advisory snapshot
+ * it sets none (FD-PROV-016), its scan bundle pin, empty where it pins none (FD-GATE-101), its statement retention in days, at its default where it sets none (FD-PROV-075), its advisory ecosystems,
+ * none where it sets none (FD-OPS-100), its advisory snapshot
  * age, at its default where it sets none (FD-OPS-103), and its `records.url`, empty where it sets none (FD-GH-093).
  */
 export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
@@ -326,6 +336,7 @@ export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   records: { url: overlay.records?.url ?? "" },
   scan: {
     ...overlay.scan,
+    bundleDigest: overlay.scan?.bundleDigest ?? "",
     advisoryEcosystems: overlay.scan?.advisoryEcosystems ?? [],
     advisoryMaxAgeHours: overlay.scan?.advisoryMaxAgeHours ?? ADVISORY_MAX_AGE_DEFAULT_HOURS,
   },
@@ -333,6 +344,8 @@ export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
     ...overlay.provenance,
     attestationMaxAgeDays:
       overlay.provenance?.attestationMaxAgeDays ?? ATTESTATION_MAX_AGE_DEFAULT_DAYS,
+    statementRetentionDays:
+      overlay.provenance?.statementRetentionDays ?? STATEMENT_RETENTION_DEFAULT_DAYS,
   },
 });
 
@@ -366,7 +379,7 @@ export const placeholderOverlay: OverlayValues = {
   hostnames: { dispatcher: "dispatch.example.com", docs: "docs.example.com" },
   access: { teamDomain: "example.cloudflareaccess.com", aud: "placeholder-aud" },
   operators: ["operator@example.com"],
-  github: { appId: "0", fixtureRepo: "example/canary" },
+  github: { appId: "0", appSlug: "flare-dispatch", fixtureRepo: "example/canary" },
   executors: { planeId: "flare-dispatch" },
   alerts: { sink: "https://alerts.example.com/hook" },
   models: {

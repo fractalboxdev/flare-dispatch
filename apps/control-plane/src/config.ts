@@ -18,6 +18,7 @@ import {
 import type { Effect } from "effect";
 import {
   DEFAULT_ATTESTATION_MAX_AGE_MS,
+  DEFAULT_STATEMENT_RETENTION_DAYS,
   type AcceptanceSettings,
   type AppendOutcome,
   type PrivateLogInclusionProof,
@@ -86,12 +87,12 @@ export interface ControlPlaneEnv extends CacheEnv {
   readonly POLICY_RULES?: unknown;
   readonly DEPLOYMENT?: string;
   readonly PLANE_ID: string;
-  /** The GitHub App's id and private key (a Worker secret); without both, nothing is applied to GitHub. */
+  /** The GitHub App's id, slug and private key (a Worker secret); without all three, nothing is applied to GitHub. */
   readonly GITHUB_APP_ID?: string;
   readonly GITHUB_APP_PRIVATE_KEY?: string;
   /** `github.fixtureRepo`: the repository the synthetic webhook canary pushes to (FD-OPS-038). */
   readonly GITHUB_FIXTURE_REPO?: string;
-  /** The App's slug, whose bot the App commits as. */
+  /** `github.appSlug`: the App's slug, whose bot `<slug>[bot]` the App commits and comments as. */
   readonly GITHUB_APP_SLUG?: string;
   /** The webhook secret (a Worker secret); unset refuses every webhook (FD-INT-022). */
   readonly WEBHOOK_SECRET?: string;
@@ -117,6 +118,11 @@ export interface ControlPlaneEnv extends CacheEnv {
    * (FD-PROV-016). Wrangler delivers it as a number, a `.dev.vars` entry as its text.
    */
   readonly ATTESTATION_MAX_AGE_DAYS?: unknown;
+  /**
+   * The rendered `{{provenance.statementRetentionDays}}`: the statement retention in days, 400 where the overlay sets
+   * none (FD-PROV-075). Wrangler delivers it as a number, a `.dev.vars` entry as its text.
+   */
+  readonly STATEMENT_RETENTION_DAYS?: unknown;
   /**
    * The rendered `{{scan.advisoryEcosystems}}`: the OSV ecosystems `advisory-refresh` stores, none where the overlay
    * sets none (FD-OPS-100). Wrangler delivers it as an array, a `.dev.vars` entry as its JSON text.
@@ -247,6 +253,19 @@ export const acceptanceSettingsOf = (
     return { attestationMaxAgeMs: DEFAULT_ATTESTATION_MAX_AGE_MS };
   const days = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
   return { attestationMaxAgeMs: Number.isFinite(days) && days > 0 ? days * DAY_MS : 0 };
+};
+
+/**
+ * The statement retention in days from `STATEMENT_RETENTION_DAYS`, the 400-day default where the var is unset or empty
+ * (FD-PROV-075). A value that is not a positive whole number of days answers the default, so a malformed var never
+ * lets a logged statement's artifacts expire sooner than the default keeps them.
+ */
+export const statementRetentionDaysOf = (
+  env: Pick<ControlPlaneEnv, "STATEMENT_RETENTION_DAYS">,
+): number => {
+  const raw = env.STATEMENT_RETENTION_DAYS;
+  const days = typeof raw === "number" ? raw : typeof raw === "string" && raw !== "" ? Number(raw) : Number.NaN;
+  return Number.isInteger(days) && days > 0 ? days : DEFAULT_STATEMENT_RETENTION_DAYS;
 };
 
 /**

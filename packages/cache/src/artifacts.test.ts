@@ -222,14 +222,26 @@ describe("artifacts", () => {
     const NAMED = "b".repeat(64);
     const OTHER = "c".repeat(64);
 
-    /** A pending log-append intent of `executionId` whose statement names `digests` as its subjects. */
-    const intentNaming = (executionId: string, digests: readonly string[]) => {
+    /**
+     * A pending log-append intent of `executionId` whose test-result statement, bound to the lease at `epoch`, names
+     * each of `subjects` by its name and its bytes' SHA-256.
+     */
+    const intentNaming = (
+      executionId: string,
+      subjects: readonly { readonly name: string; readonly sha256: string }[],
+      epoch = 2,
+    ) => {
       const envelope = canonicalJson(
         unsignedEnvelope(
           utf8(
             JSON.stringify({
               _type: "https://in-toto.io/Statement/v1",
-              subject: digests.map((d, i) => ({ name: `out-${i}`, digest: { sha256: d.slice("sha256:".length) } })),
+              subject: subjects.map((s) => ({ name: s.name, digest: { sha256: s.sha256 } })),
+              predicateType: "https://in-toto.io/attestation/test-result/v0.1",
+              predicate: {
+                result: "PASSED",
+                configuration: [{ name: "lease", annotations: { execution_id: executionId, epoch } }],
+              },
             }),
           ),
         ),
@@ -284,7 +296,7 @@ describe("artifacts", () => {
       const named = await commitDigest(w, "app.tar", NAMED);
       const unnamed = await commitDigest(w, "notes.txt", OTHER);
       const integratedTime = w.now + 5 * DAY;
-      const logged = await logAt(intentNaming(EXEC, [`sha256:${NAMED}`]), integratedTime, artifactSubjectRetention(db));
+      const logged = await logAt(intentNaming(EXEC, [{ name: "app.tar", sha256: NAMED }]), integratedTime, artifactSubjectRetention(db));
       expect(LogAppendStatus.$is("Logged")(logged!.status)).toBe(true);
       expect(await expiresAt(named)).toBe(integratedTime + 400 * DAY);
       expect(await expiresAt(unnamed)).toBe(w.now + 30 * DAY);
@@ -297,24 +309,47 @@ describe("artifacts", () => {
     it("[FD-PROV-075] the statement retention the overlay sets replaces the default, and a later expires_at stays", async () => {
       const w = world();
       const named = await commitDigest(w, "app.tar", NAMED);
-      await logAt(intentNaming(EXEC, [`sha256:${NAMED}`]), w.now, artifactSubjectRetention(db, 90));
+      await logAt(intentNaming(EXEC, [{ name: "app.tar", sha256: NAMED }]), w.now, artifactSubjectRetention(db, 90));
       expect(await expiresAt(named)).toBe(w.now + 90 * DAY);
       // A shorter retention never shortens what an earlier statement extended.
-      await logAt(intentNaming(EXEC, [`sha256:${NAMED}`]), w.now, artifactSubjectRetention(db, 45));
+      await logAt(intentNaming(EXEC, [{ name: "app.tar", sha256: NAMED }]), w.now, artifactSubjectRetention(db, 45));
       expect(await expiresAt(named)).toBe(w.now + 90 * DAY);
+    });
+
+    it("[FD-PROV-075] keeps the artifact a statement names even where the digest the executor declared at upload differs from its bytes", async () => {
+      const w = world();
+      // The executor declares OTHER; the bytes it uploads hash to something else, which the commit does not check.
+      const named = await commitDigest(w, "app.tar", OTHER);
+      const bytes = Array.from(
+        new Uint8Array(await crypto.subtle.digest("SHA-256", utf8("12345"))),
+        (b) => b.toString(16).padStart(2, "0"),
+      ).join("");
+      expect(bytes).not.toBe(OTHER);
+      // The cloud builder's subject carries the digest of the bytes in R2.
+      await logAt(intentNaming(EXEC, [{ name: "app.tar", sha256: bytes }]), w.now, artifactSubjectRetention(db));
+      expect(await expiresAt(named)).toBe(w.now + 400 * DAY);
+      expect((await sweepArtifacts(db, bucket, w.now + 31 * DAY)).deleted).toBe(0);
+      expect(await bucket.head(artifactPath(EXEC, 2, "app.tar"))).not.toBeNull();
+    });
+
+    it("[FD-PROV-075] a statement bound to another epoch keeps the artifact of that name at its own epoch, not this one", async () => {
+      const w = world();
+      const named = await commitDigest(w, "app.tar", NAMED);
+      await logAt(intentNaming(EXEC, [{ name: "app.tar", sha256: NAMED }], 3), w.now, artifactSubjectRetention(db));
+      expect(await expiresAt(named)).toBe(w.now + 30 * DAY);
     });
 
     it("[FD-PROV-075] another execution's artifact with the same digest keeps its own retention", async () => {
       const w = world();
       const named = await commitDigest(w, "app.tar", NAMED);
-      await logAt(intentNaming("01JOTHEREXECUTION00000000", [`sha256:${NAMED}`]), w.now, artifactSubjectRetention(db));
+      await logAt(intentNaming("01JOTHEREXECUTION00000000", [{ name: "app.tar", sha256: NAMED }]), w.now, artifactSubjectRetention(db));
       expect(await expiresAt(named)).toBe(w.now + 30 * DAY);
     });
 
     it("[FD-PROV-075] a failed retention leaves the statement pending, and the retried append extends the artifact", async () => {
       const w = world();
       const named = await commitDigest(w, "app.tar", NAMED);
-      const intent = intentNaming(EXEC, [`sha256:${NAMED}`]);
+      const intent = intentNaming(EXEC, [{ name: "app.tar", sha256: NAMED }]);
       const store = memoryLogAppendStore(new Map([[intent.envelopeDigest, intent]]));
       const failing: SubjectRetention["Service"] = {
         retain: () => Effect.fail(new SubjectRetentionFailed({ message: "D1 unavailable" })),

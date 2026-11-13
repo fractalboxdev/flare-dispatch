@@ -108,6 +108,42 @@ describe("dispatch.followOn", () => {
     });
   });
 
+  it("[FD-INT-066] a release-notes follow-on whose inputs name publish is refused and admits nothing", async () => {
+    const development = catalogRuns("development");
+    const h = await harness({
+      settings: {
+        catalog: (name) => (name === "release-notes" ? development(name) : CATALOG[name]),
+      },
+    });
+    const opened = await bodyOf(
+      await h.run(
+        handleIntake(await signedWebhook("pull_request", pullRequestPayload()), "webhooks/github"),
+      ),
+    );
+    const parent = (opened.executions as string[])[0]!;
+    const followOn = (inputs: unknown) =>
+      h.run(
+        FollowOnSubmitter.use((s) =>
+          s.submit({
+            executionId: parent,
+            intentKey: "run:release-notes:0",
+            run: "release-notes",
+            label: null,
+            inputs,
+          }),
+        ).pipe(Effect.provide(followOnSubmitterLayer)),
+      );
+    const proposal = { repo: { owner: "acme", name: "app" }, baseBranch: "main" };
+    const publish = { version: "v9.9.9", commit: HEAD, notesCommit: HEAD, pullRequest: 12 };
+    expect(await followOn({ ...proposal, publish })).toMatchObject({
+      _tag: "refused",
+      reason: expect.stringMatching(/^follow-on: inputs: /),
+    });
+    expect(h.records().filter((r) => r.run === "release-notes")).toEqual([]);
+    // The same follow-on without publish proposes, so the refusal is the publish block's alone.
+    expect(await followOn(proposal)).toMatchObject({ _tag: "admitted" });
+  });
+
   it("[FD-GH-088] a follow-on of an unknown execution is refused and admits nothing", async () => {
     const h = await harness();
     expect(await submit(h, "no-such-execution")).toMatchObject({ _tag: "refused" });

@@ -141,6 +141,7 @@ export const runScenario = async (seed: number): Promise<Observation> => {
       runArgv: () => Effect.die("worker-deploy runs no argv command"),
       readFile: (path) => Effect.fail(new WorkspaceReadFailed({ path, detail: "absent" })),
       writeFile: (path) => Effect.fail(new WorkspaceWriteFailed({ path, detail: "read-only" })),
+      createReadOnly: (path) => Effect.fail(new WorkspaceWriteFailed({ path, detail: "read-only" })),
     });
     const instance = Layer.succeed(
       WorkflowEngine.WorkflowInstance,

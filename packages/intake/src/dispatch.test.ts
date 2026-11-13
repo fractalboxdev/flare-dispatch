@@ -12,6 +12,7 @@ import {
   HEAD,
   manifest,
   pullRequestPayload,
+  pushPayload,
   REPO,
   refusal,
   repoWithManifest,
@@ -151,6 +152,62 @@ describe("a self-heal-pr dispatch", () => {
   });
 });
 
+describe("a release-notes dispatch", () => {
+  const releaseNotes = async () => {
+    const development = catalogRuns("development");
+    return harness({
+      settings: {
+        catalog: (name) => (name === "release-notes" ? development(name) : CATALOG[name]),
+      },
+      repos: {
+        [REPO]: repoWithManifest(
+          manifest([{ recipe: "release-notes", triggers: ["dispatch", "mcp"] }]),
+        ),
+      },
+    });
+  };
+  const proposal = { repo: { owner: "acme", name: "app" }, baseBranch: "main" };
+  const publish = {
+    version: "v9.9.9",
+    commit: HEAD,
+    notesCommit: HEAD,
+    pullRequest: 12,
+  };
+
+  it("[FD-INT-066] [FD-AGT-085] [FD-AGT-086] a dispatch or an MCP call whose inputs name publish answers 400 invalid_inputs and starts no publish", async () => {
+    const h = await releaseNotes();
+    for (const trigger of ["dispatch", "mcp"] as const)
+      expect(
+        await refusal(
+          h,
+          authenticated({
+            trigger,
+            run: "release-notes",
+            label: null,
+            sha: HEAD,
+            inputs: { ...proposal, publish },
+          }),
+        ),
+        trigger,
+      ).toEqual({ status: 400, code: "invalid_inputs" });
+    // The refusal comes before any GitHub read, so no approval, window or rejection is ever bypassed.
+    expect(h.reads.calls).toEqual([]);
+    expect(h.executions()).toEqual([]);
+    expect(h.records()).toEqual([]);
+  });
+
+  it("[FD-INT-066] a proposing dispatch without publish is admitted under the commit key", async () => {
+    const h = await releaseNotes();
+    const admitted = await admit(
+      h,
+      authenticated({ run: "release-notes", label: null, sha: HEAD, inputs: proposal }),
+    );
+    expect(admitted.duplicate).toBe(false);
+    expect(h.executions()).toMatchObject([{ id: admitted.executionId, run: "release-notes" }]);
+    expect(JSON.parse(String(h.records()[0]!["inputs_json"]))).toEqual(proposal);
+  });
+});
+
 describe("dispatch to admission", () => {
   it("[FD-INT-001] an admitted dispatch answers its execution id and class", async () => {
     const h = await harness();
@@ -176,6 +233,36 @@ describe("dispatch to admission", () => {
     const first = await admit(h, authenticated({ sha: HEAD }));
     const second = await admit(h, authenticated({ sha: HEAD }));
     expect(second).toEqual({ ...first, duplicate: true });
+  });
+
+  it("[FD-INT-009] a dispatch naming the repository in another letter case shares the webhook's commit key and reads the repository's own mode", async () => {
+    const asked: string[] = [];
+    const h = await harness({
+      settings: {
+        confidentiality: (repo) => {
+          asked.push(repo);
+          return repo === REPO ? "confidential-model" : "unclassified";
+        },
+      },
+    });
+    await h.run(
+      handleIntake(
+        await signedWebhook("push", pushPayload("refs/heads/main", BASE)),
+        "webhooks/github",
+      ),
+    );
+    expect(h.executions()).toHaveLength(1);
+    const dispatched = await admit(h, authenticated({ repository: "Acme/App", sha: BASE }));
+    expect(dispatched).toMatchObject({ executionId: h.executions()[0]!.id, duplicate: true });
+    const fresh = await admit(h, authenticated({ repository: "ACME/APP", sha: HEAD }));
+    expect(fresh.duplicate).toBe(false);
+    expect(h.records().map((r) => r.repo)).toEqual([REPO, REPO]);
+    expect(h.rows("select canonical from dedup_keys").map((r) => r.canonical)).toEqual([
+      `check:ci:${REPO}:${BASE}`,
+      `check:ci:${REPO}:${HEAD}`,
+    ]);
+    expect(asked.length).toBeGreaterThan(0);
+    expect(new Set(asked)).toEqual(new Set([REPO]));
   });
 
   it("[FD-INT-041] a dispatch with no ref and no commit pins the default branch head", async () => {

@@ -9,6 +9,7 @@ import { IntakeConfig, type Admission, type ClassResolver } from "./config.ts";
 import type { HeldCheckReporter } from "./ports.ts";
 import { ManifestSource } from "./manifest.ts";
 import { IntakeStore, type ShedRecorder } from "./store.ts";
+import { callerInputOf } from "./runs.ts";
 import { submission, submit } from "./submit.ts";
 
 export const followOnSubmitterLayer = Layer.effect(
@@ -72,7 +73,8 @@ export const followOnSubmitterLayer = Layer.effect(
               };
             requested = { ...params.success, scope: parent.repo, sha: parent.sha };
           }
-          const inputs = Schema.decodeUnknownResult(run.input)(requested);
+          // A follow-on intent never names a `release-notes` publish, which only a release approval starts (FD-INT-066).
+          const inputs = Schema.decodeUnknownResult(callerInputOf(run))(requested);
           if (Result.isFailure(inputs))
             return {
               _tag: "refused" as const,

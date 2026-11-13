@@ -403,4 +403,51 @@ describe("the security gate recipes as intake reads them", () => {
     expect(local).toEqual({ _tag: "rejected" });
     expect(h.records()).toHaveLength(1);
   });
+
+  it("[FD-GATE-112] scans the commit the dispatch pinned in the repository it is authorized for, and refuses inputs naming another", async () => {
+    const h = await harness({
+      repos: { [REPO]: repoWithManifest(manifest([{ recipe: "security-rescan", triggers: ["dispatch"] }])) },
+      settings: { catalog: (name) => (name === "security-rescan" ? production(name) : CATALOG[name]) },
+    });
+    const dispatch = (key: string, inputs: unknown, sha: string | undefined = HEAD) =>
+      authenticated({
+        run: "security-rescan",
+        label: null,
+        sha,
+        inputs,
+        idempotency: { key, body: { repository: REPO, inputs } },
+      });
+    const own = { repo: `https://github.com/${REPO}.git`, sha: HEAD, ref: "refs/heads/main", scope: REPO };
+    for (const [field, value] of [
+      ["repo", "https://github.com/attacker/fork.git"],
+      ["repo", "file:///etc"],
+      ["sha", BASE],
+      ["ref", "refs/heads/other"],
+      ["scope", "attacker/fork"],
+    ] as const)
+      expect(await refusal(h, dispatch(`r-${field}-${value}`, { ...own, [field]: value })), field).toEqual({
+        status: 400,
+        code: "invalid_inputs",
+      });
+    expect(h.records()).toEqual([]);
+
+    // Inputs that name no commit field take the dispatch's; inputs that name the dispatch's own are admitted as sent.
+    await admit(h, dispatch("r-none", {}));
+    await admit(h, dispatch("r-own", { ...own, repo: own.repo.toUpperCase() }));
+    expect(h.records().map((r) => JSON.parse(r.inputs_json as string))).toEqual([own, own]);
+
+    // A dispatch with no commit scans the head intake pinned, not one its inputs name.
+    const pinned = await harness({
+      repos: { [REPO]: repoWithManifest(manifest([{ recipe: "security-rescan", triggers: ["dispatch"] }])) },
+      settings: { catalog: (name) => (name === "security-rescan" ? production(name) : CATALOG[name]) },
+    });
+    await admit(pinned, dispatch("r-head", {}, undefined));
+    const [record] = pinned.records().map((r) => JSON.parse(r.inputs_json as string) as { sha: string });
+    expect(record!.sha).toMatch(/^[0-9a-f]{40}$/);
+    expect(pinned.records()[0]!.sha).toBe(record!.sha);
+    expect(await refusal(pinned, dispatch("r-other", { sha: BASE }, undefined))).toEqual({
+      status: 400,
+      code: "invalid_inputs",
+    });
+  });
 });

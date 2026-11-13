@@ -2,6 +2,7 @@
 // input schemas, its class and the FlareDispatch declarations beside
 // `defineRun`'s answer (specs/run-model.md § Run catalogue).
 import { Option, Schema } from "effect";
+import type { CommitBinding, DispatchCommit } from "@fractalboxdev/flare-dispatch-catalog";
 import type { TriggerContext } from "./delivery.ts";
 import type { DispatchEvent } from "./event.ts";
 
@@ -26,6 +27,11 @@ export interface IntakeRun {
   readonly params: Schema.Decoder<unknown>;
   /** The run's input schema; a dispatch's inputs and a re-run's recorded inputs must pass it (FD-INT-040, FD-INT-055). */
   readonly input: Schema.Decoder<unknown>;
+  /**
+   * The narrower schema the inputs a caller names must pass, for a run whose input holds a field only intake builds:
+   * `release-notes` refuses `publish` from a dispatch, an MCP call, a local submit and a follow-on intent, so only a release approval starts a publish (FD-INT-066). Absent, a caller's inputs pass `input`.
+   */
+  readonly callerInput?: Schema.Decoder<unknown>;
   /** The request decoder: the run's input for an event, or none when the run does not answer it. */
   readonly trigger: (
     event: DispatchEvent,
@@ -86,7 +92,17 @@ export interface IntakeRun {
    * (FD-IFC-092).
    */
   readonly readOnlyScan?: boolean;
+  /**
+   * The dispatch's inputs bound to the commit its authorization covers: the repository, the commit intake pinned and
+   * its ref, so no input names another repository or commit for the run to read (FD-GATE-112). A `Mismatch` answers
+   * 400 `invalid_inputs`. A run without it takes its inputs as the caller sent them.
+   */
+  readonly bindCommit?: (inputs: unknown, commit: DispatchCommit) => CommitBinding;
 }
+
+/** The schema the inputs a caller names must pass: the run's `callerInput`, else its `input`. */
+export const callerInputOf = (run: IntakeRun): Schema.Decoder<unknown> =>
+  run.callerInput ?? run.input;
 
 /** The run catalogue: a run by name, or undefined when the deployment serves no such run. */
 export type RunCatalog = (name: string) => IntakeRun | undefined;

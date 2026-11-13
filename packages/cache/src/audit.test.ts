@@ -23,7 +23,7 @@ const device: ConcludedExecution = {
 const audit: ConcludedExecution = { ...device, executionId: "audit-exec", executorId: "cf-1", executorKind: "cloudflare" };
 
 describe("verdict audit", () => {
-  it("[FD-PROV-069] a device execution of a gate recipe is audited with probability audit_rate as a cloud ops run", () => {
+  it("selects a device execution of a gate recipe for a verdict audit with probability audit_rate and asks for a cloud ops run", () => {
     expect(auditRequestFor(device, { random: () => 0.049 })).toEqual({
       run: "check",
       commit: device.commit,

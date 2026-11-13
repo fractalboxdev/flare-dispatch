@@ -8,8 +8,8 @@
 // (FD-GATE-096), and its log withholds every matched value (FD-GATE-098).
 //
 // Every subprocess runs as an argv with no shell, so no path the range names is word-split or expanded.
-import { Effect, Match } from "effect";
-import { CommandExit, GateExec, type ArgvOptions } from "./command.ts";
+import { Effect, Match, type Scope } from "effect";
+import { CommandExit, GateExec, type ArgvOptions, type WorkspaceWriteFailed } from "./command.ts";
 import { jobEnv } from "./job.ts";
 import type { GateContext } from "./manifest.ts";
 import { Outcome, ScanReason, type Reason } from "./reasons.ts";
@@ -35,18 +35,40 @@ export const SCAN_TIMEOUT_SEC = 600;
 /** The environment variable that points OSV-Scanner at the advisory snapshot. */
 export const OSV_DB_ENV = "OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY";
 
-/**
- * Where the executor placed the scan bundle's scanner configurations and the advisory snapshot: read-only paths
- * outside the checkout (FD-GATE-104).
- */
+/** The files the scanners read beside the checkout: the bundle's scanner configurations and the advisory snapshot. */
 export interface ScanFiles {
-  /** The bundle's `gitleaks.config` as a file. */
+  /** The verified bundle's `gitleaks.config` as a file. */
   readonly gitleaksConfig: string;
-  /** The bundle's `zizmor.config` as a file. */
+  /** The verified bundle's `zizmor.config` as a file. */
   readonly zizmorConfig: string;
-  /** The directory OSV-Scanner reads the advisory snapshot from. */
+  /** The directory OSV-Scanner reads the advisory snapshot from, where the executor placed it (FD-GATE-104). */
   readonly advisoryDir: string;
 }
+
+/** The scanner configurations of a scan, as `placeScannerConfigs` writes them. */
+export type ScannerConfigFiles = Pick<ScanFiles, "gitleaksConfig" | "zizmorConfig">;
+
+const encoder = new TextEncoder();
+
+/**
+ * Writes the verified bundle's `gitleaks.config` and `zizmor.config` as read-only files in a fresh directory outside
+ * the checkout, removed when the scope closes, so each scanner's `--config` reads the configuration of the bundle the
+ * preconditions verified and the check summary names (FD-GATE-095, FD-GATE-099).
+ */
+export const placeScannerConfigs = (
+  payload: Pick<PreparedScan["bundle"]["payload"], "gitleaks" | "zizmor">,
+): Effect.Effect<ScannerConfigFiles, WorkspaceWriteFailed, GateExec | Scope.Scope> =>
+  Effect.gen(function* () {
+    const exec = yield* GateExec;
+    const dir = yield* exec.workspace;
+    const files: ScannerConfigFiles = {
+      gitleaksConfig: `${dir}/gitleaks.toml`,
+      zizmorConfig: `${dir}/zizmor.yml`,
+    };
+    yield* exec.createReadOnly(files.gitleaksConfig, encoder.encode(payload.gitleaks.config));
+    yield* exec.createReadOnly(files.zizmorConfig, encoder.encode(payload.zizmor.config));
+    return files;
+  });
 
 /** One subprocess the scan runs: its argv and the variables it adds to the job environment. */
 export interface ScanInvocation {

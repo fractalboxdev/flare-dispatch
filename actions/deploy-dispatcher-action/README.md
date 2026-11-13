@@ -79,7 +79,11 @@ renders the committed templates sets at least these values:
     "aud": "<Access application AUD>"
   },
   "operators": ["<operator email>"],
-  "github": { "appId": "<GitHub App id>", "fixtureRepo": "<owner>/<repo>" },
+  "github": {
+    "appId": "<GitHub App id>",
+    "appSlug": "<GitHub App slug>",
+    "fixtureRepo": "<owner>/<repo>"
+  },
   "alerts": { "sink": "https://<alert webhook>" }
 }
 ```

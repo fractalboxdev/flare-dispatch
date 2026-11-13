@@ -106,6 +106,7 @@ describe("composition", () => {
 
   const APP_AND_PRESIGNER = {
     GITHUB_APP_ID: "1",
+    GITHUB_APP_SLUG: "flare-dispatch-test",
     GITHUB_APP_PRIVATE_KEY: "key",
     R2_ACCOUNT_ID: "acct",
     CACHE_BUCKET_NAME: "fd-cache",
@@ -135,6 +136,7 @@ describe("composition", () => {
       vars: {
         DEPLOYMENT: "production",
         GITHUB_APP_ID: "1",
+        GITHUB_APP_SLUG: "flare-dispatch-test",
         R2_ACCOUNT_ID: "acct",
         CACHE_BUCKET_NAME: "fd-cache",
       },

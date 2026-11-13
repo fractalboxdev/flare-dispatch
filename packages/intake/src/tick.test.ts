@@ -76,6 +76,24 @@ describe("scheduled runs", () => {
     expect(quiet.outcome.executions).toEqual([]);
   });
 
+  it("[FD-INT-015] [FD-INT-051] a schedule submits only for an entry that lists the cron trigger", async () => {
+    const h = await harness({
+      repos: {
+        [REPO]: repoWithManifest(
+          manifest([
+            { recipe: "lint", triggers: ["push"], schedules: [{ cron: "0 3 * * *" }] },
+            { recipe: "nightly", triggers: ["cron"], schedules: [{ cron: "0 3 * * *" }] },
+          ]),
+        ),
+      },
+    });
+    const result = await h.run(
+      runTickUnit({ _tag: "schedules", installation: 7, scheduledAt: at(3, 0), repoIndex: 0 }),
+    );
+    expect(result.next).toBeNull();
+    expect(h.records().map((r) => [r.run, r.trigger])).toEqual([["nightly", "cron"]]);
+  });
+
   it("[FD-INT-053] a tick fired twice for one minute creates at most one execution per run, label and repository", async () => {
     const h = await harness({ repos: { [REPO]: repoWithManifest(nightly) } });
     const unit: TickUnit = {

@@ -174,8 +174,13 @@ const probes: Readonly<Record<string, () => Promise<void>>> = {
     expect(r.status).toBe(401);
     expect(await errorOf(r)).toBe("unauthenticated");
   },
-  provenance: async () => {
-    const r = await send("GET", "/v1/provenance/statements/s1");
+  "provenance executions": async () => {
+    const r = await send("GET", "/v1/provenance/executions/01E2EBYPASS000000000000000");
+    expect(r.status).toBe(401);
+    expect(await errorOf(r)).toBe("unauthenticated");
+  },
+  "provenance subjects": async () => {
+    const r = await send("GET", `/v1/provenance/subjects/sha256:${"0".repeat(64)}`);
     expect(r.status).toBe(401);
     expect(await errorOf(r)).toBe("unauthenticated");
   },

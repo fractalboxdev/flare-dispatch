@@ -8,9 +8,11 @@ import {
   PrReviewInput,
   PrReviewParams,
   prReviewRequest,
+  ReleaseNotesRequestInput,
   withRequiredCheck,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import {
+  bindScanCommit,
   CheckStep,
   DeploySmokeEntrySchema,
   deploymentStatusDecoder,
@@ -65,6 +67,7 @@ interface ManifestRecipe {
   readonly dispatchOnly?: true;
   /** The run reports under `flare-dispatch/<run>` alone, so its manifest entry names no label. */
   readonly labelless?: true;
+  readonly bindCommit?: IntakeRun["bindCommit"];
 }
 
 const recipe = <A>(
@@ -183,7 +186,14 @@ const RUN_RECIPES: Readonly<Record<string, ManifestRecipe>> = {
     ...gateRecipe(SecurityGateEntrySchema, () => securityRescanDecoder()),
     dispatchOnly: true,
     labelless: true,
+    bindCommit: bindScanCommit,
   },
+};
+
+/** A run's commit binding, where its recipe takes the commit from the dispatch (FD-GATE-112). */
+const bindCommitOf = (entry: CatalogEntry): Pick<IntakeRun, "bindCommit"> => {
+  const bind = manifestRecipeOf(entry)?.bindCommit;
+  return bind === undefined ? {} : { bindCommit: bind };
 };
 
 const manifestRecipeOf = (entry: CatalogEntry): ManifestRecipe | undefined => {
@@ -217,6 +227,19 @@ const serialKeyOf = (entry: CatalogEntry): Pick<IntakeRun, "serialKey"> =>
       }
     : {};
 
+/**
+ * The runs whose input holds a field only intake builds, with the schema a caller's inputs pass instead: a
+ * `release-notes` publish starts from a release approval alone (FD-AGT-085 to FD-AGT-087, FD-INT-066).
+ */
+const CALLER_INPUTS: Readonly<Record<string, Schema.Decoder<unknown>>> = {
+  "release-notes": ReleaseNotesRequestInput,
+};
+
+const callerInputOfEntry = (entry: CatalogEntry): Pick<IntakeRun, "callerInput"> =>
+  Object.hasOwn(CALLER_INPUTS, entry.spec.name)
+    ? { callerInput: CALLER_INPUTS[entry.spec.name] as Schema.Decoder<unknown> }
+    : {};
+
 const requiredCheckOf = (entry: CatalogEntry): Pick<IntakeRun, "requiredCheck" | "pullNumber"> => {
   const recipe = manifestRecipeOf(entry);
   return {
@@ -234,6 +257,7 @@ export const catalogRuns =
         name: entry.spec.name,
         params: manifestRecipeOf(entry)?.params ?? Schema.Unknown,
         input: entry.input,
+        ...callerInputOfEntry(entry),
         trigger: requestDecoderOf(entry),
         defaultClass: entry.spec.limits.qosClass,
         qosCeiling: entry.spec.limits.qosCeiling,
@@ -248,6 +272,7 @@ export const catalogRuns =
         ...requiredCheckOf(entry),
         ...(manifestRecipeOf(entry)?.dispatchOnly === true ? { dispatchOnly: true } : {}),
         ...(manifestRecipeOf(entry)?.labelless === true ? { labelless: true } : {}),
+        ...bindCommitOf(entry),
         ...(isReadOnlyScanRun(entry.spec.name, entry) ? { readOnlyScan: true } : {}),
       })),
       Match.orElse(() => undefined),

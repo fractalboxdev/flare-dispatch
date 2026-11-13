@@ -46,7 +46,7 @@ const failureOf = (exit: Exit.Exit<unknown, unknown>) =>
   Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined;
 
 describe("advisory-refresh", () => {
-  it("[FD-OPS-100] streams each scan.advisoryEcosystems archive from the OSV bucket into cas/<sha256> once per UTC day", async () => {
+  it("streams each scan.advisoryEcosystems archive from the OSV bucket into cas/<sha256> once per UTC day", async () => {
     const npm = archive("npm advisories");
     const pypi = archive("PyPI advisories");
     const published = new Map<string, Published>([

@@ -82,7 +82,7 @@ const overlayFor = (team: AccessTeam, appId: string) =>
         access: { teamDomain: team.teamDomain, aud: AUD },
         operators: [OPERATOR],
         dispatchers: [OPERATOR],
-        github: { appId, fixtureRepo: REPOSITORY },
+        github: { appId, appSlug: "flare-dispatch", fixtureRepo: REPOSITORY },
         dispatch: { oidcAudience: OIDC_AUDIENCE },
         executors: { planeId: PLANE_ID },
         alerts: { sink: "https://alerts.example.com/hook" },

@@ -59,20 +59,34 @@ import {
 /** `fetch` as a plain function: workerd refuses it called as a method of another object. */
 export const boundFetch: typeof fetch = (input, init) => fetch(input, init);
 
-/** The App's id and private key, when the deploy holds both. */
-export const appOptionsOf = (env: ControlPlaneEnv): AppOptions | undefined =>
+/** The deploy's App: its id, private key and slug. */
+export interface DeployedApp extends AppOptions {
+  readonly slug: string;
+}
+
+/** The App, when the deploy holds its id, slug and private key. */
+export const appOptionsOf = (env: ControlPlaneEnv): DeployedApp | undefined =>
   // The ops package's `APP_BINDINGS`, which the deploy stage's composition check reads too (FD-ARCH-039).
   unsetBindings(env, APP_BINDINGS).length > 0
     ? undefined
     : {
         appId: env.GITHUB_APP_ID as string,
         privateKeyPem: env.GITHUB_APP_PRIVATE_KEY as string,
+        slug: env.GITHUB_APP_SLUG as string,
         fetch: boundFetch,
       };
 
-/** The App's bot login, `<app slug>[bot]`: the author of every commit the App writes. */
-export const appLoginOf = (env: ControlPlaneEnv) =>
-  `${env.GITHUB_APP_SLUG ?? "flare-dispatch"}[bot]`;
+/** The App's bot login, `<app slug>[bot]`: the author of every commit, comment and pull request the App writes. */
+export const botLoginOf = (app: DeployedApp) => `${app.slug}[bot]`;
+
+/**
+ * The App's bot login, which intake matches a release pull request's author against (FD-INT-066); undefined on a
+ * deploy without the App, so intake recognises no release pull request.
+ */
+export const appLoginOf = (env: ControlPlaneEnv): string | undefined => {
+  const app = appOptionsOf(env);
+  return app === undefined ? undefined : botLoginOf(app);
+};
 
 /**
  * `records.url` and the verdict record signing key, which the `verdictRecord` applier posts and signs each record with
@@ -88,15 +102,15 @@ export const recordsEndpointOf = (env: ControlPlaneEnv) => {
 };
 
 /** The identity the App commits as, and the Slack and records endpoints where the deploy names them. */
-export const sideOutputLayer = (env: ControlPlaneEnv, app: AppOptions) => {
-  const slug = env.GITHUB_APP_SLUG ?? "flare-dispatch";
+export const sideOutputLayer = (env: ControlPlaneEnv, app: DeployedApp) => {
+  const login = botLoginOf(app);
   const records = recordsEndpointOf(env);
   return Layer.succeed(SideOutputConfig, {
     commentWrites: d1CommentWrites(env.DB),
     appBot: {
-      login: `${slug}[bot]`,
-      name: `${slug}[bot]`,
-      email: `${app.appId}+${slug}[bot]@users.noreply.github.com`,
+      login,
+      name: login,
+      email: `${app.appId}+${login}@users.noreply.github.com`,
     },
     slack:
       env.SLACK_URL === undefined || env.SLACK_SECRET === undefined
@@ -249,7 +263,7 @@ export const sharedQuota = (env: Pick<ControlPlaneEnv, "INSTALLATION_QUOTA">) =>
  */
 export const appServices = (
   env: ControlPlaneEnv,
-  app: AppOptions,
+  app: DeployedApp,
   alarms: Layer.Layer<AlarmPort>,
 ) =>
   githubLiveLayer(app, sharedQuota(env)).pipe(
@@ -287,6 +301,7 @@ export const devGithubRead = (dev: DevRepository) => {
     },
     defaultBranch: (repo) =>
       ours(repo) ? Effect.succeed(dev.default_branch) : uncredentialed(repo),
+    fullName: (repo) => (ours(repo) ? Effect.succeed(dev.repository) : uncredentialed(repo)),
     visibility: (repo) =>
       !ours(repo)
         ? uncredentialed(repo)
@@ -313,6 +328,7 @@ export const noGithubRead = Layer.succeed(GithubRead, {
   installation: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
   file: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
   defaultBranch: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
+  fullName: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
   visibility: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
   branchHead: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
   openPulls: (repo) => Effect.fail(new GithubUncredentialed({ repo })),

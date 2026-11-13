@@ -96,6 +96,7 @@ export {
   PolicyRules,
   portUses,
   profileLoader,
+  repositoryRules,
   reservesOf,
   syncPolicyRules,
   validatePolicyRules,

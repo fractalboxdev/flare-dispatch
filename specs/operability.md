@@ -42,7 +42,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 | `scan.bundleDigest`, `scan.bundleFile`, `scan.bundleKeys` | The pinned scan bundle's SHA-256 as 64 lowercase hex digits, the path of its envelope relative to the repository root `fd deploy` runs in, and each public signing key, an ES256 JWK `{ kty, crv, x, y, kid }` under `publicKey`, with its UTC RFC 3339 `notBefore` (inclusive) and `notAfter` (exclusive) deploy-verification window ([runs/gate.md](runs/gate.md) § Security gate) |
 | `scan.advisoryEcosystems`, `scan.advisoryMaxAgeHours` | The OSV ecosystems the `advisory-refresh` ops run stores, none by default; the snapshot age, counted from the archive's `Last-Modified` time, that a scan accepts and the `advisory-snapshot-stale` alarm allows, default 48: a daily refresh records an archive OSV published before it, so a snapshot reaches 24 h plus OSV's publish lag before the next refresh replaces it |
 | `records.url` | The HTTPS URL that receives job and verdict records ([github-output.md](github-output.md) § Job and verdict records) |
-| `github.appId`, `github.fixtureRepo` | GitHub App id; the repository the synthetic webhook canary pushes to |
+| `github.appId`, `github.appSlug`, `github.fixtureRepo` | GitHub App id; the App's slug, whose bot `<slug>[bot]` authors every App commit, comment and release pull request ([intake.md](intake.md) FD-INT-066), which the control plane's `GITHUB_APP_SLUG` var carries; the repository the synthetic webhook canary pushes to |
 | `intake.webhookEvents` | The webhook events intake admits ([intake.md](intake.md) FD-INT-027); the control plane's `WEBHOOK_EVENTS` var carries the list, `null` where the overlay sets none, so the Worker tells an absent list from an empty one |
 | `dispatch.oidcAudience` | The Actions OIDC audience of a dispatch ([interfaces.md](interfaces.md) FD-IFC-024); the control plane's `DISPATCH_OIDC_AUDIENCE` var carries it, empty where the overlay sets none, which refuses every Actions token |
 | `executors.planeId` | This control plane's `plane_id`, which every device's `connect` signature binds ([interfaces.md](interfaces.md) FD-IFC-085) |
@@ -54,7 +54,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 | `gha.concurrencyCap`, `gha.runnerRepo`, `gha.workflow` | The GitHub Actions launcher's concurrency cap, runner repository and runner workflow, whose permissions and `timeout-minutes` the drift check reads ([executors.md](executors.md) FD-EXEC-085, FD-EXEC-087, FD-EXEC-089, FD-EXEC-091) |
 | `egress.targetPatterns` | Dynamic egress target patterns ([MAMEKO-ISO-043](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/isolation-egress.md)) |
 | `models.registry`, `models.fallbackPriceUsdPerMTok`, `models.bucketShares`, `models.breaker` | The provider registry, fallback price, per-class bucket shares and breaker threshold ([model-gateway.md](model-gateway.md) FD-MDL-021; [MAMEKO-MDL-020](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/model-gateway.md), [MAMEKO-MDL-044](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/model-gateway.md), [MAMEKO-MDL-048](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/model-gateway.md)) |
-| `policy.rules.<owner>/<repo>` | The repository's policy rules in order: class rules and its confidentiality mode, which the drift check passes through policy sync and the control plane's `POLICY_RULES` var carries ([profile.md](profile.md) FD-PROF-025) |
+| `policy.rules.<owner>/<repo>` | The repository's policy rules in order: class rules and its confidentiality mode, which the drift check passes through policy sync and the control plane's `POLICY_RULES` var carries ([profile.md](profile.md) FD-PROF-025). The key matches the repository in any letter case, as GitHub does, so policy sync rejects two keys that differ only in case |
 | `provenance.attestationMaxAgeDays`, `provenance.reattestIntervalDays`, `provenance.auditRate`, `provenance.statementRetentionDays` | `attestation_max_age`, `reattest_interval`, `audit_rate` and the statement retention ([provenance.md](provenance.md) FD-PROV-016, FD-PROV-030, FD-PROV-069, FD-PROV-075); the private log's witnesses come from the signed verification policy, not the overlay (FD-PROV-039) |
 
 ```json
@@ -66,7 +66,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
   "hostnames": { "dispatcher": "<hostname>", "docs": "<hostname>" },
   "access": { "teamDomain": "<team domain>", "aud": "<aud tag>" },
   "operators": ["<access identity>"],
-  "github": { "appId": "<app id>", "fixtureRepo": "<owner>/<repo>" },
+  "github": { "appId": "<app id>", "appSlug": "<app slug>", "fixtureRepo": "<owner>/<repo>" },
   "alerts": { "sink": "<https url or email>" },
   "spend": { "budgetUsd": "<budget USD>" },
   "pools": { "lean": { "maxInstances": "<count>" } }
@@ -398,5 +398,5 @@ A rendered image declares each scanner's version as the default of its Dockerfil
 
 ## Open items
 
-- TODO(maintainer): admit and charge `advisory-refresh` as an ops run ([MAMEKO-SPD-063](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/spend.md)); until then the control plane's minute tick runs it as a step, uncharged.
+- FD-OPS-100 waits on mameko: an ops run is a request the coordinator admits with `ops_run: true` and charges to the ops reserve ([MAMEKO-SPD-063](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/spend.md)), and the pinned mameko commit gives the control plane's own schedule no admission path for one. The control plane's minute tick runs the refresh as a step, so OSV downloads draw nothing from `R_ops` and appear in no ops-run record, and FD-OPS-100 has no harness entry until `advisory-refresh` is admitted as an ops run.
 - TODO(operator): choose an alert sink that pages when no `ok` heartbeat arrives for 30 min; without one, a control plane that stops serving raises no alarm.

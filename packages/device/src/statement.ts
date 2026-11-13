@@ -4,6 +4,7 @@
 // device executor signs `dssePae(payloadType, payload)` through the key helper under the `statement` signing purpose
 // (MAMEKO-EXEC-122).
 import {
+  CodeSigningHash,
   digestSet,
   StatementBody,
   StatementDigest,
@@ -35,8 +36,11 @@ export const STATEMENT_SIGNING_PURPOSE = "statement";
 /** What the device executor passes the builder. Every field outside this schema is dropped on decode (FD-PROV-001). */
 export const StatementInput = Schema.Struct({
   ...StatementBody.fields,
-  /** The key helper's code hash from the device's registration record (MAMEKO-LEASE-092). */
-  code_hash: StatementDigest,
+  /**
+   * The key helper's code-signing hash, in the form the device's registration record holds it (MAMEKO-LEASE-092):
+   * lowercase hex of 20 or 32 bytes, with no algorithm prefix, which check 11 of the acceptance table compares.
+   */
+  code_hash: CodeSigningHash,
   /**
    * The digests the device executor computed from the detached output volume after the job sandbox exited. With none,
    * the commit is the statement's one subject, since in-toto Statement v1 requires at least one.

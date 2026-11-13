@@ -45,6 +45,17 @@ export const ReleaseNotesInput = Schema.Struct({
 });
 export type ReleaseNotesInput = typeof ReleaseNotesInput.Type;
 
+/**
+ * The `release-notes` input a caller may name: a dispatch, an MCP call, a local submit or a follow-on intent proposes a release and never names `publish`. Only intake's release approval builds a publish input, so
+ * no publish starts without an approval inside the window and with no recorded rejection (FD-AGT-085 to FD-AGT-087,
+ * FD-INT-066).
+ */
+export const ReleaseNotesRequestInput = Schema.Struct({
+  repo: ReleaseNotesInput.fields.repo,
+  baseBranch: ReleaseNotesInput.fields.baseBranch,
+  publish: Schema.optionalKey(Schema.Never),
+});
+
 /** The release pull request's branch, which the catalogue's writeback block names (FD-AGT-084). */
 export const RELEASE_NOTES_BRANCH = "flare-dispatch/release";
 /** The notes file of a version, inside the writeback allowlist. */
@@ -395,9 +406,15 @@ export const releaseBody = (version: string, notes: string) => {
  * The publish execution (FD-AGT-088): one `release.draft` intent for the marker's version at the approved commit,
  * carrying the notes the release pull request held when it was approved, then one `release.publish` intent for that
  * tag. The appliers create a draft only where no release exists and publish only a draft, so the drain leaves a
- * release that is already published unchanged (FD-GH-085, FD-GH-086).
+ * release that is already published unchanged (FD-GH-085, FD-GH-086). A last `pr.close` intent names the release pull
+ * request by number: a label approval leaves it open, and closing it lets the next proposal open its own pull request,
+ * with its own creation time, window and dedup key, instead of reusing this one (FD-AGT-084); a merged one is already
+ * closed, and another pull request on the branch stays open.
  */
-export const runReleasePublish = (publish: ReleasePublishInput) =>
+export const runReleasePublish = (
+  input: Pick<ReleaseNotesInput, "repo" | "baseBranch">,
+  publish: ReleasePublishInput,
+) =>
   Effect.gen(function* () {
     const notes = yield* approvedNotesActivity(publish);
     const intents = yield* RecipeIntents;
@@ -408,6 +425,12 @@ export const runReleasePublish = (publish: ReleasePublishInput) =>
       body: releaseBody(publish.version, notes),
     });
     yield* intents.append("release-publish", "release.publish", { tag: publish.version });
+    yield* intents.append("release-close", "pr.close", {
+      repo: input.repo,
+      branch: RELEASE_NOTES_BRANCH,
+      base: input.baseBranch,
+      pull: publish.pullRequest,
+    });
     return { _tag: "success" } satisfies RunResult;
   });
 
@@ -420,7 +443,7 @@ export const runReleasePublish = (publish: ReleasePublishInput) =>
  */
 export const runReleaseNotes = (input: ReleaseNotesInput) =>
   Effect.gen(function* () {
-    if (input.publish !== undefined) return yield* runReleasePublish(input.publish);
+    if (input.publish !== undefined) return yield* runReleasePublish(input, input.publish);
     const suppressed = yield* checkSuppression(suppressionKey(input.repo, RELEASE_NOTES_BRANCH));
     if (suppressed) return { _tag: "success" } satisfies RunResult;
     const range = yield* commitRangeActivity;

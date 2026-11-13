@@ -100,6 +100,8 @@ type Job = {
   if?: string;
   permissions?: Record<string, string>;
   uses?: string;
+  secrets?: string | Record<string, string>;
+  env?: Record<string, string>;
   steps?: Step[];
   concurrency?: unknown;
 };
@@ -1254,4 +1256,61 @@ describe("the CI jobs the merge gate and the deploy rest on", () => {
       /phase 0 classes\.interactive\.rank: reference 9, FlareDispatch 2/,
     );
   }, 60_000);
+});
+
+// --- The credentials a pull request reaches ---------------------------------------------------------------------------
+
+/**
+ * The secrets a job a pull request starts may hold, none of which can change a Cloudflare account: the mameko
+ * submodule's read-only deploy key, and the operator overlay and Access service token the phase-gate job reads the
+ * control plane's records with.
+ */
+const PULL_REQUEST_SECRETS = [
+  "MAMEKO_DEPLOY_KEY",
+  "FD_OPERATOR_OVERLAY",
+  "FD_ACCESS_CLIENT_ID",
+  "FD_ACCESS_CLIENT_SECRET",
+];
+
+/** Every secret a value names; `*` for a job that passes `secrets: inherit` to the workflow it calls. */
+const secretsOf = (value: Job | Workflow["env"]): readonly string[] => [
+  ...(value !== undefined && "secrets" in value && value.secrets === "inherit" ? ["*"] : []),
+  ...[...JSON.stringify(value ?? {}).matchAll(/secrets\.([A-Za-z0-9_]+)/g)].map((m) => m[1]!),
+];
+
+/** The job and its workflow at a path `conclusions` keys: `ci/lint` is `lint` of the workflow the job `ci` calls. */
+const jobAt = (wf: Workflow, path: string): { readonly job: Job; readonly wf: Workflow } => {
+  const [head, ...rest] = path.split("/");
+  const job = wf.jobs[head!]!;
+  return rest.length === 0 ? { job, wf } : jobAt(workflowFile(job.uses!), rest.join("/"));
+};
+
+describe("the credentials a pull request reaches", () => {
+  it("[FD-IFC-070] no job a pull request starts holds a Cloudflare credential, so pull-request code cannot deploy or change the account outside fd deploy and fd doctor", () => {
+    const files = readdirSync(join(ROOT, ".github/workflows")).filter((f) => /\.ya?ml$/.test(f));
+    const reached: string[] = [];
+    for (const file of files) {
+      const wf = workflowFile(`.github/workflows/${file}`);
+      // pull_request_target runs with the repository's secrets on a fork's pull request.
+      expect(wf.on, file).not.toHaveProperty("pull_request_target");
+      if (!triggers(wf, PULL_REQUEST)) continue;
+      for (const [path, conclusion] of conclusions(wf, PULL_REQUEST, allPass)) {
+        if (conclusion === "skipped") continue;
+        const at = jobAt(wf, path);
+        for (const secret of [...secretsOf(at.wf.env), ...secretsOf(at.job)])
+          reached.push(`${file} ${path}: ${secret}`);
+      }
+    }
+    // The scan reads the secrets it checks: the conf job's setup holds the mameko deploy key.
+    expect(reached).toContain("v2-ci.yml conf: MAMEKO_DEPLOY_KEY");
+    expect(reached.filter((r) => !PULL_REQUEST_SECRETS.includes(r.split(": ")[1]!))).toEqual([]);
+
+    // The one v2-ci job that holds a Cloudflare API token runs on a push to the default branch, never on a pull request.
+    const holders = Object.keys(ciWorkflow.jobs).filter((k) =>
+      secretsOf(ciWorkflow.jobs[k]!).includes("FD_R2_CONFORMANCE_API_TOKEN"),
+    );
+    expect(holders).toEqual(["conf-r2"]);
+    expect(conclusions(ciWorkflow, PUSH_MAIN, allPass).get("conf-r2")).toBe("success");
+    expect(conclusions(ciWorkflow, PULL_REQUEST, allPass).get("conf-r2")).toBe("skipped");
+  });
 });

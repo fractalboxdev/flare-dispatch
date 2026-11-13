@@ -130,7 +130,11 @@ describe("merge gate and nightly", () => {
     expect(ci.on).toHaveProperty("pull_request");
     const fallback = ci.jobs["fallback-ci"]!;
     expect(new Set(fallback.needs)).toEqual(
-      new Set(Object.keys(ci.jobs).filter((j) => j !== "fallback-ci" && j !== "phase-gate")),
+      new Set(
+        Object.keys(ci.jobs).filter(
+          (j) => j !== "fallback-ci" && j !== "phase-gate" && j !== "conf-r2",
+        ),
+      ),
     );
     expect(MERGE_GATE_CHECKS as readonly string[]).not.toContain("fallback-ci");
   });
@@ -204,6 +208,34 @@ describe("merge gate and nightly", () => {
     expect(ci.jobs["conf"]!.steps!.at(-1)!.run).toBe(
       "pnpm --filter @fractalboxdev/flare-dispatch-conformance test",
     );
+  });
+
+  it("[FD-CACHE-041] the manifest commit's conformance test runs on a real R2 bucket on every event but a pull request, and on Miniflare on every one", () => {
+    const conf = ci.jobs["conf"]!;
+    expect(conf.if).toBeUndefined();
+    expect(conf.steps!.every((s) => s.env === undefined)).toBe(true);
+    const real = ci.jobs["conf-r2"]!;
+    expect(real.if).toBe("github.event_name != 'pull_request'");
+    for (const event of ["push", "merge_group", "workflow_dispatch", "workflow_call"])
+      expect(ci.on).toHaveProperty(event);
+    const leg = real.steps!.at(-1)!;
+    expect(Object.keys(leg.env ?? {}).sort()).toEqual([
+      "FD_R2_CONFORMANCE_ACCOUNT_ID",
+      "FD_R2_CONFORMANCE_API_TOKEN",
+      "FD_R2_CONFORMANCE_BUCKET",
+    ]);
+    const filter =
+      /^pnpm --filter @fractalboxdev\/flare-dispatch-conformance exec vitest run (\S+) -t "([^"]+)"$/.exec(
+        leg.run ?? "",
+      );
+    expect(filter).not.toBeNull();
+    // The name filter selects the real-R2 test and leaves the Miniflare one to the conf job.
+    const suite = readFileSync(join(ROOT, "packages/conformance", filter![1]!), "utf8");
+    const titles = [...suite.matchAll(/"(\[FD-CACHE-041\][^"]*)"/g)].map((m) => m[1]!);
+    expect(titles.filter((t) => t.includes(filter![2]!))).toEqual([
+      "[FD-CACHE-041] keeps the first committed manifest for a key and answers every later commit duplicate (real R2)",
+    ]);
+    expect(titles).toHaveLength(2);
   });
 });
 
@@ -290,7 +322,8 @@ describe("Access configuration", () => {
       "artifact",
       "compile-cache",
       "model-gateway",
-      "provenance",
+      "provenance executions",
+      "provenance subjects",
     ]);
     for (const path of [
       "/v1/webhooks/github",
@@ -303,7 +336,8 @@ describe("Access configuration", () => {
       "/v1/artifacts/a1",
       "/v1/compile-cache/obj/abc",
       "/v1/model/completions",
-      "/v1/provenance/statements/s1",
+      "/v1/provenance/executions/e1",
+      "/v1/provenance/subjects/sha256:abc",
     ])
       expect(bypassed(path)).toBe(true);
     for (const path of [
@@ -314,6 +348,8 @@ describe("Access configuration", () => {
       "/v1/spend",
       "/v1/github/install/new",
       "/mcp",
+      "/v1/provenance/log/checkpoint",
+      "/v1/provenance/log/proof/inclusion",
     ])
       expect(bypassed(path)).toBe(false);
   });

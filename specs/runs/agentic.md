@@ -151,7 +151,7 @@ flowchart LR
 | `triage-issues` | Cron or dispatch | `batch` | `transform` classification | Labels, templated comments, duplicate close |
 | `triage-prs` | Cron or dispatch | `batch` | `transform` digest lines | One digest staged write |
 | `ci-triage-pr` | Cron, default `0 6 * * *` | `batch` | `transform` classification, `judgment` write-up | Rolling draft pull request |
-| `release-notes` | Cron per repo manifest, default `0 9 * * 1`, or dispatch; approval of its release pull request starts the publish execution | `batch` | `judgment` notes | Release pull request; the publish execution returns `release.draft` and `release.publish` intents |
+| `release-notes` | Cron per repo manifest, default `0 9 * * 1`, or dispatch; approval of its release pull request starts the publish execution | `batch` | `judgment` notes | Release pull request; the publish execution returns `release.draft`, `release.publish` and `pr.close` intents |
 
 ## Requirements
 
@@ -301,7 +301,7 @@ A proposal's **suppression key** is `<owner>/<name>:<head branch>`: the reposito
 
 ### `release-notes`
 
-A `release-notes` execution either proposes a release or publishes an approved one. The approved commit is the merge commit for a merge, and the head of the commit range the marker names for a `release:approve` label. The publish execution reads the version's notes file at the release pull request's head as of the approval.
+A `release-notes` execution either proposes a release or publishes an approved one. The approved commit is the merge commit for a merge, and the head of the commit range the marker names for a `release:approve` label. The publish execution reads the version's notes file at the release pull request's head as of the approval, and closes a release pull request that a label approved, so the next proposal opens its own pull request with its own creation time and dedup key. Only intake builds a publish input: a dispatch, an MCP call, a local submit or a follow-on intent whose inputs name `publish` is refused.
 
 - **FD-AGT-081** · phase 3 · `V-UNIT` — `release-notes` must read the commit range from the newest `v<semver>` tag reachable from the default branch to the default-branch head inside an `Activity`.
 - **FD-AGT-082** · phase 3 · `V-UNIT` — If the commit range is empty, then `release-notes` must conclude `skipped` with the reason `not-applicable: empty-range`.
@@ -310,7 +310,7 @@ A `release-notes` execution either proposes a release or publishes an approved o
 - **FD-AGT-085** · phase 3 · `V-UNIT` — When a principal with write permission merges the release pull request or applies the label `release:approve` within the approval window, default 72 h from the pull request's creation, intake must start one `release-notes` publish execution for the version in the marker at the approved commit.
 - **FD-AGT-086** · phase 3 · `V-UNIT` — When a principal with write permission closes the release pull request unmerged or applies the label `release:reject`, intake must start no publish execution for that pull request.
 - **FD-AGT-087** · phase 3 · `V-UNIT` — If a merge or a `release:approve` label arrives after the approval window, then intake must start no publish execution for that pull request.
-- **FD-AGT-088** · phase 3 · `V-UNIT` — The publish execution must return one `release.draft` intent with the notes for the version in the marker at the approved commit, followed by one `release.publish` intent for that tag, and the drain must leave a published release unchanged ([../github-output.md](../github-output.md) FD-GH-085, FD-GH-086).
+- **FD-AGT-088** · phase 3 · `V-UNIT` — The publish execution must return one `release.draft` intent with the notes for the version in the marker at the approved commit, followed by one `release.publish` intent for that tag and one `pr.close` intent for the release pull request, and the drain must leave a published release unchanged ([../github-output.md](../github-output.md) FD-GH-085, FD-GH-086).
 
 ## Open items
 

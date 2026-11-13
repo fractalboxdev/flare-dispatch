@@ -1,13 +1,14 @@
 // The admission of an authenticated dispatch: the run, the input schema, the signals caps, the installation, the
 // manifest and the commit, then one admission request (specs/intake.md § Actions dispatch). The HTTP API's declared
 // dispatch route authenticates the caller and decodes the body (specs/interfaces.md FD-IFC-024 to FD-IFC-036).
+import type { DispatchCommit } from "@fractalboxdev/flare-dispatch-catalog";
 import { GithubRead, type PullSummary } from "@fractalboxdev/flare-dispatch-github";
 import { classNamed } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect, Match, Option, Schema } from "effect";
 import { ClassResolver, IntakeConfig, intakeError } from "./config.ts";
 import type { Caller } from "./event.ts";
 import { readManifest, requiredCheckFact, viewOf } from "./triggers.ts";
-import { checkName, type IntakeRun } from "./runs.ts";
+import { callerInputOf, checkName, type IntakeRun } from "./runs.ts";
 import { submission, submit } from "./submit.ts";
 
 /** The `signals/v1` caps (FD-INT-049, FD-IFC-030). */
@@ -55,6 +56,30 @@ const decodeOr =
     Schema.decodeUnknownEffect(schema)(value).pipe(
       Effect.mapError((e) => intakeError(400, code, e.message)),
     );
+
+/**
+ * The inputs of a run that takes its commit from the dispatch, decoded against its input schema: a commit field naming
+ * another repository, commit or ref than the dispatch's answers 400 `invalid_inputs` (FD-GATE-112).
+ */
+const boundInputs = (
+  run: IntakeRun,
+  bind: NonNullable<IntakeRun["bindCommit"]>,
+  inputs: unknown,
+  commit: DispatchCommit,
+) =>
+  Match.value(bind(inputs, commit)).pipe(
+    Match.tagsExhaustive({
+      Bound: ({ inputs }) => decodeOr(run.input, "invalid_inputs")(inputs),
+      Mismatch: ({ field }) =>
+        Effect.fail(
+          intakeError(
+            400,
+            "invalid_inputs",
+            `${run.name} takes its commit from the dispatch; inputs.${field} names another`,
+          ),
+        ),
+    }),
+  );
 
 const branchOf = (ref: string) =>
   ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
@@ -214,7 +239,8 @@ export interface DispatchAdmitted {
  * dispatch, then one admission request. Every refusal carries a code of the error-model table (FD-IFC-009). A
  * dispatch of a read-only scan run carries an `Idempotency-Key`, or answers 400 `invalid_idempotency_key` before any
  * read (FD-IFC-092), over the HTTP route and the MCP `dispatch` tool alike (FD-IFC-074). A scoped dispatcher's
- * `classCeiling` reaches `resolveClass` (FD-IFC-091).
+ * `classCeiling` reaches `resolveClass` (FD-IFC-091). The inputs pass the run's caller schema, which refuses a
+ * `release-notes` publish with 400 `invalid_inputs` (FD-INT-066).
  */
 export const admitDispatch = (d: AuthenticatedDispatch) =>
   Effect.gen(function* () {
@@ -231,10 +257,19 @@ export const admitDispatch = (d: AuthenticatedDispatch) =>
           `a dispatch of the read-only scan run ${run.name} carries an Idempotency-Key`,
         ),
       );
-    const repo = d.repository;
-    const decoded = yield* decodeOr(run.input, "invalid_inputs")(d.inputs ?? {});
+    // A run that binds its commit decodes once intake has pinned the commit; every other run decodes before any read,
+    // against the run's caller schema, so a `release-notes` publish never starts from a dispatch or an MCP call: only a
+    // release approval builds one (FD-INT-066).
+    const early =
+      run.bindCommit === undefined
+        ? yield* decodeOr(callerInputOf(run), "invalid_inputs")(d.inputs ?? {})
+        : undefined;
     yield* checkSignals(d.signals, d.inputs);
 
+    // The repository as GitHub spells it, whatever letter case the caller sent: the confidentiality and policy-rule
+    // lookups and the commit dedup key read this spelling, so a dispatch and a webhook of one commit share one key
+    // (FD-INT-009) and the caller's case never selects a repository's mode.
+    const repo = yield* github.fullName(d.repository);
     // The App's own installation for the repository decides (FD-INT-042).
     const installation = yield* github.installation(repo);
     const defaultBranch = yield* github.defaultBranch(repo);
@@ -257,6 +292,10 @@ export const admitDispatch = (d: AuthenticatedDispatch) =>
           ),
         );
     }
+    const decoded =
+      run.bindCommit === undefined
+        ? early
+        : yield* boundInputs(run, run.bindCommit, d.inputs ?? {}, { repository: repo, sha, ref });
     const classInput =
       d.trigger === "mcp"
         ? yield* lowerOnlyClass({

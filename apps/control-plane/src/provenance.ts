@@ -26,6 +26,11 @@ import {
   VisibilityUnreadable,
   writeCloudStatement,
 } from "@fractalboxdev/flare-dispatch-cache";
+import {
+  d1KeyHistoryStore,
+  KeyHistoryStore,
+  useKey,
+} from "@fractalboxdev/flare-dispatch-cache/provenance-policy";
 import { type CatalogEntry, RUN_CATALOG } from "@fractalboxdev/flare-dispatch-catalog";
 import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { d1IntakeStore, IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
@@ -35,7 +40,7 @@ import { type Context, Effect, Layer, Option, Schema } from "effect";
 import { migrateCache } from "./cache-retention.ts";
 import type { CacheEnv } from "./cache.ts";
 import { isolateServices } from "./composition.ts";
-import { apiEnvOf, type ControlPlaneEnv } from "./config.ts";
+import { apiEnvOf, type ControlPlaneEnv, statementRetentionDaysOf } from "./config.ts";
 import { repositoryConfidentiality } from "./dev-repository.ts";
 import { boundFetch, statementLoggedLayer } from "./github.ts";
 import { imageDigestOf, issuedLeaseNonce } from "./lease.ts";
@@ -251,7 +256,9 @@ const catalogRunKind = (entry: CatalogEntry): "gate" | undefined =>
  * execution and epoch before it signs, so of two concurrent writes one signs and the other answers `inserted: false`;
  * a failure before the log-append intent is recorded releases the claim for a later result. The provenance key signs
  * the statement, and its log-append intent names the log the repository's visibility picks (FD-PROV-034,
- * FD-PROV-035).
+ * FD-PROV-035). Before it signs, the write records the key's use at `now` in the control plane's key history: a key
+ * the history does not hold rotates the role from that instant (FD-PROV-047, FD-PROV-048), and a key whose window has
+ * closed fails `SigningKeyRetired` and signs nothing.
  */
 export const writeAcceptedCloudStatement = (
   env: CloudBuilderEnv,
@@ -328,6 +335,9 @@ export const writeAcceptedCloudStatement = (
       } satisfies CloudStatementWritten;
     }
     const intent = yield* Effect.gen(function* () {
+      yield* useKey("provenance", key, now).pipe(
+        Effect.provideService(KeyHistoryStore, d1KeyHistoryStore(db as unknown as D1Database)),
+      );
       const { envelope } = yield* writeCloudStatement(
         {
           ...attestation,
@@ -488,7 +498,7 @@ export const cloudStatementOnFrame = async (
 
 /**
  * What the log-append drain reads: the intents in D1, Rekor and the private log's `TransparencyLog` object, the
- * artifact rows a logged statement's retention extends (FD-PROV-075), and the summary refresh a logged statement
+ * artifact rows a logged statement's retention extends by the overlay's statement retention (FD-PROV-075), and the summary refresh a logged statement
  * queues (FD-PROV-042). A deploy with no `TRANSPARENCY_LOG` binding fails each private-log append, so the intent stays
  * pending and retries.
  */
@@ -510,7 +520,7 @@ export const logAppendLayer = (env: ControlPlaneEnv) => {
               )
           : privateLogAppend(ns.get(ns.idFromName(PRIVATE_LOG_NAME))),
     }),
-    Layer.succeed(SubjectRetention)(artifactSubjectRetention(db)),
+    Layer.succeed(SubjectRetention)(artifactSubjectRetention(db, statementRetentionDaysOf(env))),
     statementLoggedLayer(env),
   );
 };

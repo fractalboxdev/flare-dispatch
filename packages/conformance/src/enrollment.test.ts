@@ -71,7 +71,7 @@ const renderedPlaneId = (team: AccessTeam, planeId: string): unknown => {
         access: { teamDomain: team.teamDomain, aud: AUD },
         operators: [OPERATOR],
         dispatchers: [OPERATOR],
-        github: { appId: "0", fixtureRepo: DEV_REPOSITORY.repository },
+        github: { appId: "0", appSlug: "flare-dispatch", fixtureRepo: DEV_REPOSITORY.repository },
         executors: { planeId },
         alerts: { sink: "https://alerts.example.com/hook" },
       }),

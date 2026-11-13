@@ -339,16 +339,34 @@ describe("pr.propose", () => {
 });
 
 describe("pr.close", () => {
-  const closeRow = (branch: string): IntentRow => ({
+  const closeRow = (branch: string, pull?: number): IntentRow => ({
     ...row(manifest()),
     kind: "pr.close",
     intentKey: "run:close:0",
-    payload: { repo: { owner: "o", name: "r" }, branch, base: "main" },
+    payload: {
+      repo: { owner: "o", name: "r" },
+      branch,
+      base: "main",
+      ...(pull === undefined ? {} : { pull }),
+    },
   });
-  const close = (repo: FakeRepo, branch: string) =>
+  const close = (repo: FakeRepo, branch: string, pull?: number) =>
     Effect.runPromise(
-      applyPrClose(config)(closeRow(branch)).pipe(Effect.provide(fakeGitLayer(repo))),
+      applyPrClose(config)(closeRow(branch, pull)).pipe(Effect.provide(fakeGitLayer(repo))),
     );
+
+  it("[FD-AGT-088] a close that names a pull request closes that one, and leaves another open on the branch", async () => {
+    const repo = fakeRepo();
+    await apply(repo, manifest());
+    const open = repo.pulls[0]!;
+    expect(await close(repo, "flare-dispatch/spec-drift", open.number + 1)).toEqual({
+      _tag: "applied",
+      externalRef: "closed:flare-dispatch/spec-drift",
+    });
+    expect(open.open).toBe(true);
+    expect((await close(repo, "flare-dispatch/spec-drift", open.number))._tag).toBe("applied");
+    expect(open.open).toBe(false);
+  });
 
   it("[FD-GH-087] [FD-AGT-070] closes the App's pull request, and refuses one carrying a human commit", async () => {
     const repo = fakeRepo();

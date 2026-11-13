@@ -4,6 +4,7 @@
 // nonce, and the agentic package's registration store. The gateway metering records check 12 reads are not kept, so a
 // statement that passes checks 1 to 11 is rejected `provenance: metering unavailable`: that is the verdict each
 // negative test departs from by one change.
+import { codeSigningHashOfRequirement } from "@fractalboxdev/flare-dispatch-api/attestation";
 import {
   LocalStore,
   localStoreD1,
@@ -35,6 +36,7 @@ import { type Context, Effect, Layer } from "effect";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isolateServices } from "../../../apps/control-plane/src/composition.ts";
+import { buildEnvelope } from "../../device/src/statement.ts";
 import type { ControlPlaneEnv } from "../../../apps/control-plane/src/config.ts";
 import { invalidateLeaseNonce, leaseNonce } from "../../../apps/control-plane/src/lease.ts";
 import {
@@ -46,7 +48,11 @@ import {
 const DAY = 24 * 3_600_000;
 const sha = (n: number) => `sha256:${n.toString(16).padStart(64, "0")}`;
 const hex = (n: number) => n.toString(16).padStart(64, "0");
-const CODE_HASH = sha(4);
+/** A key helper's designated requirement, naming its `cdhash` as macOS writes it: upper-case hex of 32 bytes. */
+const requirementOf = (cdhash: string) =>
+  `identifier "dev.flare-dispatch.key-helper" and anchor apple generic and cdhash H"${cdhash}"`;
+/** The code hash the enrollment route records for mac-1 from its attestation evidence (FD-PROV-031). */
+const CODE_HASH = codeSigningHashOfRequirement(requirementOf("4C".repeat(32)))!;
 const ARTIFACT = { name: "dist/app.tgz", digest: sha(10) };
 const LEASED = "01JDZ8Q6V3M2K9T4WXYZ5LEASE";
 const REGISTERED = "01JDZ8Q6V3M2K9T4WXYZ5REGIS";
@@ -178,6 +184,8 @@ interface WorldOptions {
   readonly attestationMaxAgeDays?: number;
   /** How long ago mac-1 last attested. */
   readonly attestedAgo?: number;
+  /** The code hash the registry records for mac-1; unset records `CODE_HASH`. */
+  readonly codeHash?: string;
 }
 
 /**
@@ -193,7 +201,12 @@ const world = async (options: WorldOptions = {}) => {
   const now = Date.now();
   const mac1 = await deviceKey();
   const mac2 = await deviceKey();
-  const register = (executorId: string, key: DeviceKey, attestedAt: number) =>
+  const register = (
+    executorId: string,
+    key: DeviceKey,
+    attestedAt: number,
+    codeHash: string = CODE_HASH,
+  ) =>
     LeaseStore.use((s) =>
       s.register({
         executorId,
@@ -205,12 +218,17 @@ const world = async (options: WorldOptions = {}) => {
         protocolVersion: "1",
         devicePublicKey: key.publicKey,
         attestedAt,
-        codeHash: CODE_HASH,
+        codeHash,
       }),
     );
   const nonces = await Effect.runPromise(
     Effect.gen(function* () {
-      yield* register("mac-1", mac1, now - (options.attestedAgo ?? 3_600_000));
+      yield* register(
+        "mac-1",
+        mac1,
+        now - (options.attestedAgo ?? 3_600_000),
+        options.codeHash ?? CODE_HASH,
+      );
       yield* register("mac-2", mac2, now - 3_600_000);
       yield* admitExecution(db, admission(LEASED, now));
       const placed = yield* PlacementStore.use((p) =>
@@ -518,5 +536,55 @@ describe("the result-acceptance check over the control plane's D1 statement reco
     const statement = await signed(w.mac1.signing, body({ nonce: w.nonces.leased }), sha(99));
     expect(await w.check(submission(), statement)).toEqual(rejected("code-hash-mismatch"));
     expect(await w.quarantined("mac-1")).toBe(true);
+  }, 60_000);
+
+  it("[FD-PROV-023] passes check 11 for the statement the device builder writes with the code-signing hash the enrollment recorded, in either spelling", async () => {
+    /** The device builder's statement for mac-1's lease, carrying `codeHash`, signed by mac-1's key. */
+    const built = async (w: Awaited<ReturnType<typeof world>>, codeHash: string) => {
+      const envelope = await Effect.runPromise(
+        buildEnvelope({
+          ...body({ nonce: w.nonces.leased }),
+          code_hash: codeHash,
+          outputs: [ARTIFACT],
+        }),
+      );
+      const payload = Uint8Array.from(atob(envelope.payload), (c) => c.charCodeAt(0));
+      return {
+        ...envelope,
+        signatures: [await signPae(w.mac1.signing, dssePae(DSSE_PAYLOAD_TYPE, payload))],
+      };
+    };
+    // A 32-byte `cdhash`: the registry and the device builder both hold it as bare lower-case hex.
+    const w = await world();
+    expect(CODE_HASH).toMatch(/^[0-9a-f]{64}$/);
+    expect(await w.check(submission(), await built(w, CODE_HASH))).toEqual(passesChecks1To11);
+    // A statement that spells the same hash with a `sha256:` prefix or in upper case names the same key helper.
+    expect(
+      await w.check(
+        submission(),
+        await signed(w.mac1.signing, body({ nonce: w.nonces.leased }), `sha256:${CODE_HASH}`),
+      ),
+    ).toEqual(passesChecks1To11);
+    expect(
+      await w.check(
+        submission(),
+        await signed(w.mac1.signing, body({ nonce: w.nonces.leased }), CODE_HASH.toUpperCase()),
+      ),
+    ).toEqual(passesChecks1To11);
+    expect(await w.quarantined("mac-1")).toBe(false);
+
+    // A 20-byte `cdhash`, which no `sha256:` digest can spell, passes as the registry records it.
+    const cdhash20 = codeSigningHashOfRequirement(requirementOf("AB12".repeat(10)))!;
+    expect(cdhash20).toMatch(/^[0-9a-f]{40}$/);
+    const short = await world({ codeHash: cdhash20 });
+    expect(await short.check(submission(), await built(short, cdhash20))).toEqual(
+      passesChecks1To11,
+    );
+    expect(await short.quarantined("mac-1")).toBe(false);
+    // Another key helper's hash, in the same form, is still a mismatch, and quarantines the device.
+    expect(await short.check(submission(), await built(short, CODE_HASH.slice(0, 40)))).toEqual(
+      rejected("code-hash-mismatch"),
+    );
+    expect(await short.quarantined("mac-1")).toBe(true);
   }, 60_000);
 });

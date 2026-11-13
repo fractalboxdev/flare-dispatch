@@ -15,7 +15,7 @@ import type { AdvisorySnapshots, ScanBundleStore, ScanImage } from "./ports.ts";
 import { Outcome, type Reason } from "./reasons.ts";
 import { advisoryPreconditions, prepareScan, SCANNERS, type PreparedScan } from "./scan-bundle.ts";
 import { prepareScanCheckout, ScanBase } from "./scan-checkout.ts";
-import { runScanTools, type ScanFiles, type ScanStep } from "./scan.ts";
+import { placeScannerConfigs, runScanTools, type ScanFiles, type ScanStep } from "./scan.ts";
 import { StepFindings, type ScanFinding } from "./scan-findings.ts";
 
 /** The two scan recipes, each reporting under `flare-dispatch/<run>` with no label (FD-GATE-111). */
@@ -26,15 +26,16 @@ export const scanCheckName = (run: ScanRunName): string => `flare-dispatch/${run
 
 /**
  * What the deployment fixes for every scan, outside any run input: the overlay's `scan.bundleDigest`, absent where the
- * overlay pins none (FD-GATE-101), `scan.advisoryMaxAgeHours`, and where the executor placed the bundle's scanner
- * configurations and the advisory snapshot (FD-GATE-104). The executor kind that serves the scan runs supplies it.
+ * overlay pins none (FD-GATE-101), `scan.advisoryMaxAgeHours`, and where the executor placed the advisory snapshot
+ * (FD-GATE-104). The scanner configurations come from the bundle the scan verifies, never from a setting. The executor
+ * kind that serves the scan runs supplies it.
  */
 export class ScanSettings extends Context.Service<
   ScanSettings,
   {
     readonly bundleDigest: string | undefined;
     readonly advisoryMaxAgeHours: number;
-    readonly files: ScanFiles;
+    readonly advisoryDir: ScanFiles["advisoryDir"];
   }
 >()("@fractalboxdev/flare-dispatch-catalog/ScanSettings") {}
 
@@ -229,9 +230,10 @@ export const scanReport = (facts: ScanFacts): ScanRunReport => {
 };
 
 /**
- * One scan of `ctx.sha` from `base`: the preconditions, the checkout, every scanner and baseline check, then the
- * verdict. A refused precondition records its `config` reason and runs no scanner; a checkout that fails records
- * `infra: CheckoutFailed`.
+ * One scan of `ctx.sha` from `base`: the preconditions, the checkout, the verified bundle's scanner configurations,
+ * every scanner and baseline check, then the verdict. A refused precondition records its `config` reason and runs no
+ * scanner; a checkout that fails records `infra: CheckoutFailed`, and configurations that cannot be written
+ * `infra: WorkspaceWriteFailed`.
  */
 export const scanFacts = (
   ctx: GateContext,
@@ -259,7 +261,13 @@ export const scanFacts = (
         });
         const scanned: PreparedScan = { ...ready, snapshots };
         prepared = scanned;
-        const report = yield* runScanTools({ ctx, prepared: scanned, checkout, files: settings.files });
+        const configs = yield* placeScannerConfigs(scanned.bundle.payload);
+        const report = yield* runScanTools({
+          ctx,
+          prepared: scanned,
+          checkout,
+          files: { ...configs, advisoryDir: settings.advisoryDir },
+        });
         return { outcome: report.outcome, prepared: scanned, steps: report.steps } satisfies ScanFacts;
       }),
     ).pipe(
@@ -273,6 +281,12 @@ export const scanFacts = (
         CheckoutFailed: () =>
           Effect.succeed<ScanFacts>({
             outcome: Outcome.failure("infra: CheckoutFailed"),
+            prepared,
+            steps: [],
+          }),
+        WorkspaceWriteFailed: () =>
+          Effect.succeed<ScanFacts>({
+            outcome: Outcome.failure("infra: WorkspaceWriteFailed"),
             prepared,
             steps: [],
           }),

@@ -319,26 +319,29 @@ export const PrClosePayload = Schema.Struct({
   repo: RepoRef,
   branch: Schema.String,
   base: Schema.String,
+  /** The pull request to close; when the branch's open pull request is another one, it stays open. */
+  pull: Schema.optionalKey(Schema.Number),
 });
 
 const decodeClose = Schema.decodeUnknownExit(PrClosePayload);
 
 /**
  * `apply` on a `pr.close` row: closes the open pull request only when its head branch is under `flare-dispatch/` and
- * carries no commit whose author is not the App (FD-GH-087).
+ * carries no commit whose author is not the App (FD-GH-087). A row that names a pull request closes that one alone: a
+ * branch with no open pull request, or whose open one is another, is left as it is.
  */
 export const applyPrClose = (config: Pick<ApplierConfig, "appLogin">) => (row: IntentRow) =>
   Effect.gen(function* () {
     const decoded = decodeClose(row.payload);
     if (Exit.isFailure(decoded))
       return { _tag: "refused", reason: "writeback: payload-invalid" } satisfies ApplyAnswer;
-    const { repo: r, branch, base } = decoded.value;
+    const { repo: r, branch, base, pull: named } = decoded.value;
     const repo: Repo = { scopeId: row.scopeId, owner: r.owner, name: r.name };
     const git = yield* GitData;
     if (!branch.startsWith(BRANCH_PREFIX))
       return { _tag: "refused", reason: "writeback: branch-invalid" } satisfies ApplyAnswer;
     const pull = yield* git.openPull(repo, branch);
-    if (pull === null)
+    if (pull === null || (named !== undefined && pull.number !== named))
       return { _tag: "applied", externalRef: `closed:${branch}` } satisfies ApplyAnswer;
     const head = yield* git.refSha(repo, branch);
     const baseSha = yield* git.refSha(repo, base);

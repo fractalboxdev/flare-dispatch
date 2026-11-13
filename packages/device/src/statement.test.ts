@@ -17,6 +17,8 @@ import {
 
 const d = (n: number) => `sha256:${n.toString(16).padStart(64, "0")}`;
 const hex = (n: number) => n.toString(16).padStart(64, "0");
+/** The key helper's code-signing hash as the registration records it: a 20-byte `cdhash`, lowercase hex. */
+const CDHASH = "4".repeat(40);
 const COMMIT = "a".repeat(40);
 
 const input = (kind: "build" | "gate", over: Record<string, unknown> = {}) => ({
@@ -41,7 +43,7 @@ const input = (kind: "build" | "gate", over: Record<string, unknown> = {}) => ({
     policy_version: "p-7",
     confidentiality: "unclassified",
   },
-  code_hash: d(4),
+  code_hash: CDHASH,
   outcome: "success",
   commands: [
     { name: "lint", exit_status: 0 },

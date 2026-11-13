@@ -90,7 +90,7 @@ const envOf = async (over: Partial<Record<keyof ControlPlaneEnv, unknown>> = {})
 };
 
 describe("the tick's advisory-refresh step", () => {
-  it("[FD-OPS-100] stores each ADVISORY_ECOSYSTEMS archive in the CACHE bucket at cas/<sha256> once per UTC day", async () => {
+  it("stores each ADVISORY_ECOSYSTEMS archive in the CACHE bucket at cas/<sha256> once per UTC day", async () => {
     const npm = archive("npm");
     const go = archive("Go");
     const server = osvServer(

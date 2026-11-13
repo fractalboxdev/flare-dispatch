@@ -33,6 +33,9 @@
     // and `[]` for an empty list, which admits none (FD-INT-027).
     "WEBHOOK_EVENTS": "{{intake.webhookEvents}}",
     "GITHUB_APP_ID": "{{github.appId}}",
+    // The App's slug: its bot `<slug>[bot]` authors the release pull requests intake approves (FD-INT-066) and every
+    // App commit and comment. Without it the control plane applies nothing to GitHub.
+    "GITHUB_APP_SLUG": "{{github.appSlug}}",
     // The repository the 15-minute synthetic webhook canary pushes to; with the App's key, the tick also runs the
     // installation and delivery probes (FD-OPS-038, FD-OPS-041, FD-OPS-044).
     "GITHUB_FIXTURE_REPO": "{{github.fixtureRepo}}",
@@ -45,6 +48,14 @@
     // The overlay's `attestation_max_age` in days, 10 where it sets none: the result-acceptance check rejects a
     // statement from a device whose last attestation is older (FD-PROV-016).
     "ATTESTATION_MAX_AGE_DAYS": "{{provenance.attestationMaxAgeDays}}",
+    // The pinned scan bundle's SHA-256, empty where the overlay pins none: the digest a `security-gate` or
+    // `security-rescan` scan checks the bundle at `cas/<digest>` against (FD-GATE-100), and reads as unpinned where
+    // empty (FD-GATE-101). A deploy whose drift check fails changes no var, so the deployed pin stays the previous one
+    // (FD-OPS-095). No executor serves the scan runs yet (specs/runs/gate.md § Open items).
+    "SCAN_BUNDLE_DIGEST": "{{scan.bundleDigest}}",
+    // The overlay's statement retention in days, 400 where it sets none: logging a statement keeps each artifact it
+    // names until the statement's integrated time plus this many days (FD-PROV-075).
+    "STATEMENT_RETENTION_DAYS": "{{provenance.statementRetentionDays}}",
     // The OSV ecosystems whose `all.zip` archive the tick's `advisory-refresh` step stores in `cas/<sha256>` once per
     // UTC day, none where the overlay sets none (FD-OPS-100).
     "ADVISORY_ECOSYSTEMS": "{{scan.advisoryEcosystems}}",

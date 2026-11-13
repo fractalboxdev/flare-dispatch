@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   admit,
   authenticated,
+  CATALOG,
   harness,
   HEAD,
   manifest,
@@ -11,6 +12,7 @@ import {
   repoWithManifest,
   type Harness,
 } from "./harness.test-support.ts";
+import { catalogRuns } from "./catalog.ts";
 import { submitLocal } from "./local.ts";
 
 const register = (h: Harness, run: string, body: unknown) =>
@@ -54,6 +56,28 @@ describe("FD-INT-061 local submit", () => {
     });
     expect(h.executions()).toEqual([]);
     expect(h.records()).toEqual([]);
+  });
+});
+
+describe("a release-notes local submit", () => {
+  it("[FD-INT-066] a local submit whose release-notes inputs name publish is rejected and admits nothing", async () => {
+    const development = catalogRuns("development");
+    const h = await harness({
+      settings: {
+        catalog: (name) => (name === "release-notes" ? development(name) : CATALOG[name]),
+      },
+    });
+    const proposal = { repo: { owner: "acme", name: "app" }, baseBranch: "main" };
+    const publish = { version: "v9.9.9", commit: HEAD, notesCommit: HEAD, pullRequest: 12 };
+    expect(
+      await register(h, "release-notes", { ...body, inputs: { ...proposal, publish } }),
+    ).toEqual({ _tag: "rejected" });
+    expect(h.executions()).toEqual([]);
+    expect(h.records()).toEqual([]);
+    // The same submit without publish proposes, so the rejection is the publish block's alone.
+    expect(await register(h, "release-notes", { ...body, inputs: proposal })).toMatchObject({
+      _tag: "admitted",
+    });
   });
 });
 

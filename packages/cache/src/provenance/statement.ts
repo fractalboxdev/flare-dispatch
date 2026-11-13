@@ -14,6 +14,13 @@ export const BUILD_TYPE =
 
 /** A `sha256:<hex>` digest. */
 export const StatementDigest = Schema.String.check(Schema.isPattern(/^sha256:[0-9a-f]{64}$/));
+/**
+ * The key helper's code-signing hash: the `cdhash` of its designated requirement, lowercase hex of 20 or 32 bytes and
+ * no algorithm prefix, the form the enrollment route records at registration (FD-PROV-031) and check 11 compares.
+ */
+export const CodeSigningHash = Schema.String.check(
+  Schema.isPattern(/^[0-9a-f]{40}([0-9a-f]{24})?$/),
+);
 const Id = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/));
 /** A name: printable ASCII without whitespace, so no log line, diff hunk, prompt or source text fits in one. */
 export const StatementName = Schema.String.check(Schema.isPattern(/^[\x21-\x7e]{1,256}$/));

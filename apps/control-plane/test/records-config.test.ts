@@ -52,7 +52,7 @@ describe("records configuration", () => {
   });
 
   it("[FD-GH-098] the side-output applier signs records with RECORDS_SIGNING_KEY and posts them to RECORDS_URL, and has no endpoint without both", () => {
-    const app = { appId: "1", privateKeyPem: "pem", fetch };
+    const app = { appId: "1", privateKeyPem: "pem", slug: "flare-dispatch", fetch };
     const recordsOf = (e: ControlPlaneEnv) =>
       Effect.runSync(
         SideOutputConfig.use((s) => Effect.succeed(s.records)).pipe(
