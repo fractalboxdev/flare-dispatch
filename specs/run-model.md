@@ -54,7 +54,9 @@ FlareDispatch's run catalogue declares the failure reason kinds below in additio
 | `jobs` | `finding` | `jobs: <keys>` | [runs/gate.md](runs/gate.md) |
 | `smoke` | `finding` | `smoke: <host><path> <status or error>` | [runs/gate.md](runs/gate.md) |
 | `image` | `finding` | `image: <name> <arch> <step>`, `image: unpinned input <name>`, `image: <name> linux/arm64 emulation unavailable` | [runs/gate.md](runs/gate.md) |
-| `review` | `finding` | `review: changes requested` | [runs/agentic.md](runs/agentic.md) |
+| `scan` | `finding` | `scan: <scanners and control ids>` | [runs/gate.md](runs/gate.md) |
+| `scan-error` | `infra` | `scan-error: <scanner or control id> exit <code>` | [runs/gate.md](runs/gate.md) |
+| `review` | `finding` | `review: changes requested`, `review: bot author not in reviewBots` | [runs/agentic.md](runs/agentic.md) |
 | `no-fix` | `finding` | `no-fix` | [runs/agentic.md](runs/agentic.md) |
 | `suppression` | `infra` | `suppression: read failed` | [runs/agentic.md](runs/agentic.md) |
 | `writeback` | `policy` | `writeback: <first reason kind>` | [runs/agentic.md](runs/agentic.md) |
