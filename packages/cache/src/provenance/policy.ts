@@ -59,12 +59,22 @@ export const PolicyDevice = Schema.Struct({
   compromised_from: Schema.NullOr(Millis),
 });
 
+/**
+ * A witness of the private log: its name, its C2SP note verifier key (`<name>+<key id hex>+<base64 key>`), and `url`,
+ * the C2SP tlog-witness submission prefix the control plane sends each new checkpoint to, at `<url>/add-checkpoint`
+ * (FD-PROV-039).
+ */
+export const PolicyWitness = Schema.Struct({
+  name: Schema.NonEmptyString,
+  key: Schema.NonEmptyString,
+  url: Schema.NonEmptyString,
+});
+export type PolicyWitness = typeof PolicyWitness.Type;
+
 export const PolicyLog = Schema.Struct({
   kind: LogKind,
   keys: Schema.Array(KeyHistoryEntry),
-  witnesses: Schema.optionalKey(
-    Schema.Array(Schema.Struct({ name: Schema.NonEmptyString, key: Schema.NonEmptyString })),
-  ),
+  witnesses: Schema.optionalKey(Schema.Array(PolicyWitness)),
 });
 
 /** One version of the verification policy (specs/provenance.md § Verification policy). */
@@ -435,6 +445,31 @@ export const publishPolicy = (input: unknown, keys: KeysInUse, now: number) =>
     yield* store.logged(policy.policy_version, entry);
     return { policyVersion: policy.policy_version, entry };
   });
+
+/**
+ * The witnesses the current policy names for the private log: what each new checkpoint is sent to (FD-PROV-039). With
+ * no policy published, there are none.
+ */
+export const privateLogWitnesses: Effect.Effect<
+  readonly PolicyWitness[],
+  PolicyStoreFailed,
+  PolicyStore
+> = Effect.gen(function* () {
+  const current = yield* (yield* PolicyStore).current();
+  if (current === undefined) return [];
+  const { policy } = yield* Effect.try({
+    try: () => JSON.parse(current.envelope) as unknown,
+    catch: () => new PolicyStoreFailed({ message: "the stored policy envelope is not JSON" }),
+  }).pipe(
+    Effect.flatMap(decodePolicyEnvelope),
+    Effect.catchTag("PolicyRefused", (e) =>
+      Effect.fail(
+        new PolicyStoreFailed({ message: `the current policy is unreadable: ${e.message}` }),
+      ),
+    ),
+  );
+  return policy.logs.filter((l) => l.kind === "private").flatMap((l) => l.witnesses ?? []);
+});
 
 /**
  * The policy envelope to serve: the current version, or the version `policyVersion` names (FD-PROV-044). Only a logged

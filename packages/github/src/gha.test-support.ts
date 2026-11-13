@@ -132,7 +132,11 @@ export interface LauncherHarness {
   /** A launcher on the shared D1: each call is a separate isolate's launcher. */
   readonly launcher: () => Layer.Layer<Launcher>;
   readonly start: (lease: LeaseRef, launcher?: Layer.Layer<Launcher>) => Promise<void>;
-  readonly cancel: (executionId: string, epoch: number) => Promise<void>;
+  readonly cancel: (
+    executionId: string,
+    epoch: number,
+    launcher?: Layer.Layer<Launcher>,
+  ) => Promise<void>;
   readonly verify: (claims: unknown, launcher?: Layer.Layer<Launcher>) => Promise<boolean>;
 }
 
@@ -170,7 +174,7 @@ export const launcherHarness = async (
     signer,
     launcher,
     start: (lease, layer) => run((l) => l.start(lease), layer),
-    cancel: (executionId, epoch) => run((l) => l.cancel(executionId, epoch)),
+    cancel: (executionId, epoch, layer) => run((l) => l.cancel(executionId, epoch), layer),
     verify: (claims, layer) => run((l) => l.verify(claims), layer),
   };
 };

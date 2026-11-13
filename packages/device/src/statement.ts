@@ -18,6 +18,7 @@ import { Effect, Schema } from "effect";
 export {
   BUILD_TYPE,
   DSSE_PAYLOAD_TYPE,
+  disallowedContent,
   dssePae,
   resolvedFetches,
   SLSA_PROVENANCE_V1,
@@ -49,34 +50,6 @@ export class StatementInputInvalid extends Schema.TaggedError<StatementInputInva
   { message: Schema.String },
 ) {}
 
-/** Every string leaf of a statement is a digest, id, name, timestamp or verdict: one bounded whitespace-free token. */
-const LEAF = /^[\x21-\x7e]{1,2400}$/;
-
-/**
- * The path of the first statement value that is not a digest, id, name, timestamp, verdict or count — such as source,
- * file contents, a diff, a log, a prompt or a completion — or `null` when every value is one (FD-PROV-043). The
- * builder's input schema already admits only such values; this check holds any statement to the same rule.
- */
-export const disallowedContent = (value: unknown, path = "$"): string | null => {
-  if (typeof value === "string") return LEAF.test(value) ? null : path;
-  if (typeof value === "number") return Number.isFinite(value) ? null : path;
-  if (Array.isArray(value)) {
-    for (const [i, v] of value.entries()) {
-      const bad = disallowedContent(v, `${path}[${i}]`);
-      if (bad !== null) return bad;
-    }
-    return null;
-  }
-  if (value !== null && typeof value === "object") {
-    for (const [k, v] of Object.entries(value)) {
-      const bad = disallowedContent(v, `${path}.${k}`);
-      if (bad !== null) return bad;
-    }
-    return null;
-  }
-  return path;
-};
-
 /**
  * The in-toto Statement v1 for one execution: subjects from the output digests the device executor passes, or the
  * commit when it passes none, the SLSA provenance v1 predicate for a build recipe and the test-result predicate for a
@@ -97,4 +70,6 @@ export const buildStatement = (raw: unknown): Effect.Effect<Statement, Statement
 
 /** The statement as an unsigned DSSE envelope with payload type `application/vnd.in-toto+json` (FD-PROV-004). */
 export const buildEnvelope = (raw: unknown): Effect.Effect<DsseEnvelope, StatementInputInvalid> =>
-  Effect.map(buildStatement(raw), (statement) => unsignedEnvelope(new TextEncoder().encode(JSON.stringify(statement))));
+  Effect.map(buildStatement(raw), (statement) =>
+    unsignedEnvelope(new TextEncoder().encode(JSON.stringify(statement))),
+  );

@@ -10,6 +10,10 @@
 // statement as `log-pending` meanwhile (FD-PROV-041). A logged intent holds the log entry, whose integrated time is the
 // statement's time; no executor clock is read (FD-PROV-040).
 //
+// Every envelope an intent holds — a countersigned statement, or a reproduction record — carries only digests, ids,
+// names, timestamps and verdicts: an envelope whose decoded payload holds source, file contents, a diff, a log, a
+// prompt or a completion records no intent and is never logged (FD-PROV-043).
+//
 // The intent is not an outbox row: the outbox drainer backs off from 1 s under the installation's applier permit
 // (MAMEKO-OUT-018), where FD-PROV-041 fixes a 5 s floor and a log append takes no GitHub permit.
 import { Context, Data, Effect, Option, Schema } from "effect";
@@ -17,6 +21,7 @@ import { canonicalJson, sha256Hex, utf8 } from "../crypto.ts";
 import { countersignAccepted, CountersignOutcome, type StatementBinding } from "./countersign.ts";
 import type { AnyDsseEnvelope, DsseEnvelope, ProvenanceKey } from "./dsse.ts";
 import { AppendOutcome } from "./log.ts";
+import { envelopeDisallowedContent, StatementContentRefused } from "./statement.ts";
 import { sha256Subjects, statementSubjects } from "./subjects.ts";
 
 /** The log a statement is appended to: the public Rekor log, or the control plane's private log in R2. */
@@ -220,14 +225,22 @@ export interface CountersignedStatement {
   readonly verifiers: readonly JsonWebKey[];
 }
 
+/** Fails with the path of the envelope's first value that is not a digest, id, name, timestamp or verdict (FD-PROV-043). */
+const refuseDisallowedContent = (envelope: AnyDsseEnvelope) => {
+  const path = envelopeDisallowedContent(envelope);
+  return path === null ? Effect.void : Effect.fail(new StatementContentRefused({ path }));
+};
+
 /**
  * Records the log-append intent of a countersigned envelope, keyed by its digest (FD-PROV-034), with the log the
  * repository's visibility names (FD-PROV-035, FD-PROV-036). A visibility read that fails sends the statement to the
  * private log. An intent already recorded for the digest stays as it is, and answers the log it names without a
- * visibility read.
+ * visibility read. An envelope holding any value other than a digest, id, name, timestamp or verdict fails with
+ * `StatementContentRefused` and records nothing (FD-PROV-043).
  */
 export const enqueueLogAppend = (statement: CountersignedStatement, now: number) =>
   Effect.gen(function* () {
+    yield* refuseDisallowedContent(statement.envelope);
     const { json, digest } = yield* Effect.promise(() => envelopeEntry(statement.envelope));
     const store = yield* LogAppendStore;
     const existing = yield* store.get(digest);
@@ -266,7 +279,9 @@ export const enqueueLogAppend = (statement: CountersignedStatement, now: number)
 
 /**
  * The control plane's step after it accepts a statement: countersign it (FD-PROV-032) and record its log-append
- * intent (FD-PROV-034). A statement left advisory (FD-PROV-025) is not countersigned and records no intent.
+ * intent (FD-PROV-034). A statement left advisory (FD-PROV-025) is not countersigned and records no intent. A statement
+ * holding any value other than a digest, id, name, timestamp or verdict is neither countersigned nor logged: it fails
+ * with `StatementContentRefused` (FD-PROV-043).
  */
 export const countersignAndAppend = (
   envelope: DsseEnvelope,
@@ -280,6 +295,7 @@ export const countersignAndAppend = (
   now: number,
 ) =>
   Effect.gen(function* () {
+    yield* refuseDisallowedContent(envelope);
     const outcome = yield* countersignAccepted(envelope, binding, key);
     if (!CountersignOutcome.$is("Countersigned")(outcome)) return { outcome, intent: undefined };
     const intent = yield* enqueueLogAppend(

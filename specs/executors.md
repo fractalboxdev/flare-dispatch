@@ -72,7 +72,7 @@ sequenceDiagram
 
 *`gha` launcher · the dispatch inputs carry no credential; the OIDC token is the job's only identity.*
 
-The runner workflow lives in the runner repository, not in this one. For a deploy whose overlay carries the `gha` kind, the drift check reads `.github/workflows/<gha.workflow>` from `gha.runnerRepo` through the GitHub App's installation there and fails when a job's `GITHUB_TOKEN` may hold any permission except `id-token: write`, a job without its own or a workflow-level `permissions` included (FD-EXEC-091).
+The runner workflow lives in the runner repository, not in this one. For a deploy whose overlay carries the `gha` kind, the drift check reads `.github/workflows/<gha.workflow>` from `gha.runnerRepo` through the GitHub App's installation there and fails when a job's `GITHUB_TOKEN` may hold any permission except `id-token: write`, a job without its own or a workflow-level `permissions` included (FD-EXEC-091). It also fails when the `workflow_dispatch` trigger declares no `deadline_minutes` input, or a job's `timeout-minutes` is anything but `${{ fromJSON(inputs.deadline_minutes) }}` or `${{ fromJSON(github.event.inputs.deadline_minutes) }}`, a job without `timeout-minutes` included (FD-EXEC-087). `timeout-minutes` takes a number and the launcher dispatches `deadline_minutes` as a string, so the bare input does not pass.
 
 ## Requirements
 

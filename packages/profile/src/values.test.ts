@@ -263,6 +263,11 @@ describe("spend configuration", () => {
     });
   });
 
+  it("[FD-PROF-059] a firm hold of required looks ahead over 5 queued entries", () => {
+    expect(spendSettings.firm_hold_look_ahead).toBe(5);
+    expect(Number.isInteger(spendSettings.firm_hold_look_ahead)).toBe(true);
+  });
+
   it("[FD-PROF-060] spend warns at 0.8 of B", () => {
     expect(spendSettings.warn_ratio).toBe(0.8);
   });

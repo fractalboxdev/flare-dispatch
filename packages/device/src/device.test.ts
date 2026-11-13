@@ -198,7 +198,12 @@ describe("device extension", () => {
       type: "cache.get.ok",
       bytes: b64("good"),
     });
-    expect(events).toEqual([`l2.fetch ${NS_READ}/${key(1)}`, `l1.write ${NS_READ}/${key(1)}`]);
+    // The bytes go to L1 first, then the manifest they verified under, which a peer verifies in turn (FD-CACHE-014).
+    expect(events).toEqual([
+      `l2.fetch ${NS_READ}/${key(1)}`,
+      `l1.write ${NS_READ}/${key(1)}`,
+      `l1.write ${NS_READ}/${key(1)}.manifest.json`,
+    ]);
     // The entry is in L1 now: a second read is answered without L2.
     events.length = 0;
     expect(await send(s, { type: "cache.get", id: "2", namespace: NS_READ, key: key(1) })).toMatchObject({

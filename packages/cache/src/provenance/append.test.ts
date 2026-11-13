@@ -9,7 +9,7 @@ import type { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { canonicalJson, sha256Hex, utf8 } from "../crypto.ts";
 import type { Bucket } from "../manifest.ts";
-import { startMiniflare } from "../support.test-support.ts";
+import { failureOf, startMiniflare } from "../support.test-support.ts";
 import {
   applyLogAppend,
   countersignAndAppend,
@@ -42,6 +42,8 @@ import {
 import type { AppendOutcome } from "./log.ts";
 import { leafPath } from "./merkle.ts";
 import { publicKeyPem, rekorAppend } from "./rekor.ts";
+import { REPRODUCTION_PAYLOAD_TYPE } from "./reproduction-request.ts";
+import { envelopeDisallowedContent } from "./statement.ts";
 import {
   recordedStatementLogged,
   recordedSubjectRetention,
@@ -79,6 +81,17 @@ const deviceEnvelope = async (
     signatures: [await signPae(device, dssePae(DSSE_PAYLOAD_TYPE, payload))],
   };
 };
+
+/** An envelope of `payload`'s bytes under `payloadType`, signed by `key`. */
+const signedBytes = async (
+  key: ProvenanceKey,
+  payload: Uint8Array,
+  payloadType: string = DSSE_PAYLOAD_TYPE,
+) => ({
+  payloadType,
+  payload: unsignedEnvelope(payload).payload,
+  signatures: [await signPae(key, dssePae(payloadType, payload))],
+});
 
 const REKOR_URL = "https://rekor.test";
 
@@ -487,5 +500,152 @@ describe("the transparency-log append of a countersigned statement", () => {
     // A logged statement is not attempted again, so it is not noticed again.
     await p.run(applyLogAppend(intent.digest, 10_000_000));
     expect(p.notices).toHaveLength(1);
+  });
+
+  it("[FD-PROV-043] the control plane countersigns and logs no statement or record holding source, file contents, a diff, a log, a prompt or a completion, only one of digests, ids, names, timestamps and verdicts", async () => {
+    const p = await plane({ "acme/open": "public", "acme/widgets": "private" });
+
+    // A statement of digests, ids, names, timestamps and verdicts is countersigned and its intent recorded.
+    const ok = await countersigned(p, "acme/open");
+    const okEnvelope = JSON.parse((await get(p, ok.intent.digest)).envelope);
+    expect(envelopeDisallowedContent(okEnvelope)).toBeNull();
+
+    const source = "export const a = 1;\nexport const b = 2;";
+    const diff = "--- a/src/x.ts\n+++ b/src/x.ts\n@@ -1 +1 @@\n-const a = 1;\n+const a = 2;";
+    const log = "npm ERR! code ELIFECYCLE\nnpm ERR! errno 1";
+    const prompt = "Review this pull request and list every bug";
+    const completion = "The change is correct. I found no bugs.";
+    const statement = (executionId: string, extra: Record<string, unknown>) => ({
+      _type: "https://in-toto.io/Statement/v1",
+      subject: [{ name: "commit", digest: { gitCommit: "a".repeat(40) } }],
+      predicate: {
+        buildDefinition: { internalParameters: { lease: { execution_id: executionId } } },
+        runDetails: { byproducts: [extra] },
+      },
+    });
+    const carrying: [string, (executionId: string) => Promise<DsseEnvelope>, string][] = [
+      [
+        "a diff as a subject name",
+        (id) =>
+          deviceEnvelope(device.private, id, [{ name: diff, digest: { sha256: "1".repeat(64) } }]),
+        "$.payload.subject[0].name",
+      ],
+      [
+        "source",
+        (id) =>
+          signedBytes(
+            device.private,
+            utf8(JSON.stringify(statement(id, { name: "src/x.ts", content: source }))),
+          ) as Promise<DsseEnvelope>,
+        "$.payload.predicate.runDetails.byproducts[0].content",
+      ],
+      [
+        "a log",
+        (id) =>
+          signedBytes(
+            device.private,
+            utf8(JSON.stringify(statement(id, { name: "step-log", lines: [log] }))),
+          ) as Promise<DsseEnvelope>,
+        "$.payload.predicate.runDetails.byproducts[0].lines[0]",
+      ],
+      [
+        "a prompt and its completion",
+        (id) =>
+          signedBytes(
+            device.private,
+            utf8(JSON.stringify(statement(id, { name: "model:a", prompt, completion }))),
+          ) as Promise<DsseEnvelope>,
+        "$.payload.predicate.runDetails.byproducts[0].prompt",
+      ],
+      [
+        "source as an object key",
+        (id) =>
+          signedBytes(
+            device.private,
+            utf8(JSON.stringify(statement(id, { [source]: "x" }))),
+          ) as Promise<DsseEnvelope>,
+        `$.payload.predicate.runDetails.byproducts[0].${JSON.stringify(source)}`,
+      ],
+      [
+        "a log line as an object key",
+        (id) =>
+          signedBytes(
+            device.private,
+            utf8(JSON.stringify(statement(id, { [log]: "x" }))),
+          ) as Promise<DsseEnvelope>,
+        `$.payload.predicate.runDetails.byproducts[0].${JSON.stringify(log)}`,
+      ],
+      [
+        "file contents as the payload",
+        (id) => signedBytes(device.private, utf8(`${source} // ${id}`)) as Promise<DsseEnvelope>,
+        "$.payload",
+      ],
+    ];
+    for (const [, envelopeOf, path] of carrying) {
+      const executionId = `exec-append-${++executions}`;
+      const exit = await p.run(
+        Effect.exit(
+          countersignAndAppend(
+            await envelopeOf(executionId),
+            StatementBinding.ExecutionLease({ executionId, epoch: 1 }),
+            provenance.private,
+            { executionId, repository: "acme/open", deviceKey: device.public },
+            1_000,
+          ),
+        ),
+      );
+      expect(failureOf(exit)).toMatchObject({ _tag: "StatementContentRefused", path });
+      expect(
+        await p.run(Effect.flatMap(LogAppendStore, (s) => s.forExecution(executionId))),
+      ).toEqual([]);
+    }
+
+    // An envelope the control plane signed itself is held to the same rule: a reproduction record naming a log line
+    // beside a digest records no intent.
+    const record = await signedBytes(
+      provenance.private,
+      utf8(JSON.stringify({ envelope_digests: [ok.intent.digest, log] })),
+      REPRODUCTION_PAYLOAD_TYPE,
+    );
+    const refused = await p.run(
+      Effect.exit(
+        enqueueLogAppend(
+          {
+            envelope: record,
+            executionId: ok.executionId,
+            repository: "acme/widgets",
+            verifiers: [provenance.public],
+          },
+          1_000,
+        ),
+      ),
+    );
+    expect(failureOf(refused)).toMatchObject({
+      _tag: "StatementContentRefused",
+      path: "$.payload.envelope_digests[1]",
+    });
+    const recordOk = await signedBytes(
+      provenance.private,
+      utf8(JSON.stringify({ envelope_digests: [ok.intent.digest, ok.intent.digest] })),
+      REPRODUCTION_PAYLOAD_TYPE,
+    );
+    const accepted = await p.run(
+      enqueueLogAppend(
+        {
+          envelope: recordOk,
+          executionId: ok.executionId,
+          repository: "acme/widgets",
+          verifiers: [provenance.public],
+        },
+        1_000,
+      ),
+    );
+    expect(accepted.inserted).toBe(true);
+
+    // Only the allowed statement and record reach a log.
+    await p.run(drainLogAppends(1_000));
+    expect(p.rekor.calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(await p.log.size()).toBe(1);
+    expect(await p.leaf(0)).toBe(canonicalJson(recordOk));
   });
 });

@@ -14,7 +14,7 @@ import {
 } from "../../../agentic/src/recipes/fakes.test-support.ts";
 import {
   PR_REVIEW_CHECK_NAME,
-  type Finding,
+  type ReviewerFinding,
   type PrReviewInput,
 } from "../../../agentic/src/recipes/pr-review.ts";
 import { prReviewRun } from "../../../agentic/src/recipes/runs.ts";
@@ -49,7 +49,7 @@ const input: PrReviewInput = {
 };
 
 /** Each execution's reviewer answer: the first finds a warning, the second a failure on another line. */
-export const FINDINGS: Readonly<Record<string, Finding>> = {
+export const FINDINGS: Readonly<Record<string, ReviewerFinding>> = {
   [FIRST]: {
     path: "src/a.ts",
     startLine: 1,

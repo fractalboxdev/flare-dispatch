@@ -4,11 +4,13 @@
 //   tlog_leaves   idx (the leaf index the object assigns), entry_digest, leaf_hash, integrated_at
 //   tlog_hashes   (level, idx) → the hash of each complete subtree (merkle.ts § stored hashes)
 //   tlog_pending  idx → the entry bytes of each recorded leaf whose R2 object is not yet confirmed written
-//   tlog_meta     signed_size, signed_at: the tree size of the last checkpoint the object signed
+//   tlog_meta     signed_size, signed_at: the tree size of the last checkpoint the object signed; witness_failures:
+//                 the witness rounds in a row that left a cosignature missing
+//   tlog_witnesses name → the tree size each witness last cosigned (witness.ts)
 //
 //   <prefix>leaf/<N>             each leaf's entry bytes
 //   <prefix>tile/<L>/<N>[.p/<W>] C2SP tlog-tiles hash tiles
-//   <prefix>checkpoint           the latest checkpoint, signed by the log key
+//   <prefix>checkpoint           the latest checkpoint, signed by the log key, with each witness cosignature
 //
 // SQLite is the authority on which entry holds which index. An append assigns the next index and records the leaf,
 // its stored hashes and its entry bytes as pending in one synchronous step, then writes the leaf with a create-only
@@ -22,6 +24,7 @@ import { Data, Effect, Layer, Schema } from "effect";
 import { hex, sha256Hex } from "../crypto.ts";
 import type { Bucket } from "../manifest.ts";
 import type { ProvenanceKey } from "./dsse.ts";
+import type { WitnessConfig } from "./witness.ts";
 import {
   CHECKPOINT_PATH,
   inclusionProof,
@@ -110,11 +113,8 @@ export type CheckpointOutcome = Data.TaggedEnum<{
 }>;
 export const CheckpointOutcome = Data.taggedEnum<CheckpointOutcome>();
 
-/** What the object writes with. */
-export interface TransparencyLogConfig {
-  readonly bucket: Bucket;
-  /** The R2 prefix of the log's objects, ending in `/`. */
-  readonly prefix: string;
+/** What the object writes with, and the witnesses it sends each checkpoint to (FD-PROV-039). */
+export interface TransparencyLogConfig extends WitnessConfig {
   /** The checkpoint's origin line. */
   readonly origin: string;
   /** The log key, or `undefined` while the deploy holds none: then no checkpoint is signed. */
@@ -135,6 +135,7 @@ const SCHEMA = [
      primary key (level, idx))`,
   "create table if not exists tlog_pending (idx integer primary key, entry blob not null)",
   "create table if not exists tlog_meta (k text primary key, v integer not null)",
+  "create table if not exists tlog_witnesses (name text primary key, size integer not null)",
 ];
 
 const fromHex = (text: string): Uint8Array =>
@@ -233,6 +234,18 @@ export const logStore = (sql: SqlStorage) => {
     signed: (size: number, at: number) => {
       sql.exec("insert or replace into tlog_meta (k, v) values ('signed_size', ?)", size);
       sql.exec("insert or replace into tlog_meta (k, v) values ('signed_at', ?)", at);
+    },
+    witnessedSize: (witness: string): number | undefined =>
+      sql
+        .exec<{ size: number }>("select size from tlog_witnesses where name = ?", witness)
+        .toArray()[0]?.size,
+    witnessed: (witness: string, size: number) => {
+      sql.exec("insert or replace into tlog_witnesses (name, size) values (?, ?)", witness, size);
+    },
+    /** The witness rounds in a row that left a cosignature missing; 0 after a round that left none. */
+    witnessFailures: (): number => meta("witness_failures") ?? 0,
+    setWitnessFailures: (n: number) => {
+      sql.exec("insert or replace into tlog_meta (k, v) values ('witness_failures', ?)", n);
     },
   };
 };

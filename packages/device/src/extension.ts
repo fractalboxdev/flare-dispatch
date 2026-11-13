@@ -2,7 +2,8 @@
 // interface on file descriptor 3 (MAMEKO-EXEC-140). It holds L1 per cache namespace — the cache package's L1, which
 // reads through to L2 on a miss and uploads to L2 after a put — and `LocalContent` per tenant scope, and restores a
 // cache entry only for a namespace a lease it was handed may read (FD-EXEC-007). Its `statement` operation answers the
-// unsigned DSSE envelope the statement builder writes (specs/provenance.md § Statement flow).
+// unsigned DSSE envelope the statement builder writes (specs/provenance.md § Statement flow). Peer cache is not an
+// operation of this interface: its endpoint is served to other devices over the tailnet (`peer-cache.ts`).
 import { createHash } from "node:crypto";
 import type { L1Cache, L2Client } from "@fractalboxdev/flare-dispatch-cache/device";
 import { decodeExtensionLine, type ExtensionMessage } from "@fractalboxdev/mameko-protocol";

@@ -5,9 +5,9 @@
 // the Worker bundle.
 import { mkdir, readdir, readFile, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { Effect } from "effect";
-import { sha256Hex } from "../crypto.ts";
-import { verifyManifest, type Manifest, type VerificationKeys } from "../manifest.ts";
+import { Effect, Option, Schema } from "effect";
+import { base64url, fromBase64url, sha256Hex } from "../crypto.ts";
+import { Manifest, verifyManifest, type VerificationKeys } from "../manifest.ts";
 
 /** The disk L1 lives on: byte files under a root, and the free bytes measured at start. */
 export interface L1Disk {
@@ -40,8 +40,20 @@ export interface L1Options {
   readonly now?: () => number;
   /** True while the capacity lease is in offline mode: every L2 read is a miss (FD-CACHE-013). */
   readonly offline?: () => boolean;
-  /** True for a `confidential-compute` repository's namespace: no L2 read or write (FD-CACHE-008). */
+  /**
+   * True for a `confidential-compute` repository's namespace: no L2 read or write (FD-CACHE-008), and no entry
+   * fetched from or served to a peer.
+   */
   readonly confidential?: (namespace: string) => boolean;
+  /** The peer-cache setting: absent or disabled, a miss never reaches a peer (FD-CACHE-014). */
+  readonly peerCache?: PeerCacheSetting;
+}
+
+/** Peer cache: this device's member and the other devices it may fetch a missed entry from (FD-CACHE-014). */
+export interface PeerCacheSetting {
+  readonly enabled: boolean;
+  readonly member: string;
+  readonly peers: readonly Peer[];
 }
 
 interface Entry {
@@ -58,6 +70,12 @@ const safe = (namespace: string, key: string) =>
   NAMESPACE.test(namespace) && !namespace.split("/").some((s) => s === "" || s === "." || s === "..") && KEY.test(key);
 /** One directory per namespace (FD-CACHE-004). */
 const pathOf = (namespace: string, key: string) => `${namespace}/${key}`;
+/**
+ * The verified manifest of an entry read from L2 or a peer, beside its bytes, so the entry can be served to a peer. Its
+ * name is not a cache key, so the index neither lists it as an entry nor counts it against the cap.
+ */
+const manifestPathOf = (namespace: string, key: string) => `${pathOf(namespace, key)}.manifest.json`;
+const decodeManifestJson = Schema.decodeUnknownOption(Schema.fromJsonString(Manifest));
 
 export interface L1Cache {
   readonly get: (namespace: string, key: string) => Effect.Effect<Uint8Array | null>;
@@ -69,6 +87,11 @@ export interface L1Cache {
   readonly peek: (namespace: string, key: string) => Effect.Effect<Uint8Array | null>;
   /** An L1 write that uploads nothing: for bytes the control plane already holds. */
   readonly keep: (namespace: string, key: string, bytes: Uint8Array) => Effect.Effect<boolean>;
+  /**
+   * The entry as a peer receives it: its bytes with the manifest it was verified under, or null when L1 lacks the
+   * entry or holds it without a manifest (an entry from `cache.put`). It never reads through to L2 or a peer.
+   */
+  readonly serve: (namespace: string, key: string) => Effect.Effect<L2Entry | null>;
   readonly usage: () => { readonly bytes: number; readonly cap: number; readonly entries: number };
 }
 
@@ -105,6 +128,7 @@ export const openL1 = async (options: L1Options): Promise<L1Cache> => {
     for (const e of [...index.values()].sort((a, b) => a.lastReadAt - b.lastReadAt)) {
       if (freed >= target) break;
       await options.disk.remove(pathOf(e.namespace, e.key));
+      await options.disk.remove(manifestPathOf(e.namespace, e.key));
       index.delete(pathOf(e.namespace, e.key));
       freed += e.size;
     }
@@ -116,6 +140,8 @@ export const openL1 = async (options: L1Options): Promise<L1Cache> => {
       await options.disk.remove(pathOf(namespace, key));
       index.delete(pathOf(namespace, key));
     }
+    // A manifest left from an earlier entry never describes these bytes.
+    await options.disk.remove(manifestPathOf(namespace, key));
     if (bytes.byteLength > cap) return false;
     const over = total() + bytes.byteLength - cap;
     if (over > 0) await evictLru(over);
@@ -123,30 +149,59 @@ export const openL1 = async (options: L1Options): Promise<L1Cache> => {
     index.set(pathOf(namespace, key), { namespace, key, size: bytes.byteLength, lastReadAt: now() });
     return true;
   };
+  /**
+   * Stores a verified entry, with its manifest when the entry is one object (the bytes L1 holds), so a peer can verify
+   * it in turn.
+   */
+  const storeVerified = async (manifest: Manifest, bytes: Uint8Array) => {
+    if (!(await store(manifest.namespace, manifest.key, bytes))) return false;
+    if (manifest.objects.length !== 1) return true;
+    await options.disk.write(
+      manifestPathOf(manifest.namespace, manifest.key),
+      new TextEncoder().encode(JSON.stringify(manifest)),
+    );
+    return true;
+  };
   const l2Allowed = (namespace: string) =>
     options.offline?.() !== true && options.confidential?.(namespace) !== true;
+  const peersAllowed = (namespace: string) =>
+    options.peerCache?.enabled === true && options.confidential?.(namespace) !== true;
+  const readHit = async (namespace: string, key: string) => {
+    const hit = index.get(pathOf(namespace, key));
+    if (hit === undefined) return null;
+    const bytes = await options.disk.read(pathOf(namespace, key));
+    if (bytes === null) index.delete(pathOf(namespace, key));
+    else hit.lastReadAt = now();
+    return bytes;
+  };
+  // FD-CACHE-006: a miss reads through to L2 and places the entry only once every digest verifies.
+  const readThroughL2 = async (namespace: string, key: string) => {
+    const entry = await options.l2.fetch(namespace, key);
+    if (entry === null || entry.manifest.key !== key || entry.manifest.namespace !== namespace) return null;
+    const bytes = await verified(entry, options.keys);
+    if (bytes === null) return null;
+    await storeVerified(entry.manifest, bytes);
+    return bytes;
+  };
 
-  return {
+  const cache: L1Cache = {
     get: (namespace, key) =>
-      Effect.tryPromise(async () => {
+      Effect.gen(function* () {
         if (!safe(namespace, key)) return null;
-        const hit = index.get(pathOf(namespace, key));
-        if (hit !== undefined) {
-          const bytes = await options.disk.read(pathOf(namespace, key));
-          if (bytes !== null) {
-            hit.lastReadAt = now();
-            return bytes;
-          }
-          index.delete(pathOf(namespace, key));
+        const hit = yield* Effect.tryPromise(() => readHit(namespace, key));
+        if (hit !== null) return hit;
+        if (l2Allowed(namespace)) {
+          // A failed L2 read is a miss there (FD-CACHE-011); a peer may still hold the entry.
+          const fromL2 = yield* Effect.tryPromise(() => readThroughL2(namespace, key)).pipe(
+            Effect.orElseSucceed(() => null),
+          );
+          if (fromL2 !== null) return fromL2;
         }
-        // FD-CACHE-006: a miss reads through to L2 and places the entry only once every digest verifies.
-        if (!l2Allowed(namespace)) return null;
-        const entry = await options.l2.fetch(namespace, key);
-        if (entry === null || entry.manifest.key !== key || entry.manifest.namespace !== namespace) return null;
-        const bytes = await verified(entry, options.keys);
-        if (bytes === null) return null;
-        await store(namespace, key, bytes);
-        return bytes;
+        const setting = options.peerCache;
+        if (setting === undefined || !peersAllowed(namespace)) return null;
+        // FD-CACHE-014: a peer's entry is placed only once its signature and every digest verify.
+        const placed = yield* fetchFromPeers(cache, setting.member, setting.peers, namespace, key, true);
+        return placed ? yield* Effect.tryPromise(() => readHit(namespace, key)) : null;
       }).pipe(Effect.orElseSucceed(() => null)),
     put: (namespace, key, bytes) =>
       Effect.gen(function* () {
@@ -168,22 +223,30 @@ export const openL1 = async (options: L1Options): Promise<L1Cache> => {
         const { namespace, key } = entry.manifest;
         if (!safe(namespace, key)) return false;
         const bytes = await verified(entry, options.keys);
-        return bytes === null ? false : store(namespace, key, bytes);
+        return bytes === null ? false : storeVerified(entry.manifest, bytes);
       }).pipe(Effect.orElseSucceed(() => false)),
     peek: (namespace, key) =>
-      Effect.tryPromise(async () => {
-        if (!safe(namespace, key) || !index.has(pathOf(namespace, key))) return null;
-        const bytes = await options.disk.read(pathOf(namespace, key));
-        if (bytes === null) index.delete(pathOf(namespace, key));
-        else index.get(pathOf(namespace, key))!.lastReadAt = now();
-        return bytes;
-      }).pipe(Effect.orElseSucceed(() => null)),
+      Effect.tryPromise(async () => (safe(namespace, key) ? readHit(namespace, key) : null)).pipe(
+        Effect.orElseSucceed(() => null),
+      ),
     keep: (namespace, key, bytes) =>
       Effect.tryPromise(async () => safe(namespace, key) && store(namespace, key, bytes)).pipe(
         Effect.orElseSucceed(() => false),
       ),
+    serve: (namespace, key) =>
+      Effect.tryPromise(async () => {
+        if (!safe(namespace, key) || options.confidential?.(namespace) === true) return null;
+        const text = await options.disk.read(manifestPathOf(namespace, key));
+        if (text === null) return null;
+        const manifest = Option.getOrNull(decodeManifestJson(new TextDecoder().decode(text)));
+        const object = manifest?.objects.length === 1 ? manifest.objects[0] : undefined;
+        if (manifest === null || object === undefined) return null;
+        const bytes = await readHit(namespace, key);
+        return bytes === null ? null : { manifest, objects: new Map([[object.path, bytes]]) };
+      }).pipe(Effect.orElseSucceed(() => null)),
     usage: () => ({ bytes: total(), cap, entries: index.size }),
   };
+  return cache;
 };
 
 /** L1 on a directory of the local disk. */
@@ -279,6 +342,22 @@ export const restoreContent = (
     return bytes !== null && (await sha256Hex(bytes)) === digest ? bytes : null;
   }).pipe(Effect.orElseSucceed(() => null));
 
+/**
+ * A peer entry on the wire: the manifest as base64url JSON, carried beside the entry's one object. The receiver
+ * verifies both before it places the entry (FD-CACHE-014).
+ */
+export const encodePeerManifest = (manifest: Manifest): string =>
+  base64url(new TextEncoder().encode(JSON.stringify(manifest)));
+
+/** The entry a peer answered, or null when its manifest does not decode or does not describe one object. */
+export const decodePeerEntry = (manifest: string, bytes: Uint8Array): L2Entry | null => {
+  const text = fromBase64url(manifest);
+  if (text === undefined) return null;
+  const decoded = Option.getOrNull(decodeManifestJson(new TextDecoder().decode(text)));
+  const object = decoded?.objects.length === 1 ? decoded.objects[0] : undefined;
+  return decoded === null || object === undefined ? null : { manifest: decoded, objects: new Map([[object.path, bytes]]) };
+};
+
 /** Another device of the same member, reached over the tailnet. */
 export interface Peer {
   readonly member: string;
@@ -304,6 +383,12 @@ export const fetchFromPeers = (
       const entry = yield* Effect.tryPromise(() => peer.fetch(namespace, key)).pipe(Effect.orElseSucceed(() => null));
       if (entry === null || entry.manifest.namespace !== namespace || entry.manifest.key !== key) continue;
       if (yield* l1.place(entry)) return true;
+      // An entry larger than the L1 cap is not placed whether or not it verifies, so it is not logged as refused.
+      const size = entry.manifest.objects.reduce((sum, object) => sum + object.size, 0);
+      const { cap } = l1.usage();
+      yield* (size > cap
+        ? Effect.logInfo("cache.peer_entry_not_placed").pipe(Effect.annotateLogs({ key, member: peer.member, size, cap }))
+        : Effect.logWarning("cache.peer_entry_refused").pipe(Effect.annotateLogs({ key, member: peer.member })));
     }
     return false;
   });

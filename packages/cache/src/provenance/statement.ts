@@ -3,6 +3,7 @@
 // The device executor's builder (packages/device) and the control plane's cloud-builder writer (`cloud-statement.ts`)
 // both build their statements here; they differ only in where the subject digests come from and in the builder version.
 import { Schema } from "effect";
+import { fromBase64, type AnyDsseEnvelope } from "./dsse.ts";
 
 export const STATEMENT_TYPE = "https://in-toto.io/Statement/v1";
 export const SLSA_PROVENANCE_V1 = "https://slsa.dev/provenance/v1";
@@ -256,3 +257,57 @@ export const statementOf = (
     ? { predicateType: SLSA_PROVENANCE_V1, predicate: slsaPredicate(body, builderVersion) }
     : { predicateType: TEST_RESULT_V0_1, predicate: testResultPredicate(body, builderVersion) }),
 });
+
+/** Every string leaf of a statement is a digest, id, name, timestamp or verdict: one bounded whitespace-free token. */
+const LEAF = /^[\x21-\x7e]{1,2400}$/;
+
+/**
+ * The path of the first value or object key that is not a digest, id, name, timestamp, verdict or count — such as
+ * source, file contents, a diff, a log, a prompt or a completion — or `null` when every one is (FD-PROV-043). A key
+ * that fails is named by its JSON-quoted form. A statement's
+ * schemas admit only such values; this check holds every statement, reproduction record and log entry the control
+ * plane writes to the same rule, whoever built it.
+ */
+export const disallowedContent = (value: unknown, path = "$"): string | null => {
+  if (typeof value === "string") return LEAF.test(value) ? null : path;
+  if (typeof value === "number") return Number.isFinite(value) ? null : path;
+  if (Array.isArray(value)) {
+    for (const [i, v] of value.entries()) {
+      const bad = disallowedContent(v, `${path}[${i}]`);
+      if (bad !== null) return bad;
+    }
+    return null;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const [k, v] of Object.entries(value)) {
+      if (!LEAF.test(k)) return `${path}.${JSON.stringify(k)}`;
+      const bad = disallowedContent(v, `${path}.${k}`);
+      if (bad !== null) return bad;
+    }
+    return null;
+  }
+  return path;
+};
+
+/**
+ * The path of the first disallowed value in a DSSE envelope, its payload read as the JSON document it encodes, or
+ * `null` when every value is allowed (FD-PROV-043). A payload that is not base64 of UTF-8 JSON is disallowed whole:
+ * its bytes could be any file.
+ */
+export const envelopeDisallowedContent = (envelope: AnyDsseEnvelope): string | null => {
+  const bytes = fromBase64(envelope.payload);
+  if (bytes === undefined) return "$.payload";
+  let payload: unknown;
+  try {
+    payload = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes));
+  } catch {
+    return "$.payload";
+  }
+  return disallowedContent({ ...envelope, payload });
+};
+
+/** A statement, reproduction record or log entry holds a value other than a digest, id, name, timestamp or verdict. */
+export class StatementContentRefused extends Schema.TaggedError<StatementContentRefused>()(
+  "StatementContentRefused",
+  { path: Schema.String },
+) {}

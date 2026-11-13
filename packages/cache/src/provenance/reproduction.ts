@@ -33,6 +33,7 @@ import {
 } from "./dsse.ts";
 import { toBase64 } from "./merkle.ts";
 import { loggedStatementsOf, type LoggedStatement, type ProvenancePublicKey } from "./release.ts";
+import { disallowedContent, StatementContentRefused } from "./statement.ts";
 import {
   REPRODUCTION_APPLIES_NO_INTENT,
   REPRODUCTION_MISMATCH,
@@ -172,17 +173,23 @@ const existingRecord = (releaseExecutionId: string, release: string, reproductio
     return undefined;
   });
 
-/** The reproduction record: both envelope digests, release first, signed by the provenance key. */
+/**
+ * The reproduction record: both envelope digests, release first, signed by the provenance key. A record holding any
+ * value other than a digest is not signed (FD-PROV-043).
+ */
 const signRecord = (release: LoggedStatement, reproduction: LoggedStatement, key: ProvenanceKey) =>
-  Effect.tryPromise({
-    try: async (): Promise<AnyDsseEnvelope> => {
-      const payload = utf8(
-        JSON.stringify({ envelope_digests: [release.envelopeDigest, reproduction.envelopeDigest] }),
-      );
-      const signature = await signPae(key, dssePae(REPRODUCTION_PAYLOAD_TYPE, payload));
-      return { payloadType: REPRODUCTION_PAYLOAD_TYPE, payload: toBase64(payload), signatures: [signature] };
-    },
-    catch: () => new ProvenanceKeyInvalid({ kid: key.kid, message: "the provenance key does not import" }),
+  Effect.gen(function* () {
+    const record = { envelope_digests: [release.envelopeDigest, reproduction.envelopeDigest] };
+    const disallowed = disallowedContent(record);
+    if (disallowed !== null) return yield* Effect.fail(new StatementContentRefused({ path: disallowed }));
+    const payload = utf8(JSON.stringify(record));
+    return yield* Effect.tryPromise({
+      try: async (): Promise<AnyDsseEnvelope> => {
+        const signature = await signPae(key, dssePae(REPRODUCTION_PAYLOAD_TYPE, payload));
+        return { payloadType: REPRODUCTION_PAYLOAD_TYPE, payload: toBase64(payload), signatures: [signature] };
+      },
+      catch: () => new ProvenanceKeyInvalid({ kid: key.kid, message: "the provenance key does not import" }),
+    });
   });
 
 /**

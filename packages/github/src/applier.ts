@@ -61,6 +61,7 @@ const AnnotationSchema = Schema.Struct({
   annotation_level: Schema.Literals(["notice", "warning", "failure"]),
   message: Schema.String,
   title: Schema.optionalKey(Schema.String),
+  raw_details: Schema.optionalKey(Schema.String),
 });
 
 export const Payloads = {
