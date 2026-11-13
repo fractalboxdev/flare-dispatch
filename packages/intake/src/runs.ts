@@ -26,6 +26,11 @@ export interface IntakeRun {
   readonly params: Schema.Decoder<unknown>;
   /** The run's input schema; a dispatch's inputs and a re-run's recorded inputs must pass it (FD-INT-040, FD-INT-055). */
   readonly input: Schema.Decoder<unknown>;
+  /**
+   * The narrower schema the inputs a caller names must pass, for a run whose input holds a field only intake builds:
+   * `release-notes` refuses `publish` from a dispatch, an MCP call, a local submit and a follow-on intent, so only a release approval starts a publish (FD-INT-066). Absent, a caller's inputs pass `input`.
+   */
+  readonly callerInput?: Schema.Decoder<unknown>;
   /** The request decoder: the run's input for an event, or none when the run does not answer it. */
   readonly trigger: (
     event: DispatchEvent,
@@ -87,6 +92,10 @@ export interface IntakeRun {
    */
   readonly readOnlyScan?: boolean;
 }
+
+/** The schema the inputs a caller names must pass: the run's `callerInput`, else its `input`. */
+export const callerInputOf = (run: IntakeRun): Schema.Decoder<unknown> =>
+  run.callerInput ?? run.input;
 
 /** The run catalogue: a run by name, or undefined when the deployment serves no such run. */
 export type RunCatalog = (name: string) => IntakeRun | undefined;

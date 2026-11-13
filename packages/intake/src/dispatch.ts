@@ -7,7 +7,7 @@ import { Effect, Match, Option, Schema } from "effect";
 import { ClassResolver, IntakeConfig, intakeError } from "./config.ts";
 import type { Caller } from "./event.ts";
 import { readManifest, requiredCheckFact, viewOf } from "./triggers.ts";
-import { checkName, type IntakeRun } from "./runs.ts";
+import { callerInputOf, checkName, type IntakeRun } from "./runs.ts";
 import { submission, submit } from "./submit.ts";
 
 /** The `signals/v1` caps (FD-INT-049, FD-IFC-030). */
@@ -214,7 +214,8 @@ export interface DispatchAdmitted {
  * dispatch, then one admission request. Every refusal carries a code of the error-model table (FD-IFC-009). A
  * dispatch of a read-only scan run carries an `Idempotency-Key`, or answers 400 `invalid_idempotency_key` before any
  * read (FD-IFC-092), over the HTTP route and the MCP `dispatch` tool alike (FD-IFC-074). A scoped dispatcher's
- * `classCeiling` reaches `resolveClass` (FD-IFC-091).
+ * `classCeiling` reaches `resolveClass` (FD-IFC-091). The inputs pass the run's caller schema, which refuses a
+ * `release-notes` publish with 400 `invalid_inputs` (FD-INT-066).
  */
 export const admitDispatch = (d: AuthenticatedDispatch) =>
   Effect.gen(function* () {
@@ -232,7 +233,9 @@ export const admitDispatch = (d: AuthenticatedDispatch) =>
         ),
       );
     const repo = d.repository;
-    const decoded = yield* decodeOr(run.input, "invalid_inputs")(d.inputs ?? {});
+    // A caller's inputs pass the run's caller schema, so a `release-notes` publish never starts from a dispatch or an
+    // MCP call: only a release approval builds one (FD-INT-066).
+    const decoded = yield* decodeOr(callerInputOf(run), "invalid_inputs")(d.inputs ?? {});
     yield* checkSignals(d.signals, d.inputs);
 
     // The App's own installation for the repository decides (FD-INT-042).

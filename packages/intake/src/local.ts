@@ -6,6 +6,7 @@ import { Effect, Schema } from "effect";
 import { IntakeConfig, type Admission, type ClassResolver } from "./config.ts";
 import type { HeldCheckReporter } from "./ports.ts";
 import type { IntakeStore, ShedRecorder } from "./store.ts";
+import { callerInputOf } from "./runs.ts";
 import { submission, submit } from "./submit.ts";
 
 export const LOCAL_ONLY = "local-only";
@@ -44,7 +45,8 @@ export const submitLocal = (
     // A dispatch-only run starts from a dispatch, never from a local submission (FD-GATE-111).
     if (run === undefined || run.dispatchOnly === true) return rejected as LocalSubmitAnswer;
     const local = yield* Schema.decodeUnknownEffect(LocalSubmitBody)(body);
-    const inputs = yield* Schema.decodeUnknownEffect(run.input)(local.inputs);
+    // A local submit never names a `release-notes` publish, which only a release approval starts (FD-INT-066).
+    const inputs = yield* Schema.decodeUnknownEffect(callerInputOf(run))(local.inputs);
     const admitted = yield* submit(
       submission({
         run,

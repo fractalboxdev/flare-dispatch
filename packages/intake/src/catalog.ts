@@ -8,6 +8,7 @@ import {
   PrReviewInput,
   PrReviewParams,
   prReviewRequest,
+  ReleaseNotesRequestInput,
   withRequiredCheck,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import {
@@ -217,6 +218,19 @@ const serialKeyOf = (entry: CatalogEntry): Pick<IntakeRun, "serialKey"> =>
       }
     : {};
 
+/**
+ * The runs whose input holds a field only intake builds, with the schema a caller's inputs pass instead: a
+ * `release-notes` publish starts from a release approval alone (FD-AGT-085 to FD-AGT-087, FD-INT-066).
+ */
+const CALLER_INPUTS: Readonly<Record<string, Schema.Decoder<unknown>>> = {
+  "release-notes": ReleaseNotesRequestInput,
+};
+
+const callerInputOfEntry = (entry: CatalogEntry): Pick<IntakeRun, "callerInput"> =>
+  Object.hasOwn(CALLER_INPUTS, entry.spec.name)
+    ? { callerInput: CALLER_INPUTS[entry.spec.name] as Schema.Decoder<unknown> }
+    : {};
+
 const requiredCheckOf = (entry: CatalogEntry): Pick<IntakeRun, "requiredCheck" | "pullNumber"> => {
   const recipe = manifestRecipeOf(entry);
   return {
@@ -234,6 +248,7 @@ export const catalogRuns =
         name: entry.spec.name,
         params: manifestRecipeOf(entry)?.params ?? Schema.Unknown,
         input: entry.input,
+        ...callerInputOfEntry(entry),
         trigger: requestDecoderOf(entry),
         defaultClass: entry.spec.limits.qosClass,
         qosCeiling: entry.spec.limits.qosCeiling,

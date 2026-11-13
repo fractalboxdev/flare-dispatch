@@ -467,7 +467,7 @@ describe("release-notes: the publish execution", () => {
     ).then((result) => ({ result, rec }));
   };
 
-  it("[FD-AGT-088] returns one release.draft with the approved notes at the approved commit, then one release.publish for that tag", async () => {
+  it("[FD-AGT-088] [FD-AGT-084] returns one release.draft with the approved notes at the approved commit, one release.publish for that tag, then one pr.close for the release pull request", async () => {
     const { result, rec } = await runPublish({ shell: notesShell() });
     expect(result).toEqual({ _tag: "success" });
     expect(rec.intents).toEqual([
@@ -477,6 +477,13 @@ describe("release-notes: the publish execution", () => {
         payload: { tag: "v1.4.0", target: COMMIT, name: "v1.4.0", body: NOTES },
       },
       { step: "release-publish", kind: "release.publish", payload: { tag: "v1.4.0" } },
+      // A label approval leaves the release pull request open; closing it by number lets the next proposal open
+      // its own pull request rather than reuse this one's creation time and dedup key.
+      {
+        step: "release-close",
+        kind: "pr.close",
+        payload: { repo, branch: RELEASE_NOTES_BRANCH, base: "main", pull: 40 },
+      },
     ]);
     // The notes come from the release pull request's approved head, fetched because the checkout lacked it.
     const fetchAt = rec.commands.indexOf(`git fetch -q origin ${NOTES_COMMIT}`);
@@ -495,7 +502,11 @@ describe("release-notes: the publish execution", () => {
     const { result, rec } = await runPublish({ shell: notesShell({ present: true }) });
     expect(result).toEqual({ _tag: "success" });
     expect(rec.commands.some((c) => c.startsWith("git fetch"))).toBe(false);
-    expect(rec.intents.map((i) => i.kind)).toEqual(["release.draft", "release.publish"]);
+    expect(rec.intents.map((i) => i.kind)).toEqual([
+      "release.draft",
+      "release.publish",
+      "pr.close",
+    ]);
   });
 
   it("[FD-AGT-088] a notes read that fails returns no intent and concludes failure", async () => {

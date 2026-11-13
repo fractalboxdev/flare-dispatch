@@ -168,14 +168,20 @@ export const AGENTIC_CATALOG: Readonly<Record<string, AgenticCatalogEntry>> = {
     triggers: ["cron"],
   },
   "release-notes": {
-    spec: spec("release-notes", "batch", 1800, ["pr.propose", "release.draft", "release.publish"], {
-      schedules: [{ cron: "0 9 * * 1" }],
-    }),
+    spec: spec(
+      "release-notes",
+      "batch",
+      1800,
+      ["pr.propose", "pr.close", "release.draft", "release.publish"],
+      {
+        schedules: [{ cron: "0 9 * * 1" }],
+      },
+    ),
     declaration: {
       callSites: [{ name: "notes", tier: "judgment" }],
       needsModel: true,
       dataClasses: classes(true, false, false),
-      intentKinds: ["pr.propose", "release.draft", "release.publish"],
+      intentKinds: ["pr.propose", "pr.close", "release.draft", "release.publish"],
       writeback: writeback("flare-dispatch/release", [
         "CHANGELOG.md",
         ".flare-dispatch/release/**",
