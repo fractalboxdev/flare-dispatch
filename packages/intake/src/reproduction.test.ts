@@ -61,7 +61,7 @@ const submitReproduction = (h: Harness, over: Partial<ReleaseExecution> = {}) =>
   );
 
 describe("the reproduction submitter", () => {
-  it("[FD-PROV-064] a release rule with reproduce: true creates one interactive reproduction execution of the release's run, commit and inputs under the reproduction constraint, off cloudflare, aws and gha", async () => {
+  it("a release rule with reproduce: true creates one interactive reproduction execution of the release's run, commit and inputs under the reproduction constraint, off cloudflare, aws and gha", async () => {
     const profile = buildProfile("production", 4);
     const h = await harness({ settings: { profile } });
     await h.run(IntakeStore.use((s) => s.put(releaseRecord)));
@@ -110,7 +110,7 @@ describe("the reproduction submitter", () => {
     ]);
   });
 
-  it("[FD-PROV-064] the reproduction of a cloud-pinned release run is placed on a device: the reproduction constraint supersedes the run's cloud-pinned", async () => {
+  it("the reproduction of a cloud-pinned release run is placed on a device: the reproduction constraint supersedes the run's cloud-pinned", async () => {
     const profile = buildProfile("production", 4);
     const production = catalogRuns("production");
     const h = await harness({

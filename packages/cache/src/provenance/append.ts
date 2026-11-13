@@ -404,6 +404,43 @@ export const drainLogAppends = (now: number) =>
     return { attempted: due.length, nextDueAt: yield* store.nextDue() };
   });
 
+/** The control plane's tick period: its one-minute cron drains the log-append intents (FD-PROV-041). */
+export const TICK_PERIOD_MS = 60_000;
+/** How long before the next tick a tick stops retrying, so two ticks never drain at once. */
+export const TICK_MARGIN_MS = 5_000;
+/** The most drains one tick runs, a bound on a store whose next due time does not advance. */
+const TICK_DRAINS = 32;
+
+/** The time a tick's drain reads and waits on: the Effect clock in the Worker, a simulated one in the sim. */
+export interface DrainClock {
+  readonly now: Effect.Effect<number>;
+  readonly sleep: (ms: number) => Effect.Effect<void>;
+}
+
+/**
+ * One tick's drain: every intent due at `tickAt`, then each retry that falls due before the next tick less
+ * `TICK_MARGIN_MS`, at its due time. A retry due later waits for a later tick. So on a one-minute cron the 5 s, 10 s
+ * and 20 s delays hold exactly, and a longer delay holds to within one tick (FD-PROV-041).
+ */
+export const drainLogAppendsUntilNextTick = (tickAt: number, clock: DrainClock) =>
+  Effect.gen(function* () {
+    let drained = yield* drainLogAppends(tickAt);
+    let attempted = drained.attempted;
+    const stopAt = tickAt + TICK_PERIOD_MS - TICK_MARGIN_MS;
+    for (
+      let n = 1;
+      n < TICK_DRAINS && drained.nextDueAt !== null && drained.nextDueAt < stopAt;
+      n++
+    ) {
+      const dueAt = drained.nextDueAt;
+      const now = yield* clock.now;
+      if (dueAt > now) yield* clock.sleep(dueAt - now);
+      drained = yield* drainLogAppends(Math.max(dueAt, yield* clock.now));
+      attempted += drained.attempted;
+    }
+    return { attempted, nextDueAt: drained.nextDueAt };
+  });
+
 /** A logged statement's time: its log entry's integrated time (FD-PROV-040); none while its append is pending. */
 export const statementTime = (intent: LogAppendIntent): Option.Option<number> =>
   LogAppendStatus.$match(intent.status, {

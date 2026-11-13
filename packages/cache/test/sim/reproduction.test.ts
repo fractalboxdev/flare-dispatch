@@ -6,7 +6,7 @@ import { PR_SEEDS, readKeptSeeds, seedsOf } from "../../../ops/src/verification/
 import { simulateReproductionDeadline } from "./reproduction.sim.ts";
 
 describe("simulation: a release awaiting its reproduction", () => {
-  it("[FD-PROV-068] a release with no reproduction statement logged by its deadline_at concludes failure with `provenance: reproduction unavailable`", async () => {
+  it("a release with no reproduction statement logged by its deadline_at concludes failure with `provenance: reproduction unavailable`", async () => {
     const messages: string[] = [];
     const reached: Record<string, number> = {};
     for (const seed of seedsOf("reproduction-deadline", PR_SEEDS, readKeptSeeds())) {

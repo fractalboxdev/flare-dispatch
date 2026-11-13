@@ -10,8 +10,11 @@ import {
   CacheBucket,
   CloudAttestation,
   CloudStatementFailed,
+  countersignAndAppend,
+  DsseEnvelope,
   d1LogAppendStore,
-  drainLogAppends,
+  drainLogAppendsUntilNextTick,
+  type DrainClock,
   enqueueLogAppend,
   LogAppendFailed,
   LogAppendStore,
@@ -21,6 +24,8 @@ import {
   publicJwkOf,
   rekorAppend,
   RepositoryVisibility,
+  StatementBinding,
+  StatementRecords,
   SubjectRetention,
   TransparencyLogs,
   VisibilityUnreadable,
@@ -36,7 +41,7 @@ import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { d1IntakeStore, IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
 import type { TickStep } from "@fractalboxdev/flare-dispatch-ops";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
-import { type Context, Effect, Layer, Option, Schema } from "effect";
+import { Clock, type Context, Effect, Layer, Option, Schema } from "effect";
 import { migrateCache } from "./cache-retention.ts";
 import type { CacheEnv } from "./cache.ts";
 import { isolateServices } from "./composition.ts";
@@ -44,6 +49,7 @@ import { apiEnvOf, type ControlPlaneEnv, statementRetentionDaysOf } from "./conf
 import { repositoryConfidentiality } from "./dev-repository.ts";
 import { boundFetch, statementLoggedLayer } from "./github.ts";
 import { imageDigestOf, issuedLeaseNonce } from "./lease.ts";
+import { d1StatementRecords } from "./provenance-records.ts";
 
 /**
  * Why the control plane signs no statement as the cloud builder for an accepted result (FD-PROV-009):
@@ -388,6 +394,132 @@ export const writeAcceptedCloudStatement = (
     return { envelopeDigest: intent.digest, inserted: true } satisfies CloudStatementWritten;
   });
 
+/** One row per (execution, epoch) whose device statement the control plane countersigned and queued for the log. */
+export const DEVICE_COUNTERSIGN_SCHEMA = [
+  `create table if not exists fd_device_countersigns (
+     execution_id text not null,
+     epoch integer not null,
+     envelope_digest text not null,
+     written_at integer not null,
+     primary key (execution_id, epoch))`,
+];
+
+/** What the device-statement step recorded: the log-append intent's envelope digest, or why it recorded none. */
+export type DeviceStatementWritten =
+  | { readonly envelopeDigest: string; readonly inserted: boolean }
+  | { readonly skipped: string };
+
+/**
+ * The control plane's step after the placement accepted a device executor's result (FD-PROV-032, FD-PROV-034): the
+ * statement the result carries is countersigned with the active provenance key, whose use the key history records
+ * first, and its log-append intent is recorded with the device's registered key and the provenance key as verifiers.
+ * It runs once per execution and epoch. The placement must have accepted the result at that epoch from the device that
+ * sent it, and one of the statement's signatures must name that device's registered, unrevoked key; mameko's result
+ * acceptance check verified the signature itself before the result was accepted.
+ */
+export const writeAcceptedDeviceStatement = (
+  env: CloudBuilderEnv,
+  accepted: AcceptedResult & { readonly attestation: unknown },
+  now: number,
+) =>
+  Effect.gen(function* () {
+    if (accepted.attestation === undefined)
+      return { skipped: "the result carries no statement" } as const;
+    const key = parseProvenanceKey(apiEnvOf(env as unknown as ControlPlaneEnv).PROVENANCE_KEY);
+    if (key === undefined)
+      return yield* new CloudBuilderUnconfigured({ missing: "PROVENANCE_KEY" });
+    const db = env.DB;
+    const query = <Row>(sql: string, ...values: unknown[]) =>
+      Effect.promise(async () => {
+        await migrateCache(db);
+        for (const ddl of DEVICE_COUNTERSIGN_SCHEMA) await db.prepare(ddl).run();
+        const { results } = await db
+          .prepare(sql)
+          .bind(...values)
+          .all();
+        return results as readonly Row[];
+      });
+    const [placement] = yield* query<{ readonly scope_id: string }>(
+      `select e.scope_id from placements p join executions e on e.id = p.execution_id
+       where p.execution_id = ? and p.state = 'accepted' and p.accepted_epoch = ? and p.epoch = ?
+         and p.executor_id = ? and p.accepted_kind = 'device'`,
+      accepted.executionId,
+      accepted.epoch,
+      accepted.epoch,
+      accepted.executorId,
+    );
+    if (placement === undefined)
+      return {
+        skipped: "the placement did not accept this device's result at this epoch",
+      } as const;
+    const envelope = yield* Schema.decodeUnknownEffect(DsseEnvelope)(accepted.attestation).pipe(
+      Effect.mapError(
+        (e) => new CloudStatementFailed({ reason: "invalid-input", detail: e.message }),
+      ),
+    );
+    const records = yield* StatementRecords.pipe(Effect.provide(d1StatementRecords(db)));
+    let deviceKey: JsonWebKey | undefined;
+    for (const signature of envelope.signatures) {
+      const record = yield* records.deviceKey(signature.keyid);
+      if (
+        record !== null &&
+        record.executorId === accepted.executorId &&
+        record.revokedAt === null
+      ) {
+        deviceKey = record.publicKey;
+        break;
+      }
+    }
+    if (deviceKey === undefined)
+      return { skipped: "no signature names the device's registered key" } as const;
+    const claimed = yield* query(
+      `insert into fd_device_countersigns (execution_id, epoch, envelope_digest, written_at) values (?, ?, '', ?)
+       on conflict (execution_id, epoch) do nothing returning execution_id`,
+      accepted.executionId,
+      accepted.epoch,
+      now,
+    );
+    if (claimed.length === 0) {
+      const [signed] = yield* query<{ readonly envelope_digest: string }>(
+        "select envelope_digest from fd_device_countersigns where execution_id = ? and epoch = ?",
+        accepted.executionId,
+        accepted.epoch,
+      );
+      return { envelopeDigest: signed?.envelope_digest ?? "", inserted: false } as const;
+    }
+    const { intent } = yield* Effect.gen(function* () {
+      yield* useKey("provenance", key, now).pipe(
+        Effect.provideService(KeyHistoryStore, d1KeyHistoryStore(db as unknown as D1Database)),
+      );
+      return yield* countersignAndAppend(
+        envelope,
+        StatementBinding.ExecutionLease({
+          executionId: accepted.executionId,
+          epoch: accepted.epoch,
+        }),
+        key,
+        { executionId: accepted.executionId, repository: placement.scope_id, deviceKey },
+        now,
+      ).pipe(Effect.provideService(LogAppendStore, d1LogAppendStore(db as unknown as D1Database)));
+    }).pipe(
+      Effect.onError(() =>
+        query(
+          "delete from fd_device_countersigns where execution_id = ? and epoch = ? and envelope_digest = ''",
+          accepted.executionId,
+          accepted.epoch,
+        ).pipe(Effect.catchCause(() => Effect.void)),
+      ),
+    );
+    const digest = intent?.digest ?? "";
+    yield* query(
+      "update fd_device_countersigns set envelope_digest = ? where execution_id = ? and epoch = ?",
+      digest,
+      accepted.executionId,
+      accepted.epoch,
+    );
+    return { envelopeDigest: digest, inserted: true } as const;
+  });
+
 /** The repository visibility the log choice reads, over the isolate's `GithubRead`; a failed read is unreadable. */
 export const repositoryVisibilityLayer = Layer.effect(
   RepositoryVisibility,
@@ -422,8 +554,9 @@ export const resultSubmissionOf = (frame: string) =>
 
 /**
  * The executor channel's step after it handled an `exec.result` from `executorId`: the cloud-builder statement of the
- * result when the placement accepted it from that cloud executor. A device executor's result is the device's own
- * statement to sign, and is passed over; every other refusal or failure is logged, and the result stays accepted.
+ * result when the placement accepted it from that cloud executor, and the countersignature and log-append intent of the
+ * device's own statement when it accepted it from a device executor. Every refusal or failure is logged, and the result
+ * stays accepted.
  */
 export const cloudStatementOnResult = (
   env: CloudBuilderEnv,
@@ -444,7 +577,15 @@ export const cloudStatementOnResult = (
         ),
         Effect.catchTag("CloudBuilderRefused", (e) =>
           e.reason === "device-executor"
-            ? Effect.void
+            ? writeAcceptedDeviceStatement(env, { ...submission, executorId }, now).pipe(
+                Effect.flatMap((written) =>
+                  Effect.log("device statement countersigned", {
+                    executionId: submission.executionId,
+                    epoch: submission.epoch,
+                    ...written,
+                  }),
+                ),
+              )
             : Effect.logWarning("no cloud-builder statement for the result", {
                 executionId: e.executionId,
                 epoch: e.epoch,
@@ -525,11 +666,20 @@ export const logAppendLayer = (env: ControlPlaneEnv) => {
   );
 };
 
-/** The tick's drain of every log-append intent due now (FD-PROV-041), into Rekor or the private log. */
+/** The Worker's clock for a tick's in-tick retries. */
+const workerClock: DrainClock = {
+  now: Clock.currentTimeMillis,
+  sleep: (ms) => Effect.sleep(ms),
+};
+
+/**
+ * The tick's drain of every log-append intent due now into Rekor or the private log, and of each retry that falls due
+ * before the next tick, at its due time (FD-PROV-041).
+ */
 export const logAppendStep = (env: ControlPlaneEnv, now: number): TickStep => ({
   step: "log-appends",
   effect: Effect.promise(() => migrateCache(env.DB)).pipe(
-    Effect.andThen(drainLogAppends(now)),
+    Effect.andThen(drainLogAppendsUntilNextTick(now, workerClock)),
     Effect.provide(logAppendLayer(env)),
   ),
 });

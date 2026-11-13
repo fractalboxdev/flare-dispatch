@@ -187,7 +187,7 @@ const row = (executionId: string | null, kind = "check.conclude"): IntentRow => 
 });
 
 describe("reproduction", () => {
-  it("[FD-PROV-064] a reproduce: true rule yields an interactive reproduction request naming the release's recipe, commit and digests, and the reproduction constraint turns caches off", async () => {
+  it("a reproduce: true rule yields an interactive reproduction request naming the release's recipe, commit and digests, and the reproduction constraint turns caches off", async () => {
     expect(reproductionRequestFor({ reproduce: true }, release)).toEqual({
       reproduces: RELEASE_ID,
       repository: "acme/widgets",
@@ -227,7 +227,7 @@ describe("reproduction", () => {
     expect(fields.upload_grant.compile_cache).toBeNull();
   });
 
-  it("[FD-PROV-064] startReproduction submits one reproduction request for a reproduce: true rule and none otherwise", async () => {
+  it("startReproduction submits one reproduction request for a reproduce: true rule and none otherwise", async () => {
     const submitted: ReproductionRequest[] = [];
     const submitter = Layer.succeed(ReproductionSubmitter, {
       submit: (request) =>
@@ -287,7 +287,7 @@ describe("reproduction", () => {
     expect(applied).toHaveLength(2);
   });
 
-  it("[FD-PROV-066] equal subject digests yield a provenance-signed reproduction record naming both envelope digests, appended to the log once", async () => {
+  it("equal subject digests yield a provenance-signed reproduction record naming both envelope digests, appended to the log once", async () => {
     const { provenance, cloud, reproduction } = await fixture();
     const repro = await reproduction([SBOM, ARCHIVE]);
     const s = await settle([cloud, repro], provenance);
@@ -350,7 +350,7 @@ describe("reproduction", () => {
     expect(t.store.intents.size).toBe(2);
   });
 
-  it("[FD-PROV-067] differing subject digests refuse the publish with `provenance: reproduction mismatch` and raise a page alarm", async () => {
+  it("differing subject digests refuse the publish with `provenance: reproduction mismatch` and raise a page alarm", async () => {
     const { provenance, cloud, reproduction } = await fixture();
     for (const digests of [[ARCHIVE, sha("7")], [ARCHIVE], [ARCHIVE, SBOM, sha("7")]]) {
       const repro = await reproduction(digests);
