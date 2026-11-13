@@ -41,6 +41,7 @@ import {
   openL1,
   type L1Disk,
 } from "@fractalboxdev/flare-dispatch-cache/device";
+import { profileDocument } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect, Exit, Layer } from "effect";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
@@ -266,6 +267,27 @@ describe("the lease the composed control plane grants", () => {
       expect(prefixes.map(([k]) => k).sort()).toEqual(["artifact_prefix", "cache_prefix", "log_prefix"]);
       for (const [, prefix] of prefixes)
         expect(String(prefix)).toMatch(/^(cache|artifacts|logs)\//);
+    },
+    60_000,
+  );
+
+  it(
+    "[FD-PROF-062] the profile names cacheNamespaces as the cache_namespaces binding, and the claim grants the lease its answer for the claiming executor's kind",
+    async () => {
+      expect((profileDocument.document as { cache_namespaces?: unknown }).cache_namespaces).toBe(
+        "cacheNamespaces",
+      );
+      const lease = await pullRequestLease();
+      const execution = {
+        repo: REPO,
+        executionId: lease.execution_id,
+        class: "batch",
+        constraints: [],
+        trigger: { _tag: "PullRequest", number: 41 },
+      } as const;
+      // mameko's claim writes the binding's answer for the device that claimed, which differs from a cloud executor's.
+      expect(lease.cache_namespaces).toEqual(cacheNamespaces(execution, "device"));
+      expect(cacheNamespaces(execution, "cloudflare")).not.toEqual(lease.cache_namespaces);
     },
     60_000,
   );
