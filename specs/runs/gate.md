@@ -230,6 +230,8 @@ A run takes these steps, and every scanner and baseline check runs even after an
 5. Run each scanner on its scope, then each baseline check.
 6. Conclude from the scan results.
 
+A `security-rescan` dispatch scans the commit its authorization covers. Intake sets the input's repository URL, commit, ref and `<owner>/<repo>` from the dispatch's repository and the commit intake pins, and refuses with 400 `invalid_inputs` an input that names another. The scan reads its scanner configurations from the verified bundle: each `--config <bundle file>` is a read-only file the recipe writes from `gitleaks.config` or `zizmor.config`, outside the checkout.
+
 ```mermaid
 flowchart TB
   accTitle: From a pull request to the security-gate verdict
@@ -460,4 +462,5 @@ sequenceDiagram
 - TODO(maintainer): decide whether a finding that already exists at the base commit, in a lockfile or workflow the range changes, concludes `failure`, or whether the recipe subtracts the base commit's fingerprints. FD-GATE-091 concludes `failure` until this is decided.
 - TODO(maintainer): set the default `scan.advisoryEcosystems` from measured archive sizes; the npm archive is 209 MiB.
 - TODO(maintainer): decide how a `security-gate` or `security-rescan` job sandbox obtains the head and base history under FD-GATE-110: the control plane stages it on a read-only path (for example a git bundle in CAS, as FD-GATE-104 places the scan bundle), or the spec names the repository's git host as the one allowed egress. The scan body fetches from the repository URL until this is decided.
+- TODO(maintainer): no executor serves `security-gate` or `security-rescan` yet. Both are cloud-only, and the Container pools that host the cloud executor wait on host-cloudflare's pool controller and Container launcher ([MAMEKO-HOST-052](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/hosts.md)), which the pinned mameko does not export. Until a cloud runner entry supplies the scan Layers (`ScanSettings` from the rendered `SCAN_BUNDLE_DIGEST` and `ADVISORY_MAX_AGE_HOURS`, `nodeScanImage`, `bucketScanBundleStore` over `CACHE`, and an `AdvisorySnapshots` reader), a lease of either run answers `RunNotInCatalog`, so a repository that enrolls `securityGate` fails its required check on every pull request. The same entry places the advisory snapshot for FD-GATE-104.
 - TODO(maintainer): decide whether `worker-deploy` waits for every required check on its commit to conclude `success` before the deploy command starts.

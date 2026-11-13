@@ -76,6 +76,7 @@ export const fakeExec = (
         : Effect.succeed(encoder.encode(files[key]!));
     },
     writeFile: (path) => Effect.fail(new WorkspaceWriteFailed({ path, detail: "read-only" })),
+    createReadOnly: (path) => Effect.fail(new WorkspaceWriteFailed({ path, detail: "read-only" })),
   });
   return { layer, ran, ranArgv, workspaces: () => workspaces };
 };

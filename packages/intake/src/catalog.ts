@@ -12,6 +12,7 @@ import {
   withRequiredCheck,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import {
+  bindScanCommit,
   CheckStep,
   DeploySmokeEntrySchema,
   deploymentStatusDecoder,
@@ -66,6 +67,7 @@ interface ManifestRecipe {
   readonly dispatchOnly?: true;
   /** The run reports under `flare-dispatch/<run>` alone, so its manifest entry names no label. */
   readonly labelless?: true;
+  readonly bindCommit?: IntakeRun["bindCommit"];
 }
 
 const recipe = <A>(
@@ -184,7 +186,14 @@ const RUN_RECIPES: Readonly<Record<string, ManifestRecipe>> = {
     ...gateRecipe(SecurityGateEntrySchema, () => securityRescanDecoder()),
     dispatchOnly: true,
     labelless: true,
+    bindCommit: bindScanCommit,
   },
+};
+
+/** A run's commit binding, where its recipe takes the commit from the dispatch (FD-GATE-112). */
+const bindCommitOf = (entry: CatalogEntry): Pick<IntakeRun, "bindCommit"> => {
+  const bind = manifestRecipeOf(entry)?.bindCommit;
+  return bind === undefined ? {} : { bindCommit: bind };
 };
 
 const manifestRecipeOf = (entry: CatalogEntry): ManifestRecipe | undefined => {
@@ -263,6 +272,7 @@ export const catalogRuns =
         ...requiredCheckOf(entry),
         ...(manifestRecipeOf(entry)?.dispatchOnly === true ? { dispatchOnly: true } : {}),
         ...(manifestRecipeOf(entry)?.labelless === true ? { labelless: true } : {}),
+        ...bindCommitOf(entry),
         ...(isReadOnlyScanRun(entry.spec.name, entry) ? { readOnlyScan: true } : {}),
       })),
       Match.orElse(() => undefined),

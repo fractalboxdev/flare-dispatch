@@ -1,6 +1,7 @@
 // The admission of an authenticated dispatch: the run, the input schema, the signals caps, the installation, the
 // manifest and the commit, then one admission request (specs/intake.md § Actions dispatch). The HTTP API's declared
 // dispatch route authenticates the caller and decodes the body (specs/interfaces.md FD-IFC-024 to FD-IFC-036).
+import type { DispatchCommit } from "@fractalboxdev/flare-dispatch-catalog";
 import { GithubRead, type PullSummary } from "@fractalboxdev/flare-dispatch-github";
 import { classNamed } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect, Match, Option, Schema } from "effect";
@@ -55,6 +56,30 @@ const decodeOr =
     Schema.decodeUnknownEffect(schema)(value).pipe(
       Effect.mapError((e) => intakeError(400, code, e.message)),
     );
+
+/**
+ * The inputs of a run that takes its commit from the dispatch, decoded against its input schema: a commit field naming
+ * another repository, commit or ref than the dispatch's answers 400 `invalid_inputs` (FD-GATE-112).
+ */
+const boundInputs = (
+  run: IntakeRun,
+  bind: NonNullable<IntakeRun["bindCommit"]>,
+  inputs: unknown,
+  commit: DispatchCommit,
+) =>
+  Match.value(bind(inputs, commit)).pipe(
+    Match.tagsExhaustive({
+      Bound: ({ inputs }) => decodeOr(run.input, "invalid_inputs")(inputs),
+      Mismatch: ({ field }) =>
+        Effect.fail(
+          intakeError(
+            400,
+            "invalid_inputs",
+            `${run.name} takes its commit from the dispatch; inputs.${field} names another`,
+          ),
+        ),
+    }),
+  );
 
 const branchOf = (ref: string) =>
   ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
@@ -233,9 +258,13 @@ export const admitDispatch = (d: AuthenticatedDispatch) =>
         ),
       );
     const repo = d.repository;
-    // A caller's inputs pass the run's caller schema, so a `release-notes` publish never starts from a dispatch or an
-    // MCP call: only a release approval builds one (FD-INT-066).
-    const decoded = yield* decodeOr(callerInputOf(run), "invalid_inputs")(d.inputs ?? {});
+    // A run that binds its commit decodes once intake has pinned the commit; every other run decodes before any read,
+    // against the run's caller schema, so a `release-notes` publish never starts from a dispatch or an MCP call: only a
+    // release approval builds one (FD-INT-066).
+    const early =
+      run.bindCommit === undefined
+        ? yield* decodeOr(callerInputOf(run), "invalid_inputs")(d.inputs ?? {})
+        : undefined;
     yield* checkSignals(d.signals, d.inputs);
 
     // The App's own installation for the repository decides (FD-INT-042).
@@ -260,6 +289,10 @@ export const admitDispatch = (d: AuthenticatedDispatch) =>
           ),
         );
     }
+    const decoded =
+      run.bindCommit === undefined
+        ? early
+        : yield* boundInputs(run, run.bindCommit, d.inputs ?? {}, { repository: repo, sha, ref });
     const classInput =
       d.trigger === "mcp"
         ? yield* lowerOnlyClass({

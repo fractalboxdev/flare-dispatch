@@ -81,6 +81,11 @@ export class GateExec extends Context.Service<
     readonly readFile: (path: string) => Effect.Effect<Uint8Array, WorkspaceReadFailed>;
     /** Replaces an existing file's bytes and keeps its mode. */
     readonly writeFile: (path: string, bytes: Uint8Array) => Effect.Effect<void, WorkspaceWriteFailed>;
+    /** Creates a file that does not exist yet, readable by every user and writable by none (mode 0444). */
+    readonly createReadOnly: (
+      path: string,
+      bytes: Uint8Array,
+    ) => Effect.Effect<void, WorkspaceWriteFailed>;
   }
 >()("@fractalboxdev/flare-dispatch-catalog/GateExec") {}
 
@@ -213,6 +218,11 @@ export const processGateExec: Layer.Layer<GateExec> = Layer.succeed(GateExec, {
   writeFile: (path, bytes) =>
     Effect.tryPromise({
       try: () => writeFile(path, bytes),
+      catch: (cause) => new WorkspaceWriteFailed({ path, detail: String(cause) }),
+    }),
+  createReadOnly: (path, bytes) =>
+    Effect.tryPromise({
+      try: () => writeFile(path, bytes, { mode: 0o444, flag: "wx" }),
       catch: (cause) => new WorkspaceWriteFailed({ path, detail: String(cause) }),
     }),
 });

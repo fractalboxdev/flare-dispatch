@@ -276,10 +276,12 @@ export type RenderValues = Omit<
   /** `records.url`, empty where the overlay sets none, so the control plane declares no record kind. */
   readonly records: { readonly url: string };
   /**
-   * `advisoryEcosystems`, none where the overlay sets none, so `advisory-refresh` stores no archive, and
+   * `bundleDigest`, empty where the overlay pins none, so a scan records `config: scan bundle not pinned`
+   * (FD-GATE-101); `advisoryEcosystems`, none where the overlay sets none, so `advisory-refresh` stores no archive; and
    * `advisoryMaxAgeHours` at its 48 h default where the overlay sets none (FD-OPS-103).
    */
   readonly scan: NonNullable<OverlayValues["scan"]> & {
+    readonly bundleDigest: string;
     readonly advisoryEcosystems: readonly string[];
     readonly advisoryMaxAgeHours: number;
   };
@@ -309,7 +311,8 @@ export type RenderValues = Omit<
  * its policy rules, dispatchers and containment identities, an empty set where it holds none, its Actions OIDC audience, empty where it sets
  * none, its `dispatch.scoped` entries, none where it sets none (FD-IFC-089), its intake webhook events, `null` where it sets none, so the rendered Worker tells an absent list (every
  * supported event) from an empty one (none) (FD-INT-027), its `attestation_max_age` in days, at its default where
- * it sets none (FD-PROV-016), its advisory ecosystems, none where it sets none (FD-OPS-100), its advisory snapshot
+ * it sets none (FD-PROV-016), its scan bundle pin, empty where it pins none (FD-GATE-101), its advisory ecosystems,
+ * none where it sets none (FD-OPS-100), its advisory snapshot
  * age, at its default where it sets none (FD-OPS-103), and its `records.url`, empty where it sets none (FD-GH-093).
  */
 export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
@@ -326,6 +329,7 @@ export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   records: { url: overlay.records?.url ?? "" },
   scan: {
     ...overlay.scan,
+    bundleDigest: overlay.scan?.bundleDigest ?? "",
     advisoryEcosystems: overlay.scan?.advisoryEcosystems ?? [],
     advisoryMaxAgeHours: overlay.scan?.advisoryMaxAgeHours ?? ADVISORY_MAX_AGE_DEFAULT_HOURS,
   },

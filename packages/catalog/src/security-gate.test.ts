@@ -2,9 +2,17 @@
 // schemas, the request decoders, and each run body over a real git remote. Git runs as the recipe runs it, through
 // `processGateExec`; the scanners and baseline checks answer from a script, so each scan result is the test's choice.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { Effect, Layer, Option, Schema, SchemaAST } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CommandExit, GateExec, processGateExec, type ArgvOptions } from "./command.ts";
@@ -337,6 +345,11 @@ describe("the security gate run bodies over a real git remote", () => {
     put("release.txt", "release\n");
     commit("release");
     git("checkout", "-q", "main");
+    // A branch that changes a workflow, so zizmor has input.
+    git("checkout", "-q", "-b", "workflows", sha["branchPoint"]!);
+    put(".github/workflows/ci.yml", "on: push\njobs: {}\n");
+    commit("workflows");
+    git("checkout", "-q", "main");
   });
 
   afterAll(() => {
@@ -374,6 +387,8 @@ describe("the security gate run bodies over a real git remote", () => {
     readonly snapshots?: ReadonlyMap<string, StoredSnapshot>;
     /** Each tool's exit code by its argv's first element; 0 where unnamed. */
     readonly exits?: Readonly<Record<string, number>>;
+    /** Called with each argv subprocess as it starts, while the scan's files are in place. */
+    readonly onArgv?: (options: ArgvOptions) => void;
   }
 
   /** Runs `body` with git as the recipe runs it and the scanners answering from `world.exits`. */
@@ -391,6 +406,7 @@ describe("the security gate run bodies over a real git remote", () => {
           runArgv: (options: ArgvOptions) =>
             Effect.sync(() => {
               ran.push(options);
+              world.onArgv?.(options);
               return {
                 exit: CommandExit.Exited({ code: world.exits?.[options.argv[0]] ?? 0 }),
                 output: new Uint8Array(),
@@ -406,11 +422,7 @@ describe("the security gate run bodies over a real git remote", () => {
     const settings = Layer.succeed(ScanSettings, {
       bundleDigest: world.pin === null ? undefined : (world.pin ?? PIN.digest),
       advisoryMaxAgeHours: 24,
-      files: {
-        gitleaksConfig: "/opt/fd-scan/bundle/gitleaks.toml",
-        zizmorConfig: "/opt/fd-scan/bundle/zizmor.yml",
-        advisoryDir: "/opt/fd-scan/advisories",
-      },
+      advisoryDir: "/opt/fd-scan/advisories",
     });
     const outcome = await Effect.runPromise(
       (body as Effect.Effect<Outcome, never, never>).pipe(
@@ -564,6 +576,35 @@ describe("the security gate run bodies over a real git remote", () => {
     expect(stopped).not.toHaveProperty("findingsTruncated");
     // Stopped before the bundle held: no scan to report.
     expect(reportOf((await run(gate(sha["feature"]!), { pin: null })).summary)).toEqual({});
+  });
+
+  it("[FD-GATE-095] runs gitleaks and zizmor with --config files that hold the verified bundle's configurations, read-only and outside the checkout", async () => {
+    const seen: Record<string, { cwd: string; config: string; text: string; mode: number }> = {};
+    const { outcome, tools } = await run(gate(sha["workflows"]!), {
+      onArgv: (options) => {
+        const at = options.argv.indexOf("--config");
+        if (options.argv[0] === "semgrep" || at === -1) return;
+        const config = options.argv[at + 1]!;
+        seen[options.argv[0]] = {
+          cwd: options.cwd,
+          config,
+          text: readFileSync(config, "utf8"),
+          mode: statSync(config).mode & 0o777,
+        };
+      },
+    });
+    expect(outcome).toEqual(Outcome.success());
+    expect(tools).toEqual(["gitleaks", "zizmor", "semgrep"]);
+    const payload = validPayload();
+    expect(seen["gitleaks"]?.text).toBe(payload.gitleaks.config);
+    expect(seen["zizmor"]?.text).toBe(payload.zizmor.config);
+    for (const scanner of ["gitleaks", "zizmor"]) {
+      const { cwd, config, mode } = seen[scanner]!;
+      expect(mode & 0o222).toBe(0);
+      expect(relative(cwd, config).startsWith("..")).toBe(true);
+      // The configurations go when the scan ends.
+      expect(existsSync(config)).toBe(false);
+    }
   });
 
   it("[FD-GATE-111] reports security-rescan's summary under flare-dispatch/security-rescan", async () => {
