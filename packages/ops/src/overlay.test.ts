@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { spendDefaults } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
@@ -298,5 +300,22 @@ describe("template invariants", () => {
     expect(
       rejected(overlay({ scan: { bundleKeys: [{ publicKey: { ...jwk, kty: "RSA" } }] } })),
     ).toEqual(["scan.bundleKeys.0.publicKey.kty"]);
+  });
+
+  it("renders the scan bundle pin into the control plane's SCAN_BUNDLE_DIGEST, empty where the overlay pins none", () => {
+    const template = readFileSync(
+      join(import.meta.dirname, "../../../apps/control-plane/wrangler.jsonc"),
+      "utf8",
+    );
+    const pinOf = (scan: Record<string, unknown> | undefined) => {
+      const values = Effect.runSync(decodeOverlay(overlay(scan === undefined ? {} : { scan })));
+      const vars = parseJsonc(Effect.runSync(renderTemplate("control-plane", template, values)))[
+        "vars"
+      ] as Record<string, unknown>;
+      return vars["SCAN_BUNDLE_DIGEST"];
+    };
+    expect(pinOf({ bundleDigest: "a".repeat(64), bundleFile: "scan.dsse.json" })).toBe("a".repeat(64));
+    expect(pinOf({ advisoryEcosystems: ["npm"] })).toBe("");
+    expect(pinOf(undefined)).toBe("");
   });
 });

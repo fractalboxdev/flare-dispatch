@@ -2,6 +2,7 @@
 // input schemas, its class and the FlareDispatch declarations beside
 // `defineRun`'s answer (specs/run-model.md § Run catalogue).
 import { Option, Schema } from "effect";
+import type { CommitBinding, DispatchCommit } from "@fractalboxdev/flare-dispatch-catalog";
 import type { TriggerContext } from "./delivery.ts";
 import type { DispatchEvent } from "./event.ts";
 
@@ -86,6 +87,12 @@ export interface IntakeRun {
    * (FD-IFC-092).
    */
   readonly readOnlyScan?: boolean;
+  /**
+   * The dispatch's inputs bound to the commit its authorization covers: the repository, the commit intake pinned and
+   * its ref, so no input names another repository or commit for the run to read (FD-GATE-112). A `Mismatch` answers
+   * 400 `invalid_inputs`. A run without it takes its inputs as the caller sent them.
+   */
+  readonly bindCommit?: (inputs: unknown, commit: DispatchCommit) => CommitBinding;
 }
 
 /** The run catalogue: a run by name, or undefined when the deployment serves no such run. */

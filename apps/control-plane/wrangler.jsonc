@@ -45,6 +45,11 @@
     // The overlay's `attestation_max_age` in days, 10 where it sets none: the result-acceptance check rejects a
     // statement from a device whose last attestation is older (FD-PROV-016).
     "ATTESTATION_MAX_AGE_DAYS": "{{provenance.attestationMaxAgeDays}}",
+    // The pinned scan bundle's SHA-256, empty where the overlay pins none: the digest a `security-gate` or
+    // `security-rescan` scan checks the bundle at `cas/<digest>` against (FD-GATE-100), and reads as unpinned where
+    // empty (FD-GATE-101). A deploy whose drift check fails changes no var, so the deployed pin stays the previous one
+    // (FD-OPS-095). No executor serves the scan runs yet (specs/runs/gate.md § Open items).
+    "SCAN_BUNDLE_DIGEST": "{{scan.bundleDigest}}",
     // The OSV ecosystems whose `all.zip` archive the tick's `advisory-refresh` step stores in `cas/<sha256>` once per
     // UTC day, none where the overlay sets none (FD-OPS-100).
     "ADVISORY_ECOSYSTEMS": "{{scan.advisoryEcosystems}}",
