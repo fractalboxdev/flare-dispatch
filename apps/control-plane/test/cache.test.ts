@@ -18,6 +18,7 @@ import {
   IntakeStore,
   type IntakeRecord,
 } from "@fractalboxdev/flare-dispatch-intake";
+import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
@@ -112,6 +113,37 @@ describe("a lease's cache fields under the repository's confidentiality mode", (
       expect(open.cache_namespaces.write).toBe(pullRequestNamespace("acme/app", 41));
       expect(open.upload_grant.compile_cache?.token).toMatch(/^cc3\./);
     }
+  });
+});
+
+describe("a sealed job sandbox's lease", () => {
+  it("[FD-GATE-110] names no cache namespace and carries no compile-cache endpoint or token for a security scan run", async () => {
+    const env = {
+      PUBLIC_ORIGIN: "https://cp.example",
+      COMPILE_CACHE_SECRET: "secret",
+      ...developmentOf("non-confidential"),
+    };
+    const lease = (sealed: boolean) =>
+      leaseCacheAt(
+        env,
+        { ...record({ _tag: "PullRequest", number: 41 }), run: "security-gate" },
+        { epoch: 1, kind: "cloudflare" },
+        1_900_000_000_000,
+        sealed,
+      );
+    for (const run of ["security-gate", "security-rescan"]) {
+      const found = lookupRun("production", run);
+      expect(found._tag === "Available" && found.entry.sealedSandbox).toBe(true);
+    }
+    const sealed = await lease(true);
+    expect(sealed.cache_namespaces).toEqual({ read: [], write: null });
+    expect(sealed.upload_grant.cache_prefix).toBeNull();
+    expect(sealed.upload_grant.compile_cache).toBeNull();
+    expect(JSON.stringify(sealed)).not.toContain("cp.example");
+    // The same execution unsealed reaches the compile cache's host with a token.
+    const open = await lease(false);
+    expect(open.upload_grant.compile_cache?.endpoint).toContain("https://cp.example/");
+    expect(open.upload_grant.compile_cache?.token).toMatch(/^cc3\./);
   });
 });
 

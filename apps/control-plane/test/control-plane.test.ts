@@ -38,6 +38,9 @@ import type { ControlPlaneEnv } from "../src/config.ts";
 
 const SHA = "a".repeat(40);
 
+/** The overlay's one `containment` identity. */
+const RESPONDER = "responder@example.com";
+
 /** The link key and epoch of every deployment with an Access team. */
 const LINK_KEY = "link-key-for-control-plane-tests";
 const LINK_EPOCH = 1;
@@ -93,6 +96,7 @@ const miniflare = (
             ACCESS_AUD: AUD,
             OPERATORS: JSON.stringify([OPERATOR]),
             DISPATCHERS: JSON.stringify([OPERATOR]),
+            CONTAINMENT: JSON.stringify([RESPONDER]),
             FD_DEV_REPOSITORY: JSON.stringify(repository),
             LINK_KEY,
             LINK_EPOCH: String(LINK_EPOCH),
@@ -271,6 +275,33 @@ describe("the delivery keys", () => {
     const body = (await r.json()) as Record<string, unknown>;
     expect(body["error"]).toBe("unavailable");
     expect(body).not.toHaveProperty("installations");
+  });
+});
+
+describe("the containment identity", () => {
+  it("[FD-IFC-095], [FD-IFC-097] the deployed Worker admits it on halt and answers halt-cloud 503 unavailable while no control state is read", async () => {
+    const cloud = await post(
+      production,
+      "/v1/ops/halt",
+      { state: "halt-cloud", reason: "incident" },
+      RESPONDER,
+    );
+    expect(cloud.status).toBe(503);
+    expect(((await cloud.json()) as Record<string, unknown>)["error"]).toBe("unavailable");
+    const run = await post(
+      production,
+      "/v1/ops/halt",
+      { state: "run", reason: "incident" },
+      RESPONDER,
+    );
+    expect(run.status).toBe(403);
+    const release = await post(
+      production,
+      "/v1/ops/release",
+      { executor: "e1", reason: "incident" },
+      RESPONDER,
+    );
+    expect(release.status).toBe(403);
   });
 });
 

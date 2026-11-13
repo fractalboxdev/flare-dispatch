@@ -36,7 +36,7 @@ The profile declares every kind the control plane accepts ([profile.md](profile.
 | `pr.propose` | control plane, `on: accepted` for `success` | `cp:pr:propose` | The staged-write gate, then Git Data API commit and a pull request, a draft unless the manifest sets `draft` to false | Head branch name |
 | `pr.close` | run | `run:<step name>:<index>` | Close a pull request whose head branch is under `flare-dispatch/` | Update is idempotent |
 | `release.draft` | run | `run:<step name>:<index>` | Create a draft release and upload assets | Tag name |
-| `release.publish` | run | `run:<step name>:<index>` | Publish the draft release for the tag | Update is idempotent |
+| `release.publish` | run | `run:<step name>:<index>` | Publish the draft release for the tag once each draft asset is an artifact the payload names, at the digest GitHub reports for the asset's bytes, and the provenance gate admits that digest ([provenance.md](provenance.md) § Releases) | Update is idempotent |
 | `dispatch.followOn` | run | `run:<step name>:<index>` | Submit a request to admission for the named run on the same commit; no GitHub call | Admission dedup key `<execution_id>/<intent_key>` |
 | `job.record` | control plane, `on: lease-granted` | `cp:job:record:<epoch>` | Signed `POST` to `records.url` | Delivery id header derived from the key |
 | `verdict.record` | ops | `ops:verdict-record:<execution_id>` | Signed `POST` to `records.url` | Delivery id header derived from the key |

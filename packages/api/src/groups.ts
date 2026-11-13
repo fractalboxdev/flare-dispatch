@@ -24,6 +24,8 @@ import { WellKnownHandlers } from "./routes/well-known.ts";
 
 const member: Surface = { _tag: "Access", group: "any" };
 const operator: Surface = { _tag: "Access", group: "operators" };
+/** The tightening operator routes, which admit an operator or a `containment` identity (FD-IFC-095). */
+const containment: Surface = { _tag: "Access", group: "containment" };
 const pub: Surface = { _tag: "Public" };
 
 export const dispatchGroup = apiGroup({
@@ -46,16 +48,16 @@ export const executionsGroup = apiGroup({
 export const opsGroup = apiGroup({
   group: OpsGroup,
   surfaces: {
-    halt: operator,
-    quarantine: operator,
+    halt: containment,
+    quarantine: containment,
     release: operator,
     forceAdmit: operator,
     topUp: operator,
     drain: operator,
     revoke: operator,
-    pauseKey: operator,
+    pauseKey: containment,
     resumeKey: operator,
-    deliveryKeys: operator,
+    deliveryKeys: containment,
     health: operator,
   },
   handlers: OpsHandlers,

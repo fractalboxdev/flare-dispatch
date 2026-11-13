@@ -47,6 +47,8 @@ const MergeGroupDelivery = Schema.Struct({
   headSha: Sha,
   headRef: Schema.String,
   baseRef: Schema.String,
+  /** `merge_group.base_sha`, where a security-gate scan range starts. */
+  baseSha: Schema.optionalKey(Sha),
 });
 
 const DeploymentStatusDelivery = Schema.Struct({

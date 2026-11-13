@@ -263,7 +263,15 @@ export const policyRulesOf = (overlay: OverlayValues): PolicyRules => overlay.po
 /** The values a template's placeholders resolve against (`renderValuesOf`). */
 export type RenderValues = Omit<
   OverlayValues,
-  "spend" | "policy" | "dispatchers" | "intake" | "dispatch" | "provenance" | "scan" | "records"
+  | "spend"
+  | "policy"
+  | "dispatchers"
+  | "containment"
+  | "intake"
+  | "dispatch"
+  | "provenance"
+  | "scan"
+  | "records"
 > & {
   /** `records.url`, empty where the overlay sets none, so the control plane declares no record kind. */
   readonly records: { readonly url: string };
@@ -282,6 +290,8 @@ export type RenderValues = Omit<
   readonly spend: Required<SpendValues>;
   readonly policy: { readonly rules: PolicyRules };
   readonly dispatchers: readonly string[];
+  /** The `containment` identities, none where the overlay names none, which admits no containment caller (FD-IFC-095). */
+  readonly containment: readonly string[];
   /** `null` where the overlay sets no list: absent admits every supported event, `[]` none (FD-INT-027). */
   readonly intake: { readonly webhookEvents: readonly string[] | null };
   /**
@@ -296,7 +306,7 @@ export type RenderValues = Omit<
 
 /**
  * The values a template's placeholders resolve against: the overlay, its spend values completed with their defaults,
- * its policy rules and dispatchers, an empty set where it holds none, its Actions OIDC audience, empty where it sets
+ * its policy rules, dispatchers and containment identities, an empty set where it holds none, its Actions OIDC audience, empty where it sets
  * none, its `dispatch.scoped` entries, none where it sets none (FD-IFC-089), its intake webhook events, `null` where it sets none, so the rendered Worker tells an absent list (every
  * supported event) from an empty one (none) (FD-INT-027), its `attestation_max_age` in days, at its default where
  * it sets none (FD-PROV-016), its advisory ecosystems, none where it sets none (FD-OPS-100), its advisory snapshot
@@ -307,6 +317,7 @@ export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   spend: spendValuesOf(overlay),
   policy: { ...overlay.policy, rules: policyRulesOf(overlay) },
   dispatchers: overlay.dispatchers ?? [],
+  containment: overlay.containment ?? [],
   intake: { webhookEvents: overlay.intake?.webhookEvents ?? null },
   dispatch: {
     oidcAudience: overlay.dispatch?.oidcAudience ?? "",

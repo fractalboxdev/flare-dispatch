@@ -44,6 +44,7 @@ const MergeGroupPayload = Schema.Struct({
     head_sha: Schema.String,
     head_ref: Schema.String,
     base_ref: Schema.String,
+    base_sha: Schema.optionalKey(Schema.String),
   }),
 });
 
@@ -116,6 +117,7 @@ const rawDelivery = (
         headSha: p.merge_group.head_sha,
         headRef: p.merge_group.head_ref,
         baseRef: p.merge_group.base_ref,
+        ...(p.merge_group.base_sha === undefined ? {} : { baseSha: p.merge_group.base_sha }),
       })),
     ),
     Match.when("deployment_status", () =>

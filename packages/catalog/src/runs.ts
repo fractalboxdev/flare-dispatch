@@ -18,6 +18,8 @@ import {
   OffloadTestInput,
   OxlintInput,
   SandboxImageInput,
+  SecurityGateInput,
+  SecurityRescanInput,
   WorkerDeployInput,
 } from "./inputs.ts";
 import { runGateJob } from "./job.ts";
@@ -26,6 +28,7 @@ import { runOxlint } from "./oxlint.ts";
 import { localContentArtifacts, type GateArtifacts } from "./ports.ts";
 import { toRunResult } from "./reasons.ts";
 import { runSandboxImage } from "./sandbox-image.ts";
+import { runSecurityGate, runSecurityRescan, type ScanServices } from "./security-gate.ts";
 import {
   checkSpec,
   classRanks,
@@ -35,6 +38,8 @@ import {
   offloadTestSpec,
   oxlintSpec,
   sandboxImageSpec,
+  securityGateSpec,
+  securityRescanSpec,
   workerDeploySpec,
   type ExecutorKind,
   type RunSpecFields,
@@ -68,6 +73,8 @@ export const offloadTestRun = define(offloadTestSpec, OffloadTestInput, (i) => r
 export const workerDeployRun = define(workerDeploySpec, WorkerDeployInput, runWorkerDeploy);
 export const deploySmokeRun = define(deploySmokeSpec, DeploySmokeInput, (i) => runDeploySmoke(i));
 export const sandboxImageRun = define(sandboxImageSpec, SandboxImageInput, runSandboxImage);
+export const securityGateRun = define(securityGateSpec, SecurityGateInput, runSecurityGate);
+export const securityRescanRun = define(securityRescanSpec, SecurityRescanInput, runSecurityRescan);
 
 /** Every run, in catalogue order. */
 export const registry = [
@@ -78,6 +85,8 @@ export const registry = [
   workerDeployRun,
   deploySmokeRun,
   sandboxImageRun,
+  securityGateRun,
+  securityRescanRun,
   ...agenticRuns,
 ] as const;
 
@@ -105,15 +114,27 @@ export type RunnerExecutor =
       readonly kind: "cloud";
       /** The agentic recipes' services for the execution's job sandbox, from `cloudAgenticLayers`. */
       readonly layers: Layer.Layer<CloudAgenticServices, never, Intents>;
+      /**
+       * The scan runs' services for the execution's job sandbox: its processes, the scan bundle store, the image, the
+       * advisory snapshots and the deployment's scan settings. Without them the cloud executor serves no scan run.
+       */
+      readonly scan?: Layer.Layer<Exclude<ScanServices, Intents>>;
     };
 
 const AGENTIC_NAMES: ReadonlySet<string> = new Set(agenticRuns.map((run) => run.spec.name));
+
+/** The scan runs the cloud executor serves with its scan Layers (specs/runs/gate.md § Security gate). */
+const SCAN_NAMES: ReadonlySet<string> = new Set([
+  securityGateRun.spec.name,
+  securityRescanRun.spec.name,
+]);
 
 /**
  * The runs an executor may execute under a deployment, each with that executor's Layers provided. A run `lookupRun`
  * refuses, that the catalogue does not serve on the executor's kind, or that needs a service the executor lacks is
  * absent, so its lease answers `RunNotInCatalog`. The device serves the gate runs; the cloud executor serves the
- * agentic recipes, whose catalogue entries are cloud-only.
+ * agentic recipes, whose catalogue entries are cloud-only, and, where it supplies the scan Layers, `security-gate` and
+ * `security-rescan`.
  */
 export const runsFor = (deployment: Deployment, executor: RunnerExecutor = { kind: "device" }) => {
   const available = registry
@@ -126,12 +147,31 @@ export const runsFor = (deployment: Deployment, executor: RunnerExecutor = { kin
           Layer.provide(deviceLayers),
         ),
       }))
+    : [
+        ...available
+          .filter((run) => AGENTIC_NAMES.has(run.spec.name))
+          .map((run) => ({
+            ...run,
+            layer: (run.layer as Layer.Layer<never, never, CloudAgenticServices>).pipe(
+              Layer.provide(executor.layers),
+            ),
+          })),
+        ...scanRunsWith(available, executor.scan),
+      ];
+};
+
+/** The scan runs of `available`, each with the cloud executor's scan Layers provided; none without them. */
+const scanRunsWith = <R extends (typeof registry)[number]>(
+  available: readonly R[],
+  scan: Layer.Layer<Exclude<ScanServices, Intents>> | undefined,
+) =>
+  scan === undefined
+    ? []
     : available
-        .filter((run) => AGENTIC_NAMES.has(run.spec.name))
+        .filter((run) => SCAN_NAMES.has(run.spec.name))
         .map((run) => ({
           ...run,
-          layer: (run.layer as Layer.Layer<never, never, CloudAgenticServices>).pipe(
-            Layer.provide(executor.layers),
+          layer: (run.layer as Layer.Layer<never, never, Exclude<ScanServices, Intents>>).pipe(
+            Layer.provide(scan),
           ),
         }));
-};

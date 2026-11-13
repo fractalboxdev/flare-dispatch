@@ -22,6 +22,8 @@
     "OPERATORS": "{{operators}}",
     // The identities allowed to dispatch through `fd` and `/mcp`, none where the overlay names none (FD-IFC-027).
     "DISPATCHERS": "{{dispatchers}}",
+    // The identities the tightening operator routes admit, none where the overlay names none (FD-IFC-095).
+    "CONTAINMENT": "{{containment}}",
     // The Actions OIDC audience of a dispatch; empty where the overlay sets none, which refuses every Actions token.
     "DISPATCH_OIDC_AUDIENCE": "{{dispatch.oidcAudience}}",
     // The `dispatch.scoped` entries `{ identity, runs, repositories, classCeiling }`, none where the overlay names none:

@@ -7,8 +7,11 @@ import {
   CheckInput,
   OffloadTestInput,
   OxlintInput,
+  SecurityRescanInput,
   WorkerDeployInput,
   type SandboxImageInput,
+  type SecurityGateBase,
+  type SecurityGateInput,
 } from "./inputs.ts";
 import {
   globMatches,
@@ -219,3 +222,51 @@ export const workerDeployDedupKey = (scope: string, sha: string, label?: string)
 /** The serial group of one repository, branch and label (FD-GATE-063). */
 export const workerDeploySerialGroup = (scope: string, branch: string, label?: string): string =>
   `worker-deploy:${scope}@${branch}${label === undefined ? "" : `:${label}`}`;
+
+const branchOf = (ref: string) =>
+  ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+
+/**
+ * `security-gate` on each pull-request action and merge-group check request its table row names (specs/runs/gate.md
+ * § Recipes), whatever the pull request's author, labels or draft state (FD-GATE-085): the input carries the head and
+ * where the scan range starts, and no fact a skip could read. A merge group's range starts at `merge_group.base_sha`;
+ * a delivery without it starts at the merge base with the target branch. A check re-run replays the recorded input, so
+ * it scans the same range. No dispatch starts it.
+ */
+export const securityGateDecoder = () =>
+  webhook(
+    (d): Option.Option<SecurityGateInput> =>
+      Match.value(d).pipe(
+        Match.when({ event: "pull_request" }, (d: Delivery<"pull_request">) =>
+          (GATE_PR_ACTIONS as readonly string[]).includes(d.action)
+            ? Option.some({
+                repo: d.repository.cloneUrl,
+                sha: d.pullRequest.headSha,
+                ref: `refs/pull/${d.pullRequest.number}/head`,
+                scope: d.repository.fullName,
+                base: { _tag: "TargetBranch", branch: d.pullRequest.baseRef } satisfies SecurityGateBase,
+              })
+            : Option.none(),
+        ),
+        Match.when({ event: "merge_group" }, (d: Delivery<"merge_group">) =>
+          d.action === "checks_requested"
+            ? Option.some({
+                repo: d.repository.cloneUrl,
+                sha: d.headSha,
+                ref: d.headRef,
+                scope: d.repository.fullName,
+                base: (d.baseSha === undefined
+                  ? { _tag: "TargetBranch", branch: branchOf(d.baseRef) }
+                  : { _tag: "MergeGroup", baseSha: d.baseSha }) satisfies SecurityGateBase,
+              })
+            : Option.none(),
+        ),
+        Match.orElse(() => Option.none()),
+      ),
+  );
+
+/**
+ * `security-rescan` from a dispatch alone (FD-GATE-111): a webhook, a schedule or any other trigger answers none. Its
+ * input names the commit only; the range's base is the merge base with the default branch head (FD-GATE-112).
+ */
+export const securityRescanDecoder = () => fromDispatch("security-rescan", SecurityRescanInput);

@@ -1,6 +1,7 @@
 // What the side-output appliers call beyond GitHub: the staged-write gate, the
-// blob store, admission for a follow-on, email, the notice channel, and the
-// configuration the appliers read, the Slack and records endpoints included.
+// blob store, the release provenance gate, admission for a follow-on, email, the
+// notice channel, and the configuration the appliers read, the Slack and records
+// endpoints included.
 import { Context, Schema, type Effect } from "effect";
 import type { CommentWriteStore } from "./comment-writes.ts";
 
@@ -45,6 +46,41 @@ export class FollowOnSubmitter extends Context.Service<
     >;
   }
 >()("@fractalboxdev/flare-dispatch-github/FollowOnSubmitter") {}
+
+/**
+ * The reason a release publish ends `refused` with when no logged cloud-builder statement names an asset's digest
+ * (specs/provenance.md § Releases); it is the cache package's `RELEASE_STATEMENT_MISSING`.
+ */
+export const RELEASE_STATEMENT_MISSING = "provenance: release statement missing";
+
+/**
+ * One asset a draft release publishes: its name, the `sha256:<hex>` digest GitHub computed over the bytes it stores,
+ * and the release execution whose statements must name that digest.
+ */
+export interface ReleasePublishArtifact {
+  readonly name: string;
+  readonly digest: string;
+  readonly executionId: string;
+}
+
+export type ReleaseGateAnswer =
+  | { readonly _tag: "admitted" }
+  | { readonly _tag: "refused"; readonly reason: string; readonly artifact: string }
+  | { readonly _tag: "unavailable"; readonly reason: string };
+
+/**
+ * The provenance gate on a release's publish (specs/provenance.md § Releases): over the logged statements and the
+ * provenance key history, it admits the publish only when a logged `platform` statement from a cloud builder of the
+ * release execution names each artifact's digest (FD-PROV-062) without listing a restored cache entry (FD-PROV-063).
+ */
+export class ReleaseProvenance extends Context.Service<
+  ReleaseProvenance,
+  {
+    readonly gate: (release: {
+      readonly artifacts: readonly ReleasePublishArtifact[];
+    }) => Effect.Effect<ReleaseGateAnswer>;
+  }
+>()("@fractalboxdev/flare-dispatch-github/ReleaseProvenance") {}
 
 export type DeliveryAnswer =
   | { readonly _tag: "sent"; readonly ref: string }

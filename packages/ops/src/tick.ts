@@ -1,7 +1,9 @@
 // The minute tick: the Worker's one cron trigger (FD-INT-050). Each tick records its time, starts the liveness
 // monitor, drains the outbox once, once a day reads the kill lines (FD-VER-030), and every 15 min runs the GitHub
 // probes; 5 min after a canary push it reads the canary's check. After the composed units, which hold the
-// `advisory-refresh` step, it raises or resolves `advisory-snapshot-stale` (FD-OPS-103). Each step runs on its own, so one failing step leaves the others running.
+// `advisory-refresh` step, it runs the two record units where the profile carries the record kinds (FD-GH-094,
+// FD-GH-102), then raises or resolves `advisory-snapshot-stale` (FD-OPS-103). Each step runs on its own, so one failing
+// step leaves the others running.
 import type { Profile } from "@fractalboxdev/flare-dispatch-profile";
 import { actuatorBindings, drainOnce } from "@fractalboxdev/mameko-coordinator";
 import { d1OutboxStore, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
@@ -26,6 +28,7 @@ import {
   type ProbeConfig,
 } from "./probes.ts";
 import { raiseOnce, resolveAlarm } from "./raise.ts";
+import { insertVerdictRecords, raiseUndeliveredRecords, recordsEnabled } from "./records-tick.ts";
 
 /** The `LivenessMonitor` namespace binding; one object per control plane. */
 export interface MonitorNamespace {
@@ -172,6 +175,16 @@ export const minuteTick = (env: TickEnv, deps: TickDeps, now: number) =>
     );
 
     for (const unit of deps.units?.(now) ?? []) steps.push(yield* run(unit.step, unit.effect));
+
+    // The records a deploying organization receives at `records.url`: after the drain, so a check run concluded this
+    // tick carries its conclusion into the record. Without `records.url` the profile carries neither record kind.
+    if (recordsEnabled(deps.profile)) {
+      steps.push(yield* run("verdict-records", insertVerdictRecords(db, deps.profile, now)));
+      steps.push(yield* run("record-undelivered", raiseUndeliveredRecords(db, now)));
+    } else {
+      steps.push(yield* skipped("verdict-records", "no records.url"));
+      steps.push(yield* skipped("record-undelivered", "no records.url"));
+    }
 
     // Runs after the units, so a snapshot the tick's own `advisory-refresh` recorded counts as fresh.
     const advisory = deps.advisory;

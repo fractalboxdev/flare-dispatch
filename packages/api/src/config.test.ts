@@ -125,3 +125,27 @@ describe("records signing key distinctness", () => {
     });
   });
 });
+
+describe("containment identities", () => {
+  it("[FD-IFC-095] reads the overlay's containment identities from CONTAINMENT, lowercased, and none where it names none", () => {
+    const config = apiConfigFromEnv(
+      { CONTAINMENT: JSON.stringify([" Responder@Example.com ", "oncall@example.com"]) },
+      ORIGIN,
+    );
+    expect(config).not.toBeInstanceOf(ConfigInvalid);
+    expect((config as { containment: readonly string[] }).containment).toEqual([
+      "responder@example.com",
+      "oncall@example.com",
+    ]);
+    expect(
+      (apiConfigFromEnv({}, ORIGIN) as { containment: readonly string[] }).containment,
+    ).toEqual([]);
+  });
+
+  it("[FD-IFC-095] refuses a CONTAINMENT value that is not a JSON array of identities", () => {
+    expect(apiConfigFromEnv({ CONTAINMENT: "responder@example.com" }, ORIGIN)).toMatchObject({
+      _tag: "ConfigInvalid",
+      path: "CONTAINMENT",
+    });
+  });
+});
