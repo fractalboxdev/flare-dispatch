@@ -15,6 +15,11 @@ export * from "./router.ts";
 export { canonicalJson, idempotencyOf, submissionOf, submit } from "./routes/dispatch.ts";
 export { d1Executions, recordOf, reportedStatus } from "./live/executions.ts";
 export { oidcKeyFromSecret } from "./live/oidc-key.ts";
+export {
+  appleAttestationVerifier,
+  attestationVerifier,
+  codeSigningHashOf,
+} from "./live/attestation.ts";
 export { d1DeviceRegistry } from "./live/registry.ts";
 export * from "./live/tables.ts";
 export * from "./mcp/tools.ts";

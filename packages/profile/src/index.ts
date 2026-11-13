@@ -23,6 +23,7 @@ export {
   checkOpenPayload,
   CLASS_ORDER,
   commitRecipe,
+  CONFIDENTIALITY_MODES,
   dedupRecipes,
   followOnRecipe,
   GATING_RUNS,
@@ -57,6 +58,8 @@ export {
   classNamed,
   classPlacement,
   cloudEligibleAt,
+  DEPLOYMENT_SECRET_GRANT,
+  deploymentSecretGrantLabels,
   deliveryOrder,
   drawsReserve,
   eligibleKinds,
@@ -69,6 +72,7 @@ export {
   type PlacementRequest,
 } from "./placement.ts";
 export {
+  PolicyRulesRejected,
   ProfileRejected,
   Rejection,
   type ClassEntry,
@@ -77,12 +81,16 @@ export {
   type Profile,
 } from "./schema.ts";
 export {
+  confidentialityOf,
   linesOf,
   loadProfile,
   missingPorts,
+  PolicyRules,
   portUses,
   profileLoader,
   reservesOf,
+  syncPolicyRules,
+  validatePolicyRules,
   validateProfile,
   type ValidationContext,
 } from "./validate.ts";

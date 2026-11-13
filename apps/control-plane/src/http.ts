@@ -5,6 +5,7 @@ import {
   ApiConfig,
   apiConfigFromEnv,
   apiError,
+  appleAttestationVerifier,
   artifactsGroup,
   ConfigInvalid,
   d1DeviceRegistry,
@@ -37,7 +38,7 @@ import { Context, Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { ArtifactsHandlers, cacheReads, LogsHandlers } from "./cache.ts";
 import { isolateServices, type IsolateServices } from "./composition.ts";
-import { apiEnvOf, profileOf, type ControlPlaneEnv } from "./config.ts";
+import { apiEnvOf, deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { failureSummaries } from "./failure-summary.ts";
 import { intakeCancellation, intakePort } from "./intake-port.ts";
 import { spendViewOf } from "./spend.ts";
@@ -121,7 +122,9 @@ const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateS
       anchor: env.EPOCH_ANCHOR.get(env.EPOCH_ANCHOR.idFromName("control-plane")),
       profile: profileOf(env),
       posture: () => Effect.succeed(POSTURE_TIER),
-      verify: undefined,
+      // Managed Device Attestation rooted at the Apple Enterprise Attestation Root CA (FD-PROV-028); a `development`
+      // deployment supplies none.
+      verify: deployment(env) === "production" ? appleAttestationVerifier : undefined,
     }),
     oidcKeyFromSecret(apiEnvOf(env).OIDC_SIGNING_JWK),
     failureSummaries(env),

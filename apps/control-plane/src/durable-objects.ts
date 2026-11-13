@@ -8,6 +8,7 @@ import {
   runQueuedUnit,
   type TickUnit,
 } from "@fractalboxdev/flare-dispatch-intake";
+import { FlareDispatchLivenessMonitor } from "@fractalboxdev/flare-dispatch-ops/worker";
 import {
   ExecutionEngine as MamekoExecutionEngine,
   ExecutorChannel as MamekoExecutorChannel,
@@ -18,7 +19,7 @@ import { Context, Effect, Match } from "effect";
 import { guardLease } from "./agentic.ts";
 import { isolateServices } from "./composition.ts";
 import { leaseCache } from "./cache.ts";
-import { imageDigestOf, requestLeaseFields } from "./lease.ts";
+import { imageDigestOf, invalidateLeaseNonce, leaseNonce, requestLeaseFields } from "./lease.ts";
 import {
   channelConfig,
   deployment,
@@ -45,14 +46,17 @@ const PROGRESS_TIMEOUT_MS = 300_000;
 
 export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
   constructor(ctx: DurableObjectState, env: ControlPlaneEnv) {
-    super(ctx, { ...env, MAMEKO_CHANNEL_CONFIG: channelConfig(profileOf(env)) });
+    super(ctx, {
+      ...env,
+      MAMEKO_CHANNEL_CONFIG: channelConfig(profileOf(env)),
+    });
   }
 
   /**
    * The inputs and request context intake recorded for a won claim, the run registry's run and workflow versions
    * (FD-PROF-063), and the `deadline_at` admission wrote on the execution row (MAMEKO-EXEC-002), which a gate run's
    * input carries as its `deadlineAt` (FD-GATE-007). A payload that carries a write credential fails the grant
-   * (FD-AGT-008).
+   * (FD-AGT-008). The nonce is 128 random bits bound to the execution and the placement's epoch (FD-PROV-010).
    */
   protected override leaseFields(executionId: string): Promise<ClaimedLease> {
     const env = this.env;
@@ -62,7 +66,7 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
         if (record === null) return yield* new ExecutionInputsMissing({ executionId });
         const { results } = yield* Effect.promise(() =>
           env.DB.prepare(
-            `select e.run, e.scope_id, e.deadline_at, x.kind from executions e
+            `select e.run, e.scope_id, e.deadline_at, p.epoch, x.kind from executions e
              left join placements p on p.execution_id = e.id
              left join executors x on x.executor_id = p.executor_id where e.id = ?`,
           )
@@ -73,6 +77,7 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
           run: string;
           scope_id: string;
           deadline_at: number;
+          epoch: number;
           kind: string | null;
         };
         const entry = Match.value(lookupRun(deployment(env), row.run)).pipe(
@@ -90,16 +95,24 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
           progress_timeout_ms: PROGRESS_TIMEOUT_MS,
           credentials: {},
           ...(yield* Effect.promise(() => leaseCache(env, record, row.deadline_at))),
-          nonce: crypto.randomUUID(),
+          nonce: yield* leaseNonce(env.DB, executionId, row.epoch, Date.now()),
         } satisfies ClaimedLease);
       }).pipe(Effect.provide(d1IntakeStore(env.DB))),
     );
+  }
+
+  /** A reclaim through the channel invalidates the reclaimed epoch's nonce before it frees the placement (FD-PROV-011). */
+  protected override revokeCredentials(executionId: string, epoch: number): Promise<void> {
+    return Effect.runPromise(invalidateLeaseNonce(this.env.DB, executionId, epoch, Date.now()));
   }
 }
 
 export class ExecutionEngine extends MamekoExecutionEngine<EngineEnv> {
   constructor(ctx: DurableObjectState, env: ControlPlaneEnv) {
-    super(ctx, { ...env, MAMEKO_EXECUTION_CONFIG: executionConfig(profileOf(env)) });
+    super(ctx, {
+      ...env,
+      MAMEKO_EXECUTION_CONFIG: executionConfig(profileOf(env)),
+    });
   }
 }
 
@@ -129,5 +142,13 @@ export class IntakeUnits extends DurableObject<ControlPlaneEnv> {
 export { EpochAnchor } from "@fractalboxdev/mameko-host-cloudflare";
 /** One per repository: the cache's byte ledger (FD-CACHE-061). */
 export { CacheLedger } from "@fractalboxdev/flare-dispatch-cache/ledger-object";
-/** mameko's monitor whose timed wake also raises `cron-silent` (MAMEKO-OPS-010). */
-export { FlareDispatchLivenessMonitor as LivenessMonitor } from "@fractalboxdev/flare-dispatch-ops/worker";
+
+/**
+ * mameko's monitor whose timed wake also raises `cron-silent` (MAMEKO-OPS-010). A sweep's reclaim of a silent lease
+ * invalidates the reclaimed epoch's nonce before it frees the placement (FD-PROV-011).
+ */
+export class LivenessMonitor extends FlareDispatchLivenessMonitor {
+  protected override revokeCredentials(executionId: string, epoch: number): Promise<void> {
+    return Effect.runPromise(invalidateLeaseNonce(this.env.DB, executionId, epoch, Date.now()));
+  }
+}

@@ -658,6 +658,10 @@ export const provedChecks = (
           ...text.matchAll(
             new RegExp(`/--([\\s\\S]*?)-/\\s*(?:theorem|lemma)\\s+(?:[\\w.]*\\.)?${short}\\b`, "g"),
           ),
+          // A Tamarin lemma's docstring is the block comment right before it.
+          ...text.matchAll(
+            new RegExp(`/\\*((?:(?!\\*/)[\\s\\S])*)\\*/\\s*lemma\\s+${short}\\b`, "g"),
+          ),
         ])
         .map((m) => m[1]!)[0];
       const missing =

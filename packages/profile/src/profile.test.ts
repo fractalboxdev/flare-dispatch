@@ -16,6 +16,8 @@ import {
   cloudEligibleAt,
   configurationSourceLayer,
   ConfigurationSourceLive,
+  DEPLOYMENT_SECRET_GRANT,
+  deploymentSecretGrantLabels,
   deliveryOrder,
   deviceSlotDefaults,
   GateDecisionSourceLive,
@@ -626,6 +628,48 @@ describe("placement", () => {
     const r = eligibleKinds(phase4, { class: "required", labels: ["reproduction"] });
     expect(r.kinds).toEqual(["device"]);
     expect(r.requiresPosture).toBe("attested-dedicated");
+  });
+
+  it("[FD-ISO-022] a run whose egress profiles hold a grant that attaches a deployment secret never keeps gha", () => {
+    const shapes = [
+      { class: "required", labels: ["apple-build"] },
+      ...CLASSES.map((c) => ({ class: c, labels: ["release-matrix"] })),
+      { class: "interactive", labels: ["apple-build", "release-matrix"] },
+    ];
+    for (const shape of shapes) {
+      expect(kinds4(shape)).toContain("gha");
+      const r = eligibleKinds(phase4, {
+        ...shape,
+        labels: [...shape.labels, DEPLOYMENT_SECRET_GRANT],
+      });
+      expect(r.kinds).not.toContain("gha");
+      expect(r.constraints).toContain("deployment-secret-grant");
+    }
+    expect(kinds4({ class: "required", labels: ["apple-build", DEPLOYMENT_SECRET_GRANT] })).toEqual(
+      ["device"],
+    );
+  });
+
+  it("[FD-ISO-022] class resolution labels an execution by every grant of its egress profiles", () => {
+    const attachesSecret = (g: string) => g === "cf-api";
+    expect(deploymentSecretGrantLabels(phase4, undefined, attachesSecret)).toEqual([]);
+    expect(
+      deploymentSecretGrantLabels(phase4, { setup: ["cf-api"], agent: [] }, attachesSecret),
+    ).toEqual([DEPLOYMENT_SECRET_GRANT]);
+    expect(
+      deploymentSecretGrantLabels(phase4, { setup: [], agent: ["cf-api"] }, attachesSecret),
+    ).toEqual([DEPLOYMENT_SECRET_GRANT]);
+    // A base grant counts as much as the run's own: a profile whose `setup` holds one labels every execution.
+    const based = {
+      ...phase4,
+      egress_profiles: {
+        ...phase4.egress_profiles,
+        setup: { ...phase4.egress_profiles.setup, grants: ["git-remote", "cf-api"] },
+      },
+    };
+    expect(deploymentSecretGrantLabels(based, { setup: [], agent: [] }, attachesSecret)).toEqual([
+      DEPLOYMENT_SECRET_GRANT,
+    ]);
   });
 
   it("[FD-PROF-064] phase 0 registers no launcher and declares no constraint", () => {

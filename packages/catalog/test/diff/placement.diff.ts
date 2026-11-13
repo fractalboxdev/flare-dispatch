@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildProfile,
   CLASS_ORDER,
+  deploymentSecretGrantLabels,
   eligibleKinds,
   placementInputs,
   resolveClass,
@@ -25,6 +26,7 @@ import { unplaceable } from "@fractalboxdev/mameko-kernel";
 import fc from "fast-check";
 import type { DiffSubject } from "../../../ops/src/verification/diff.ts";
 import { pipeOracle, type PipeOracle } from "../../../ops/src/verification/pipe-oracle.ts";
+import { attachesDeploymentSecret } from "../../src/egress.ts";
 import { lookupRun, requestPlacement } from "../../src/spec.ts";
 
 export type PlacementRun = "worker-deploy" | "sandbox-image";
@@ -148,15 +150,25 @@ const resolvedClass = (e: PlacementEvent) => {
 
 /**
  * The placement intake gives the request (packages/intake/src/submit.ts `placementRequest`): the class `resolveClass`
- * gives it, the run's declared constraints and capability labels for these inputs, the profile's eligible kinds at that
- * class, and of those the kinds that advertise every label of the request (mameko's `unplaceable`).
+ * gives it, the label `deployment-secret-grant` for a run whose egress profiles hold a grant that attaches a deployment
+ * secret (FD-ISO-022), the run's declared constraints and capability labels for these inputs, the profile's eligible
+ * kinds at that class, and of those the kinds that advertise every label of the request (mameko's `unplaceable`).
  */
 export const runPlacement = (e: PlacementEvent): PlacementAnswer => {
   const resolved = resolvedClass(e);
-  const declared = requestPlacement(specOf(e.run), { publish: e.publish });
+  const spec = specOf(e.run);
+  const declared = requestPlacement(spec, { publish: e.publish });
+  const profile = profileOf(e.profile);
+  const deploymentSecret = deploymentSecretGrantLabels(
+    profile,
+    spec.grants,
+    attachesDeploymentSecret,
+  );
   const request: PlacementRequest = {
     class: resolved.class,
-    labels: [...new Set([...resolved.labels, ...e.labels, ...declared.labels])],
+    labels: [
+      ...new Set([...resolved.labels, ...e.labels, ...deploymentSecret, ...declared.labels]),
+    ],
     constraints: declared.constraints,
     ...(e.trigger.kind === "tag-push" ? { trigger: "tag-push" } : {}),
     ...(e.declaresClass === null ? {} : { declaresClass: e.declaresClass }),
@@ -164,7 +176,6 @@ export const runPlacement = (e: PlacementEvent): PlacementAnswer => {
     deviceLocalInput: e.deviceLocalInput,
     needsLocalModel: e.needsLocalModel,
   };
-  const profile = profileOf(e.profile);
   const eligible = eligibleKinds(profile, request).kinds;
   const advertised = Object.fromEntries(e.advertised.map((a) => [a.kind, a.labels]));
   return {

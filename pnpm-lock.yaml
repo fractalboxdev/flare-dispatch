@@ -415,6 +415,9 @@ importers:
       '@fractalboxdev/flare-dispatch-catalog':
         specifier: workspace:*
         version: link:../catalog
+      '@fractalboxdev/flare-dispatch-github':
+        specifier: workspace:*
+        version: link:../github
       '@fractalboxdev/flare-dispatch-intake':
         specifier: workspace:*
         version: link:../intake

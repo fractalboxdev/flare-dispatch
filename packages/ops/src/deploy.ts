@@ -19,6 +19,7 @@ import {
   awsBudgetUnset,
   failed,
   modelRegistryCheck,
+  policyRulesCheck,
   rulesetCheck,
   settingsDrift,
   templateInvariants,
@@ -32,6 +33,7 @@ import {
 import {
   decodeOverlay,
   modelRegistryOf,
+  policyRulesOf,
   type OverlayRejected,
   type OverlayValues,
 } from "./overlay.ts";
@@ -255,7 +257,8 @@ export type ProfileStep = (overlay: OverlayValues) => Effect.Effect<readonly Fin
 export type AccessFor = (overlay: OverlayValues) => CommittedAccess | null;
 
 /**
- * Every drift finding: the overlay's provider registry (FD-MDL-020, FD-MDL-022), the templates' invariants, the
+ * Every drift finding: the overlay's provider registry (FD-MDL-020, FD-MDL-022), policy sync over the overlay's
+ * policy rules (FD-PROF-025), the templates' invariants, the
  * rendered configuration, the deployed Workers against the record of the last deploy, the GitHub App's registration,
  * the default branch's ruleset, the AWS account's Budgets actions where the overlay carries the `aws` kind, and, given
  * `access`, the Access applications on the dispatcher's hostname, then the
@@ -275,7 +278,10 @@ export const driftFindings = (
 ) =>
   Effect.gen(function* () {
     const target = yield* DeployTarget;
-    const findings: Finding[] = [...modelRegistryCheck(modelRegistryOf(overlay))];
+    const findings: Finding[] = [
+      ...modelRegistryCheck(modelRegistryOf(overlay)),
+      ...policyRulesCheck(policyRulesOf(overlay)),
+    ];
     for (const w of workers) findings.push(...templateInvariants(w.worker, parseJsonc(w.template)));
     for (const r of rendered) {
       findings.push(...unrenderedCheck(r.worker, r.text), ...extra(r.worker, r.config));

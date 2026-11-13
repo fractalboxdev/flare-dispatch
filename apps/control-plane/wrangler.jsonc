@@ -27,6 +27,9 @@
     // The overlay's spend values in USD, each it leaves out at its default: `B`, `F`, the release reserve, `R_ops`,
     // `R_m,min`, `D` and the overhead factor the spend view reads (FD-PROF-054).
     "SPEND": "{{spend}}",
+    // The overlay's policy rules per repository, which the fd deploy drift stage synced: class rules and each
+    // repository's confidentiality mode (FD-PROF-025).
+    "POLICY_RULES": "{{policy.rules}}",
     // The object-store presigner signs on `<account_id>.r2.cloudflarestorage.com`, never the custom domain, under
     // the `CACHE` bucket's name. Its R2 API token, scoped to the cache and artifact buckets with Object Read & Write
     // and used for nothing else, is the Worker secrets `R2_PRESIGN_ACCESS_KEY_ID` and `R2_PRESIGN_SECRET_ACCESS_KEY`

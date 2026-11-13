@@ -16,13 +16,17 @@ import { canonicalJson } from "./dedup.ts";
 import {
   APP_ID,
   BASE,
+  CATALOG,
   checkRunRerequested,
   bodyOf,
   admit,
   authenticated,
   harness,
   HEAD,
+  manifest,
   NOW,
+  repoWithManifest,
+  testRun,
   pullRequestPayload,
   pushPayload,
   REPO,
@@ -183,6 +187,40 @@ describe("placement at admission", () => {
       expect(recordKinds(h, id)).toBe("[]");
     }
     expect(h.recorded.started).toEqual([]);
+  });
+
+  it("[FD-ISO-022] a run whose egress profiles hold a grant that attaches a deployment secret is never placed on gha", async () => {
+    const runs: typeof CATALOG = {
+      ...CATALOG,
+      deploy: testRun("deploy", { grants: { setup: ["cf-api"], agent: [] } }),
+      agent: testRun("agent", { grants: { setup: [], agent: ["model-gateway", "git-remote"] } }),
+    };
+    // An `apple-build` run of class `required` otherwise keeps `gha` and `device` (FD-PROF-040).
+    const h = await harness({
+      repos: {
+        [REPO]: repoWithManifest(
+          manifest([
+            { recipe: "deploy", triggers: ["dispatch"] },
+            { recipe: "agent", triggers: ["dispatch"] },
+          ]),
+        ),
+      },
+      settings: { profile: buildProfile("production", 4), catalog: (name) => runs[name] },
+      resolve: () => ({ _tag: "Class", class: "required", labels: ["apple-build"], alarm: null }),
+    });
+    const labels = (id: string) =>
+      JSON.parse(
+        h.rows("select labels_json from intake_records where execution_id = ?", id)[0]
+          ?.labels_json as string,
+      ) as string[];
+
+    const deploy = await dispatch(h, "deploy", { inputs: { sha: HEAD } });
+    expect(labels(deploy.executionId)).toEqual(["apple-build", "deployment-secret-grant"]);
+    expect(placementKinds(h, deploy.executionId)).toBe(JSON.stringify(["device"]));
+
+    const agent = await dispatch(h, "agent", { inputs: { sha: HEAD } });
+    expect(labels(agent.executionId)).toEqual(["apple-build"]);
+    expect(placementKinds(h, agent.executionId)).toBe(JSON.stringify(["device", "gha"]));
   });
 
   it("the record keeps the eligible kinds admission wrote on the placement row", async () => {

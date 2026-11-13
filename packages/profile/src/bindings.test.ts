@@ -1,7 +1,9 @@
 import { dedupKey, resolveRequestClass } from "@fractalboxdev/mameko-coordinator";
+import { Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   commitRecipe,
+  confidentialityOf,
   dedupRecipes,
   followOnRecipe,
   idempotencyKeyRecipe,
@@ -11,6 +13,8 @@ import {
   resolveClass,
   resolveClassDetailed,
   supersessionKey,
+  syncPolicyRules,
+  validatePolicyRules,
   type ClassRequest,
   type PolicyRule,
 } from "./index.ts";
@@ -341,5 +345,122 @@ describe("dedup recipes and supersession", () => {
 
   it("[FD-PROF-029] a check re-run cancels no member of its group", () => {
     expect(supersessionKey({ ...pr, rerun: { firstAttemptClass: "required" } })).toBeNull();
+  });
+});
+
+describe("policy sync", () => {
+  const sync = (raw: unknown) => Effect.runSyncExit(syncPolicyRules(raw));
+  const rejectionsOf = (raw: unknown): readonly string[] =>
+    Effect.runSync(
+      syncPolicyRules(raw).pipe(
+        Effect.match({
+          onSuccess: () => [],
+          onFailure: (e) => e.rejections.map((x) => x.path),
+        }),
+      ),
+    );
+
+  it("[FD-PROF-025] rejects a rule that sets confidential-compute without acceptsFailingRequiredCheck: true, and accepts it with it", () => {
+    const unaccepted: PolicyRule = { match: {}, confidentiality: "confidential-compute" };
+    const declined: PolicyRule = { ...unaccepted, acceptsFailingRequiredCheck: false };
+    const accepted: PolicyRule = { ...unaccepted, acceptsFailingRequiredCheck: true };
+
+    expect(validatePolicyRules({ "acme/app": [unaccepted] })).toEqual([
+      expect.objectContaining({
+        item: "policy-rules",
+        path: "acme/app[0].acceptsFailingRequiredCheck",
+      }),
+    ]);
+    expect(rejectionsOf({ "acme/app": [declined] })).toEqual([
+      "acme/app[0].acceptsFailingRequiredCheck",
+    ]);
+    expect(validatePolicyRules({ "acme/app": [accepted] })).toEqual([]);
+    const synced = sync({ "acme/app": [accepted] });
+    expect(Exit.isSuccess(synced) && synced.value).toEqual({ "acme/app": [accepted] });
+  });
+
+  it("[FD-PROF-025] one rejected rule refuses the whole set, and every other mode needs no acceptance", () => {
+    const set = {
+      "acme/open": [{ match: {}, confidentiality: "non-confidential" }],
+      "acme/model": [{ match: {}, confidentiality: "confidential-model" }],
+      "acme/secret": [
+        { match: { run: "check" }, class: "batch" },
+        { match: {}, confidentiality: "confidential-compute" },
+      ],
+    };
+    expect(rejectionsOf(set)).toEqual(["acme/secret[1].acceptsFailingRequiredCheck"]);
+    const { "acme/secret": _secret, ...rest } = set;
+    expect(Exit.isSuccess(sync(rest))).toBe(true);
+  });
+
+  it("[FD-PROF-025] rejects a confidentiality rule scoped to one run or label, and a set that does not decode", () => {
+    expect(
+      rejectionsOf({
+        "acme/app": [
+          {
+            match: { run: "check" },
+            confidentiality: "confidential-compute",
+            acceptsFailingRequiredCheck: true,
+          },
+        ],
+      }),
+    ).toEqual(["acme/app[0].match"]);
+    expect(rejectionsOf({ "acme/app": [{ match: {}, confidentiality: "secret" }] })).toEqual([""]);
+  });
+
+  it("[FD-PROF-025] rejects a rule that sets neither a class nor a confidentiality mode", () => {
+    expect(rejectionsOf({ "acme/app": [{ match: { run: "check" } }] })).toEqual(["acme/app[0]"]);
+    expect(
+      rejectionsOf({
+        "acme/app": [{ match: {}, class: "batch" }, { match: {} }],
+      }),
+    ).toEqual(["acme/app[1]"]);
+  });
+
+  it("[FD-PROF-025] rejects a rule that sets callers or liftsCeiling without a class", () => {
+    const callers = [{ identity: "ci", repository: "acme/app", workflowRef: "main" }];
+    expect(rejectionsOf({ "acme/app": [{ match: {}, callers }] })).toEqual(["acme/app[0].class"]);
+    expect(rejectionsOf({ "acme/app": [{ match: {}, liftsCeiling: true }] })).toEqual([
+      "acme/app[0].class",
+    ]);
+    expect(
+      rejectionsOf({
+        "acme/app": [
+          { match: {}, confidentiality: "non-confidential", callers },
+          { match: { run: "check" }, class: "required", callers, liftsCeiling: true },
+        ],
+      }),
+    ).toEqual(["acme/app[0].class"]);
+  });
+
+  it("[FD-PROF-025] rejects a second rule that sets a repository's confidentiality mode", () => {
+    expect(
+      rejectionsOf({
+        "acme/app": [
+          { match: {}, confidentiality: "non-confidential" },
+          { match: {}, class: "batch" },
+          {
+            match: {},
+            confidentiality: "confidential-compute",
+            acceptsFailingRequiredCheck: true,
+          },
+        ],
+        "acme/other": [{ match: {}, confidentiality: "non-confidential" }],
+      }),
+    ).toEqual(["acme/app[2].confidentiality"]);
+  });
+
+  it("[FD-PROF-025] a repository's mode is its first rule that sets one, and a confidentiality-only rule takes no part in class resolution", () => {
+    const mode: PolicyRule = {
+      match: {},
+      confidentiality: "confidential-compute",
+      acceptsFailingRequiredCheck: true,
+    };
+    expect(confidentialityOf([{ match: {}, class: "batch" }, mode])).toBe("confidential-compute");
+    expect(confidentialityOf([{ match: {}, class: "batch" }])).toBeUndefined();
+    expect(resolveClass(pr, { ...notRequired, ...rules(mode) }).class).toBe("interactive");
+    expect(
+      resolveClass(pr, { ...notRequired, ...rules(mode, { match: {}, class: "batch" }) }).class,
+    ).toBe("batch");
   });
 });

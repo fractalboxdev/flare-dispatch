@@ -3,6 +3,7 @@
 // inputs, with no clock, store or service (FD-PROF-011); the protection-snapshot cache that feeds `resolveClass`
 // holds the one clock read.
 import type { BindingResult, DedupRecipe, Unavailable } from "@fractalboxdev/mameko-coordinator";
+import type { ConfidentialityMode } from "@fractalboxdev/mameko-kernel";
 import { Schema } from "effect";
 
 /** FlareDispatch's classes in rank order; index is rank. */
@@ -101,7 +102,18 @@ export type ProtectionSnapshot = typeof ProtectionSnapshot.Type;
 
 const ClassLiteral = Schema.Literals(CLASS_ORDER);
 
-/** One policy rule from the repository's policy rules, the `policy-rules` input. */
+/** The confidentiality modes a policy rule may set for its repository (MAMEKO-LEASE-084). */
+export const CONFIDENTIALITY_MODES = [
+  "non-confidential",
+  "unclassified",
+  "confidential-model",
+  "confidential-compute",
+] as const satisfies readonly ConfidentialityMode[];
+
+/**
+ * One policy rule from the repository's policy rules, the `policy-rules` input. A rule sets a class, the repository's
+ * confidentiality mode, or both; class resolution reads only the rules that set a class.
+ */
 export const PolicyRule = Schema.Struct({
   /** Matches when every present field matches. */
   match: Schema.Struct({
@@ -109,7 +121,14 @@ export const PolicyRule = Schema.Struct({
     /** A pull-request label the request carries. */
     label: Schema.optional(Schema.String),
   }),
-  class: ClassLiteral,
+  class: Schema.optional(ClassLiteral),
+  /** The repository's confidentiality mode; policy sync admits it only on a rule that matches every request. */
+  confidentiality: Schema.optional(Schema.Literals(CONFIDENTIALITY_MODES)),
+  /**
+   * The operator accepts that a required check of a `confidential-compute` repository fails while no device can run
+   * it; policy sync rejects `confidential-compute` without it (FD-PROF-025).
+   */
+  acceptsFailingRequiredCheck: Schema.optional(Schema.Boolean),
   /** The rule lifts the run's `limits.qosCeiling`. */
   liftsCeiling: Schema.optional(Schema.Boolean),
   /** The callers whose `class` input may raise up to `class` (step 6). */
@@ -166,6 +185,12 @@ const isReleaseTrigger = (r: ClassRequest): boolean => {
   }
 };
 
+type ClassRule = PolicyRule & { readonly class: ClassName };
+
+/** The rules that set a class, in order; a rule that sets only a confidentiality mode takes no part in resolution. */
+const classRules = (rules: readonly PolicyRule[]): readonly ClassRule[] =>
+  rules.filter((x): x is ClassRule => x.class !== undefined);
+
 const ruleMatches = (rule: PolicyRule, r: ClassRequest): boolean =>
   (rule.match.run === undefined || rule.match.run === r.run) &&
   (rule.match.label === undefined || (r.labels ?? []).includes(rule.match.label));
@@ -213,7 +238,7 @@ export const resolveClassDetailed = (
   const rules = inputs["policy-rules"];
   const base = current ?? runDefault.class;
   let resolved = base;
-  const rule = isRules(rules) ? rules.find((x) => ruleMatches(x, r)) : undefined;
+  const rule = isRules(rules) ? classRules(rules).find((x) => ruleMatches(x, r)) : undefined;
   const raisesToRequired = rule !== undefined && rule.class === "required" && verifiedRequired;
   if (rule !== undefined) {
     if (rank(rule.class) >= rank(base)) resolved = rule.class;
@@ -257,7 +282,7 @@ const callerAllowance = (rules: readonly PolicyRule[], r: ClassRequest): ClassNa
   const c = r.caller;
   if (c === undefined || !c.protectedBranch) return undefined;
   let best: ClassName | undefined;
-  for (const rule of rules) {
+  for (const rule of classRules(rules)) {
     if (!ruleMatches(rule, r)) continue;
     const ok = (rule.callers ?? []).some(
       (x) =>

@@ -1,10 +1,19 @@
 // The image a lease names, from the run's catalogue entry and the claiming executor's kind, the deadline a gate run's
-// input carries, and the fields that name the execution.
+// input carries, the fields that name the execution, and the nonce bound to the execution and epoch.
 import { CheckInput, lookupRun, type CatalogEntry } from "@fractalboxdev/flare-dispatch-catalog";
 import type { IntakeRecord } from "@fractalboxdev/flare-dispatch-intake";
+import { sqliteD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import { Effect, Exit, Schema } from "effect";
 import { describe, expect, it } from "vitest";
-import { gateInputs, imageDigestOf, NO_IMAGE, requestLeaseFields } from "../src/lease.ts";
+import {
+  gateInputs,
+  imageDigestOf,
+  invalidateLeaseNonce,
+  issuedLeaseNonce,
+  leaseNonce,
+  NO_IMAGE,
+  requestLeaseFields,
+} from "../src/lease.ts";
 
 const entry = (run: string): CatalogEntry => {
   const found = lookupRun("development", run);
@@ -112,12 +121,78 @@ describe("the lease fields that name the execution", () => {
       installation: 4242,
       caller: "operator@example.com",
     });
-    const webhook = { ...record, trigger: "webhook" as const, caller: null, ref: "refs/heads/main" };
+    const webhook = {
+      ...record,
+      trigger: "webhook" as const,
+      caller: null,
+      ref: "refs/heads/main",
+    };
     expect(requestLeaseFields(entry("check"), webhook, execution).request_context).toEqual({
       trigger: "webhook",
       ref: "refs/heads/main",
       installation: 4242,
       caller: null,
     });
+  });
+});
+
+describe("a lease's nonce", () => {
+  const T = Date.UTC(2026, 10, 12);
+
+  it("[FD-PROV-010] issues 128 random bits bound to the execution_id and the epoch", async () => {
+    const db = sqliteD1();
+    const run = <A, E>(e: Effect.Effect<A, E>) => Effect.runPromise(e);
+    const nonce = await run(leaseNonce(db, "e-1", 3, T));
+    // 16 bytes as hex: exactly 128 bits.
+    expect(nonce).toMatch(/^[0-9a-f]{32}$/);
+    // The nonce is stored against the pair, and only that pair answers it.
+    expect(await run(issuedLeaseNonce(db, "e-1", 3))).toBe(nonce);
+    expect(await run(issuedLeaseNonce(db, "e-1", 4))).toBeNull();
+    expect(await run(issuedLeaseNonce(db, "e-2", 3))).toBeNull();
+    expect(db.sqlite.prepare("select execution_id, epoch, nonce from lease_nonces").all()).toEqual([
+      { execution_id: "e-1", epoch: 3, nonce },
+    ]);
+    // A repeated grant at the same epoch carries the nonce already issued for it.
+    expect(await run(leaseNonce(db, "e-1", 3, T + 1))).toBe(nonce);
+    // Every other (execution, epoch) draws its own.
+    const drawn = new Set([nonce]);
+    for (let i = 0; i < 64; i++) drawn.add(await run(leaseNonce(db, `e-${i + 10}`, 1, T)));
+    expect(drawn.size).toBe(65);
+  });
+
+  it("[FD-PROV-011] a reclaim invalidates the previous epoch's nonce and the next epoch's grant issues a fresh one", async () => {
+    const db = sqliteD1();
+    const run = <A, E>(e: Effect.Effect<A, E>) => Effect.runPromise(e);
+    const first = await run(leaseNonce(db, "e-1", 1, T));
+    await run(invalidateLeaseNonce(db, "e-1", 1, T + 1));
+    expect(await run(issuedLeaseNonce(db, "e-1", 1))).toBeNull();
+    // The reclaimed epoch's lease is never granted again with its nonce.
+    expect(
+      await Effect.runPromise(
+        leaseNonce(db, "e-1", 1, T + 2).pipe(
+          Effect.map(() => "granted"),
+          Effect.catchTag("LeaseNonceInvalidated", () => Effect.succeed("refused")),
+        ),
+      ),
+    ).toBe("refused");
+    const second = await run(leaseNonce(db, "e-1", 2, T + 3));
+    expect(second).toMatch(/^[0-9a-f]{32}$/);
+    expect(second).not.toBe(first);
+    expect(await run(issuedLeaseNonce(db, "e-1", 2))).toBe(second);
+    // Another execution's nonce is untouched by this one's reclaim.
+    const other = await run(leaseNonce(db, "e-2", 1, T));
+    await run(invalidateLeaseNonce(db, "e-1", 2, T + 4));
+    expect(await run(issuedLeaseNonce(db, "e-2", 1))).toBe(other);
+  });
+
+  it("[FD-PROV-011] a grant at a later epoch invalidates every earlier epoch's nonce of the execution", async () => {
+    const db = sqliteD1();
+    const run = <A, E>(e: Effect.Effect<A, E>) => Effect.runPromise(e);
+    await run(leaseNonce(db, "e-1", 1, T));
+    await run(leaseNonce(db, "e-1", 2, T + 1));
+    const third = await run(leaseNonce(db, "e-1", 5, T + 2));
+    expect(await run(issuedLeaseNonce(db, "e-1", 1))).toBeNull();
+    expect(await run(issuedLeaseNonce(db, "e-1", 2))).toBeNull();
+    expect(await run(issuedLeaseNonce(db, "e-1", 5))).toBe(third);
   });
 });

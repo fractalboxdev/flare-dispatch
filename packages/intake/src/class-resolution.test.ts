@@ -243,6 +243,35 @@ describe("resolveClass at intake", () => {
   });
 });
 
+describe("synced policy rules at intake", () => {
+  it("[FD-PROF-017] a repository's synced rule lowers its run's class, and another repository's rule does not apply", async () => {
+    const withRules = (repo: string) =>
+      resolving({
+        repos: { [REPO]: repoWithManifest(undefined, { required: { main: [] } }) },
+        settings: {
+          policyRules: (r) =>
+            r === repo
+              ? [
+                  {
+                    match: {},
+                    confidentiality: "confidential-compute",
+                    acceptsFailingRequiredCheck: true,
+                  },
+                  { match: { run: "check" }, class: "batch" },
+                ]
+              : [],
+        },
+      });
+    const own = await withRules(REPO);
+    await deliver(own, "pull_request", pullRequestPayload());
+    expect(classes(own)).toEqual({ check: "batch", lint: "batch" });
+
+    const other = await withRules("acme/other");
+    await deliver(other, "pull_request", pullRequestPayload());
+    expect(classes(other)).toEqual({ check: "interactive", lint: "batch" });
+  });
+});
+
 describe("protected triggers", () => {
   const pushed = async (ref: string, protectedRefs: string[]) => {
     const h = await harness({

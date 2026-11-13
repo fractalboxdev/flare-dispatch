@@ -12,6 +12,8 @@ import {
   loadProfile,
   poolAdmissionCaps,
   profileLoader,
+  validatePolicyRules,
+  type PolicyRules,
   type ValidationContext,
 } from "@fractalboxdev/flare-dispatch-profile";
 import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
@@ -202,6 +204,13 @@ export const unrenderedCheck = (worker: string, rendered: string): readonly Find
  */
 export const modelRegistryCheck = (entries: readonly RegistryEntry[]): readonly Finding[] =>
   checkRegistry(entries).map((r) => fail("model-registry", `models.registry.${r.entry}`, r.reason));
+
+/**
+ * Policy sync over the overlay's policy rules: one failure per rule it rejects, among them a rule that sets
+ * `confidential-compute` without `acceptsFailingRequiredCheck: true` (FD-PROF-025).
+ */
+export const policyRulesCheck = (rules: PolicyRules): readonly Finding[] =>
+  validatePolicyRules(rules).map((r) => fail("policy-rules", `policy.rules.${r.path}`, r.reason));
 
 /** The agentic recipes of the run catalogue a deploy carries, each by run name with its declaration. */
 export type AgenticRegistry = Readonly<Record<string, { readonly declaration: unknown }>>;

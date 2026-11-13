@@ -55,13 +55,13 @@ No class declares `device_eligible` or `deadline_offset`, so every class may run
 
 ### Class resolution
 
-`resolveClass` is the class-resolution binding. Its declared inputs are `protection-snapshot`, the target branch's ruleset and branch-protection required set, and `policy-rules`, the repository's policy rules; its default class is `batch`. It applies seven steps in order.
+`resolveClass` is the class-resolution binding. Its declared inputs are `protection-snapshot`, the target branch's ruleset and branch-protection required set, and `policy-rules`, the repository's policy rules; its default class is `batch`. A policy rule sets a class, the repository's confidentiality mode, or both, and a rule that sets only a confidentiality mode takes no part in class resolution. `resolveClass` applies seven steps in order.
 
 | Step | Rule |
 | --- | --- |
 | 1 | A run on the in-code `release` allowlist triggered by a release trigger resolves to `release`. The release triggers are a push of a tag a ruleset protects, a `check_suite` or `deployment_status` event on the default branch, a `push` to a ruleset-protected branch named by `workerDeploy.branch`, an Actions dispatch whose OIDC `ref` is that branch, and a follow-on intent of a `release` execution |
 | 2 | A gating run (`check`, `oxlint`, `offload-test`, `security-gate`) on `pull_request`, `merge_group` or a `gh-readonly-queue/*` push resolves to `required` when its check name is in the target branch's required set, and to `interactive` when it is not |
-| 3 | The first matching policy rule may lower the class, and raises it only to a `required` that step 2 verified and only up to the run's `limits.qosCeiling`, unless the rule lifts the ceiling |
+| 3 | The first matching policy rule that sets a class may lower the class, and raises it only to a `required` that step 2 verified and only up to the run's `limits.qosCeiling`, unless the rule lifts the ceiling |
 | 4 | The run default `limits.qosClass`, capped at `limits.qosCeiling`; a run that declares no `limits.qosClass` resolves to `batch` with the `local-only` constraint |
 | 5 | A child takes the lower of its parent's class and its own result |
 | 6 | The dispatch `class` input lowers freely, and raises only as a policy rule allows for the caller's OIDC identity scoped to (repository, workflow ref) on a protected branch |
@@ -74,7 +74,7 @@ flowchart TB
   s1{1. On the release allowlist and a release trigger?}
   s2{2. Gating run whose check the target branch requires?}
   look{Protection snapshot}
-  s3["3. First matching policy rule: may lower; raises only to a verified required"]
+  s3["3. First matching policy rule that sets a class: may lower; raises only to a verified required"]
   s4[4. Run default limits.qosClass, capped by limits.qosCeiling]
   s5[5. Lower of parent class and result]
   s6["6. Class input: lowers freely; raises only as a rule allows for the caller"]
@@ -153,7 +153,7 @@ The generic constraints of [admission-qos.md](https://github.com/fractalboxdev/m
 | `local_only` | A run that declares no class |
 | `launcher_kinds` | None before phase 4; `gha`, the GitHub Actions launcher, from phase 4 |
 
-From phase 4 the profile declares five constraints; before phase 4 it declares none, and `placement.required` and `placement.unreachable` are empty:
+From phase 4 the profile declares six constraints; before phase 4 it declares none, and `placement.required` and `placement.unreachable` are empty:
 
 | Constraint | Holds for | Removes | Posture |
 | --- | --- | --- | --- |
@@ -162,8 +162,11 @@ From phase 4 the profile declares five constraints; before phase 4 it declares n
 | `apple-build-gha` | Label `apple-build`, class not `required`, no label `release-matrix` | `gha` | — |
 | `gha-apple-only` | Neither label `apple-build` nor label `release-matrix` | `gha` | — |
 | `reproduction` | Label `reproduction`: a reproduction execution ([provenance.md](provenance.md) FD-PROV-064) | `cloudflare`, `aws`, `gha` | `attested-dedicated` |
+| `deployment-secret-grant` | Label `deployment-secret-grant`: a run whose egress profiles hold a grant that attaches a deployment secret ([isolation-egress.md](isolation-egress.md) FD-ISO-022) | `gha` | — |
 
 A release-matrix job that declares `macos-arm64` keeps exactly `gha` at every class: `release-matrix` removes every other kind and `cloud-pinned` does not hold for it. An `apple-build` run of class `required` keeps `gha` and `device`; at every other class it keeps `device` alone. `placement.required` lists the release-matrix job, so the profile validator rejects a profile that leaves it unplaceable. `placement.unreachable` lists a reproduction run with `untrusted-input`, `cloud-only` or `expose-port`, and an `apple-build` run with `expose-port`: FlareDispatch creates a reproduction execution from the release, never from a fork pull request or the tag push.
+
+Intake adds the label `deployment-secret-grant` to the labels class resolution returns when a grant of the execution's egress profiles, the base grants of both phases and the run's own, attaches a deployment secret. `cf-api` attaches one; no base grant does ([isolation-egress.md](isolation-egress.md) § Egress on `gha`). A run with that label keeps no `gha`, a release-matrix job included.
 
 ### Outcome mapping
 
@@ -281,8 +284,9 @@ mameko's [profiles.md](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc
 | `idempotency-key` recipe | No `digest`; `on_mismatch` defaults to `duplicate` | `digest` over the dispatch body; `on_mismatch: conflict` |
 | `aws` in `required`'s cloud kinds | From phase 2 | From phase 3 (FD-PROF-064) |
 | The `gha` launcher kind and `gha` in every class's cloud kinds | From phase 3 | From phase 4 (FD-PROF-064) |
+| Constraint `deployment-secret-grant` | None | From phase 4: removes `gha` from a run whose egress profiles hold a grant that attaches a deployment secret ([isolation-egress.md](isolation-egress.md) FD-ISO-022) |
 
-FlareDispatch's phase n document is compared with the reference profile's form for phase n ([MAMEKO-PROF-023](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/profiles.md)), so `registration.attestation` agrees in every phase and only the two rows above differ by phase.
+FlareDispatch's phase n document is compared with the reference profile's form for phase n ([MAMEKO-PROF-023](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/profiles.md)), so `registration.attestation` agrees in every phase and only the last three rows above differ by phase.
 
 ## Requirements
 

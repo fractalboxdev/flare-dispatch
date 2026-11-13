@@ -91,7 +91,8 @@ jobs:
       - run: $STRIP_TYPES packages/ops/scripts/profile-reference.ts
 
   # FD-VER-014 to FD-VER-016 and FD-VER-022: the toolchain pin, the forbidden-term scan, `lake build`, `#print axioms`
-  # and the append-only regressions file.
+  # and the append-only regressions file. FD-PROV-073: `tamarin-prover --prove` on `formal/provenance.spthy` at the
+  # prover and Maude releases `formal/tamarin-prover.version` pins, each archive checked against its SHA-256.
   formal:
     runs-on: ubuntu-latest
     steps:
@@ -106,9 +107,30 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
             | sh -s -- -y --default-toolchain "$(cat formal/lean-toolchain)"
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Install the pinned Tamarin prover and Maude
+        env:
+          TAMARIN_SHA256: 201be06f469e47cff554df6ca93db8366fc2c69d70c61fcbd1370a1074b469c6
+          MAUDE_SHA256: 72ed1ca87e3b3d0dfc6ee1436baf154bf04c45ff97d521bec040c5e8dfc8f92c
+        run: |
+          tamarin="$(awk '$1 == "tamarin-prover" { print $2 }' formal/tamarin-prover.version)"
+          maude="$(awk '$1 == "maude" { print $2 }' formal/tamarin-prover.version)"
+          curl -fsSL -o "$RUNNER_TEMP/tamarin.tar.gz" \
+            "https://github.com/tamarin-prover/tamarin-prover/releases/download/${tamarin}/tamarin-prover-${tamarin}-linux64-ubuntu.tar.gz"
+          echo "${TAMARIN_SHA256}  $RUNNER_TEMP/tamarin.tar.gz" | sha256sum -c -
+          curl -fsSL -o "$RUNNER_TEMP/maude.zip" \
+            "https://github.com/maude-lang/Maude/releases/download/Maude${maude}/Maude-${maude}-linux-x86_64.zip"
+          echo "${MAUDE_SHA256}  $RUNNER_TEMP/maude.zip" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/prover"
+          tar -xzf "$RUNNER_TEMP/tamarin.tar.gz" -C "$RUNNER_TEMP/prover" tamarin-prover
+          unzip -q "$RUNNER_TEMP/maude.zip" -d "$RUNNER_TEMP/prover"
+          chmod +x "$RUNNER_TEMP/prover/tamarin-prover" "$RUNNER_TEMP/prover/maude"
+          echo "$RUNNER_TEMP/prover" >> "$GITHUB_PATH"
+          echo "MAUDE_LIB=$RUNNER_TEMP/prover" >> "$GITHUB_ENV"
       - name: formal
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
+          # The prover prints Unicode; a non-UTF-8 locale aborts its output.
+          LC_ALL: C.UTF-8
         run: $STRIP_TYPES packages/ops/scripts/formal-gate.ts ${BASE:+--base "$BASE"}
 
   # FD-VER-026 to FD-VER-031: only a pull request that changes .github/phase gates; the records come from the nightly

@@ -5,7 +5,13 @@ import {
 } from "@fractalboxdev/flare-dispatch-agentic/executor";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
-import { attachGrants, executionGrantRules, MODEL_GATEWAY_PATH } from "./egress.ts";
+import { buildProfile, deploymentSecretGrantLabels } from "@fractalboxdev/flare-dispatch-profile";
+import {
+  attachGrants,
+  attachesDeploymentSecret,
+  executionGrantRules,
+  MODEL_GATEWAY_PATH,
+} from "./egress.ts";
 import { runsFor } from "./runs.ts";
 
 const HOST = "cp.example.com";
@@ -69,6 +75,23 @@ describe("the model-gateway grant", () => {
         rules,
       ).headers.get("authorization"),
     ).toBe("Bearer cf");
+  });
+});
+
+describe("grants that attach a deployment secret", () => {
+  it("[FD-ISO-022] cf-api attaches a deployment secret and no base grant does, so only a run declaring one loses gha", () => {
+    expect(attachesDeploymentSecret("cf-api")).toBe(true);
+    for (const grant of ["package-registries", "git-remote", "model-gateway", "unknown"])
+      expect(attachesDeploymentSecret(grant)).toBe(false);
+    const profile = buildProfile("production", 4);
+    expect(deploymentSecretGrantLabels(profile, undefined, attachesDeploymentSecret)).toEqual([]);
+    expect(
+      deploymentSecretGrantLabels(
+        profile,
+        { setup: ["cf-api"], agent: [] },
+        attachesDeploymentSecret,
+      ),
+    ).toEqual(["deployment-secret-grant"]);
   });
 });
 

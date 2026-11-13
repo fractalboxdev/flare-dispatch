@@ -1,11 +1,13 @@
 // FlareDispatch's device extension: the plane's process beside mameko's device executor, answering the extension
 // interface on file descriptor 3 (MAMEKO-EXEC-140). It holds L1 per cache namespace — the cache package's L1, which
 // reads through to L2 on a miss and uploads to L2 after a put — and `LocalContent` per tenant scope, and restores a
-// cache entry only for a namespace a lease it was handed may read (FD-EXEC-007).
+// cache entry only for a namespace a lease it was handed may read (FD-EXEC-007). Its `statement` operation answers the
+// unsigned DSSE envelope the statement builder writes (specs/provenance.md § Statement flow).
 import { createHash } from "node:crypto";
 import type { L1Cache, L2Client } from "@fractalboxdev/flare-dispatch-cache/device";
 import { decodeExtensionLine, type ExtensionMessage } from "@fractalboxdev/mameko-protocol";
 import { Cause, Effect, Exit, Schema } from "effect";
+import { buildEnvelope } from "./statement.ts";
 
 /** The extension's protocol version. */
 export const EXTENSION_VERSION = 1;
@@ -13,7 +15,7 @@ export const EXTENSION_VERSION = 1;
 /** The default share of the free disk measured at start that L1 may hold (FD-CACHE-009). */
 export const DEFAULT_L1_SHARE = 0.2;
 
-/** The operations this extension serves; `statement` needs a signing operation the device extension lacks. */
+/** The operations this extension serves. */
 export const OPERATIONS = [
   "cache.get",
   "cache.put",
@@ -21,6 +23,7 @@ export const OPERATIONS = [
   "content.put",
   "content.get",
   "proxies",
+  "statement",
 ] as const;
 
 /** The cache namespace forms of the profile's `cache_namespaces` binding (specs/README.md § Glossary). */
@@ -148,6 +151,15 @@ export const answer = (state: ExtensionState, m: ExtensionMessage): Effect.Effec
         const bytes = state.content.get(`${m.scope_id}/${m.digest}`);
         return ok("content.get.ok", { bytes: bytes === undefined ? null : b64(bytes) });
       }
+      case "statement":
+        return yield* buildEnvelope(m.input).pipe(
+          Effect.map((envelope) =>
+            ok("statement.ok", { bytes: b64(new TextEncoder().encode(JSON.stringify(envelope))) }),
+          ),
+          Effect.catchTag("StatementInputInvalid", (e) =>
+            Effect.succeed(error(m.id, "invalid", e.message)),
+          ),
+        );
       case "extension.welcome":
       case "extension.error":
         return null;
