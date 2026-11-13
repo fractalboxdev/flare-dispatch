@@ -132,6 +132,7 @@ export const payload = <I>(run: string, input: I, execution = FAKE_EXECUTION_ID)
   workflow_version: 1,
   execution_id: execution,
   run,
+  run_digest: "sha256:none",
   run_version: "2.0.0",
   scope_id: "scope",
   request_context: {},

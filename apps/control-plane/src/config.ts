@@ -264,7 +264,12 @@ export const statementRetentionDaysOf = (
   env: Pick<ControlPlaneEnv, "STATEMENT_RETENTION_DAYS">,
 ): number => {
   const raw = env.STATEMENT_RETENTION_DAYS;
-  const days = typeof raw === "number" ? raw : typeof raw === "string" && raw !== "" ? Number(raw) : Number.NaN;
+  const days =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && raw !== ""
+        ? Number(raw)
+        : Number.NaN;
   return Number.isInteger(days) && days > 0 ? days : DEFAULT_STATEMENT_RETENTION_DAYS;
 };
 
@@ -347,7 +352,7 @@ export const channelConfig = (profile: Profile): ExecutorChannelEnv["MAMEKO_CHAN
 
 /**
  * The stage configuration. A device execution has no container rate and the channel takes no hold at claim, so each
- * class's hold terms are zero. A staged intent is written only for an outcome its kind is applied for (MAMEKO-RUN-074).
+ * class's hold terms are zero. A staged intent is written only for an outcome its kind is applied for (MAMEKO-RUN-078).
  */
 export const executionConfig = (
   profile: Profile,

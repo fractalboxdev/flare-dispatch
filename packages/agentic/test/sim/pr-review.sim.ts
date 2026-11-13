@@ -311,6 +311,7 @@ export const runScenario = async (seed: number): Promise<Observation> => {
     workflow_version: 1,
     execution_id: reviewed.executionId,
     run: "pr-review",
+    run_digest: "sha256:none",
     run_version: prReviewRun.spec.version,
     scope_id: REPO,
     request_context: {},

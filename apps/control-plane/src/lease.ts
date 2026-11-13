@@ -1,12 +1,16 @@
 // The application's lease fields: which image an execution of a run runs in, by digest, what names the execution, and
 // the nonce bound to the execution and epoch (specs/provenance.md § Nonce and epoch).
 import type { CatalogEntry } from "@fractalboxdev/flare-dispatch-catalog";
+import RUN_DIGESTS from "@fractalboxdev/flare-dispatch-catalog/run-digests" with { type: "json" };
 import { requestContextOf, type IntakeRecord } from "@fractalboxdev/flare-dispatch-intake";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Effect, Schema } from "effect";
 
 /** The image a host execution names: it runs in no image, and a lease must carry the field. */
 export const NO_IMAGE = "none: host execution";
+
+/** The `run_digest` of a lease whose run the catalogue lacks: no run definition has it. */
+export const NO_RUN_DIGEST = "sha256:none";
 
 /** A lease for a run that executes in the gate image, on a deploy that names no digest for it. */
 export class GateImageUnpinned extends Schema.TaggedError<GateImageUnpinned>()(
@@ -18,7 +22,7 @@ export class GateImageUnpinned extends Schema.TaggedError<GateImageUnpinned>()(
 ) {}
 
 /**
- * The image a lease names (MAMEKO-EXEC-031): none for a host execution on a device, else the gate image by digest
+ * The image a lease names (MAMEKO-EXEC-037): none for a host execution on a device, else the gate image by digest
  * (`infra/v2/Dockerfile.gate`), which the deploy holds as `GATE_IMAGE_DIGEST`. Without it such a lease fails.
  */
 export const imageDigestOf = (
@@ -51,6 +55,12 @@ export const requestLeaseFields = (
   record: IntakeRecord,
   execution: { readonly scope_id: string; readonly deadline_at: number },
 ) => ({
+  // The run-definition digest the runner checks the lease's run against; a run the catalogue lacks names a digest no
+  // run has, so a runner refuses it (MAMEKO-EXEC-150).
+  run_digest:
+    entry === null
+      ? NO_RUN_DIGEST
+      : ((RUN_DIGESTS as Readonly<Record<string, string>>)[entry.spec.name] ?? NO_RUN_DIGEST),
   run_version: entry?.spec.version ?? "",
   workflow_version: entry?.workflowVersion ?? 1,
   request_context: requestContextOf(record),

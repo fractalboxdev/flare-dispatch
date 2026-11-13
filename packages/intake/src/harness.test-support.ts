@@ -109,8 +109,8 @@ export interface Recorded {
   readonly resolved: ClassRequest[];
   readonly reported: { repo: string; sha: string; errors: readonly string[] }[];
   /**
-   * Every workflow cancel admission, a group cancel or a per-execution cancel asked for, in order (MAMEKO-ADM-062,
-   * MAMEKO-ADM-064, MAMEKO-ADM-065).
+   * Every workflow cancel admission, a group cancel or a per-execution cancel asked for, in order (MAMEKO-ADM-064,
+   * MAMEKO-ADM-066, MAMEKO-ADM-067).
    */
   readonly workflowCancels: { executionId: string; cause: string }[];
   readonly evicted: string[];

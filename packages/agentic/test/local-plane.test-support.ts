@@ -205,7 +205,7 @@ export const localPlane = async (opts: { readonly rate?: number } = {}) => {
 
   /**
    * `local.register` under the lease: mameko answers `lease_stale` for a lease that is not current and asks the
-   * registration port otherwise (MAMEKO-PROTO-082).
+   * registration port otherwise (MAMEKO-PROTO-086).
    */
   const register = async (
     leaseCurrent: boolean,
@@ -270,7 +270,7 @@ export const localPlane = async (opts: { readonly rate?: number } = {}) => {
   /**
    * The control plane receives one `local.writeback`: the `WritebackGate` port decides it, mameko's `onLocalWriteback`
    * answers the gate's decision for the request's intents, and mameko inserts the accepted intents as outbox rows of
-   * the execution (MAMEKO-PROTO-083).
+   * the execution (MAMEKO-PROTO-087).
    */
   const receive = async (request: WritebackRequest): Promise<WritebackAck> => {
     const accepted = await Effect.runPromise(

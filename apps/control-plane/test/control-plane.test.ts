@@ -1073,7 +1073,7 @@ describe("a development deployment", () => {
     ],
     ["cancelled", { status: "cancelled", reason: "superseded" }, "cancelled", "superseded", "e"],
   ])(
-    "MAMEKO-RUN-046 records a run's %s outcome as itself",
+    "MAMEKO-RUN-050 records a run's %s outcome as itself",
     async (name, outcome, verdict, reason, shaChar) => {
       const device = await newDevice();
       const executor = `mac-${name}`;

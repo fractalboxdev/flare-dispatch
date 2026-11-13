@@ -1,5 +1,5 @@
 // FlareDispatch's device extension process as mameko's device executor reaches it: started with its end of a
-// socketpair as file descriptor 3 (MAMEKO-EXEC-140), greeted through mameko's `answerHello`, and driven only with
+// socketpair as file descriptor 3 (MAMEKO-EXEC-149), greeted through mameko's `answerHello`, and driven only with
 // messages of mameko's extension schema, each reply decoded by that schema. L1 lives on a temporary directory the
 // suite reads back, so the one-directory-per-namespace layout is checked on disk.
 import { type ChildProcess, spawn } from "node:child_process";
@@ -8,11 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  answerHello,
-  EXTENSION_FD,
-  ExtensionMessage,
-} from "@fractalboxdev/mameko-protocol";
+import { answerHello, EXTENSION_FD, ExtensionMessage } from "@fractalboxdev/mameko-protocol";
 import { Schema } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -97,10 +93,13 @@ const start = async (
   });
   const next = () =>
     new Promise<Message & { readonly ref?: string }>((ok, fail) => {
-      const timer = setTimeout(() => fail(new Error(`no line from the extension; stderr: ${stderr}`)), 15_000);
+      const timer = setTimeout(
+        () => fail(new Error(`no line from the extension; stderr: ${stderr}`)),
+        15_000,
+      );
       const take = (line: string) => {
         clearTimeout(timer);
-        // Every line the extension writes is one message of mameko's extension schema (MAMEKO-EXEC-140).
+        // Every line the extension writes is one message of mameko's extension schema (MAMEKO-EXEC-149).
         ok(decodeMessage(JSON.parse(line)));
       };
       const line = ready.shift();
@@ -136,16 +135,23 @@ const onDisk = (root: string, namespace: string, k: string) => {
 describe("device extension over mameko's extension interface", { timeout: 60_000 }, () => {
   it("[FD-CACHE-004] keeps L1 on local disk in one directory per namespace and serves cache.get, cache.put and cache.evict", async () => {
     const ext = await start();
-    expect(
-      await ext.request(proxies("p1", [NS_DEVICE, NS_PR], NS_PR)),
-    ).toMatchObject({ type: "proxies.ok", proxies: [] });
+    expect(await ext.request(proxies("p1", [NS_DEVICE, NS_PR], NS_PR))).toMatchObject({
+      type: "proxies.ok",
+      proxies: [],
+    });
     expect(await ext.request(proxies("p2", [NS_EXEC], NS_EXEC))).toMatchObject({
       type: "proxies.ok",
     });
 
     // One key under two namespaces is two entries, each in its namespace's directory.
     expect(
-      await ext.request({ type: "cache.put", id: "put-pr", namespace: NS_PR, key: key(1), bytes: b64("pr-entry") }),
+      await ext.request({
+        type: "cache.put",
+        id: "put-pr",
+        namespace: NS_PR,
+        key: key(1),
+        bytes: b64("pr-entry"),
+      }),
     ).toEqual({
       type: "cache.put.ok",
       id: "cache.put.ok-put-pr",
@@ -153,7 +159,13 @@ describe("device extension over mameko's extension interface", { timeout: 60_000
       digest: `sha256:${sha256("pr-entry")}`,
     });
     expect(
-      await ext.request({ type: "cache.put", id: "put-exec", namespace: NS_EXEC, key: key(1), bytes: b64("exec") }),
+      await ext.request({
+        type: "cache.put",
+        id: "put-exec",
+        namespace: NS_EXEC,
+        key: key(1),
+        bytes: b64("exec"),
+      }),
     ).toMatchObject({ type: "cache.put.ok", digest: `sha256:${sha256("exec")}` });
     expect(onDisk(ext.root, NS_PR, key(1))).toBe("pr-entry");
     expect(onDisk(ext.root, NS_EXEC, key(1))).toBe("exec");
@@ -193,13 +205,21 @@ describe("device extension over mameko's extension interface", { timeout: 60_000
     await ext.request(proxies("p1", [NS_DEVICE], null));
     // A readable namespace no lease may write takes no put, and nothing is written to its directory.
     expect(
-      await ext.request({ type: "cache.put", id: "put-ro", namespace: NS_DEVICE, key: key(3), bytes: b64("x") }),
+      await ext.request({
+        type: "cache.put",
+        id: "put-ro",
+        namespace: NS_DEVICE,
+        key: key(3),
+        bytes: b64("x"),
+      }),
     ).toMatchObject({ type: "extension.error", ref: "put-ro", code: "invalid" });
     expect(onDisk(ext.root, NS_DEVICE, key(3))).toBeNull();
-    expect(ext.operations).toEqual(expect.arrayContaining(["cache.get", "cache.put", "cache.evict"]));
+    expect(ext.operations).toEqual(
+      expect.arrayContaining(["cache.get", "cache.put", "cache.evict"]),
+    );
   });
 
-  // mameko starts one extension per plane (MAMEKO-EXEC-119) and its `cache.get` names no execution, so the extension
+  // mameko starts one extension per plane (MAMEKO-EXEC-125) and its `cache.get` names no execution, so the extension
   // scopes reads to the leases handed to its plane, not to one execution. This suite pins that per-plane half only.
   it("[FD-EXEC-007] cache.get answers null for a namespace no lease handed to this plane's extension names as readable, though its directory holds the entry", async () => {
     const ext = await start([
@@ -221,7 +241,13 @@ describe("device extension over mameko's extension interface", { timeout: 60_000
     ).toMatchObject({ type: "cache.get.ok", bytes: null });
     // A namespace the lease may write but not read restores nothing either.
     expect(
-      await ext.request({ type: "cache.put", id: "put-exec", namespace: NS_EXEC, key: key(2), bytes: b64("w") }),
+      await ext.request({
+        type: "cache.put",
+        id: "put-exec",
+        namespace: NS_EXEC,
+        key: key(2),
+        bytes: b64("w"),
+      }),
     ).toMatchObject({ type: "cache.put.ok" });
     expect(onDisk(ext.root, NS_EXEC, key(2))).toBe("w");
     expect(

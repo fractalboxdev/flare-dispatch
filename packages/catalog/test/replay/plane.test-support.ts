@@ -1,6 +1,6 @@
 // The control plane's half of a run's intents over D1: the executor channel stages an `exec.intents` batch under
-// `run:<key>` (MAMEKO-PROTO-049), accepts the epoch's result, and the `Execution` workflow's `applyOutbox` writes the
-// staged intents whose kind is applied for the accepted outcome (MAMEKO-RUN-074). The settings come from the profile
+// `run:<key>` (MAMEKO-PROTO-050), accepts the epoch's result, and the `Execution` workflow's `applyOutbox` writes the
+// staged intents whose kind is applied for the accepted outcome (MAMEKO-RUN-078). The settings come from the profile
 // through `controlPlaneSettings`, as the control plane derives its channel and stage configuration.
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
@@ -133,6 +133,7 @@ export const runPayload = <I>(executionId: string, run: string, scope: string, i
   workflow_version: 1,
   execution_id: executionId,
   run,
+  run_digest: "sha256:none",
   run_version: "2.0.0",
   scope_id: scope,
   request_context: {},

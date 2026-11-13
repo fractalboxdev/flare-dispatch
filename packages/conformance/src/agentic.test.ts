@@ -349,6 +349,7 @@ const runPayload = <I>(
   workflow_version: 1,
   execution_id: lease.id,
   run,
+  run_digest: "sha256:none",
   run_version: "2.0.0",
   scope_id: lease.scope,
   request_context: {},

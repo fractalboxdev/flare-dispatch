@@ -1,6 +1,6 @@
 # ADR-0004: The per-execution journal lives in Durable Object SQLite; cross-execution state lives in D1
 
-Status: Superseded by mameko [ADR-0006](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/adr/0006-journal-and-cross-execution-store.md) · 2026-10-24
+Status: Superseded by mameko [ADR-0006](https://github.com/fractalboxdev/mameko/blob/3fb2861f698c9fe906097890769b933cd5eab733/specs/adr/0006-journal-and-cross-execution-store.md) · 2026-10-24
 
 ## Context
 
@@ -12,7 +12,7 @@ Status: Superseded by mameko [ADR-0006](https://github.com/fractalboxdev/mameko/
 
 ## Decision
 
-- Each execution's journal lives in the SQLite storage of the one Durable Object keyed by its execution id, and its timed waits use that object's alarm (mameko's [engine.md](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/engine.md)).
+- Each execution's journal lives in the SQLite storage of the one Durable Object keyed by its execution id, and its timed waits use that object's alarm (mameko's [engine.md](https://github.com/fractalboxdev/mameko/blob/3fb2861f698c9fe906097890769b933cd5eab733/specs/engine.md)).
 - Cross-execution state lives in D1: executor registry, placements, admission, reservations, dedup keys, `executions` and the outbox ([architecture.md](../architecture.md)). Per-executor state, including the intents staged for the current epoch, lives in that executor's Durable Object.
 - `Execution` workflow steps are the only writers that bridge the two, and each D1 write they make is idempotent by execution id, step name and epoch.
 - The portable control plane maps both to Postgres tables with the same columns.

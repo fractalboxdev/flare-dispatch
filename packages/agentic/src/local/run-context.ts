@@ -18,7 +18,7 @@ export class WritebackHeld extends Schema.TaggedError<WritebackHeld>()("Writebac
   reason: Schema.Literals(["offline", "grant-rejected"]),
 }) {}
 
-/** One intent of a `local.writeback` request, keyed by the run-authored `run:<step name>:<index>` (MAMEKO-RUN-068). */
+/** One intent of a `local.writeback` request, keyed by the run-authored `run:<step name>:<index>` (MAMEKO-RUN-072). */
 export interface WritebackIntent {
   readonly intent_key: string;
   readonly kind: string;

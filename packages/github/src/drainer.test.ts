@@ -90,7 +90,7 @@ describe("the applier under the drainer", () => {
     expect(gh.runs).toHaveLength(1);
   });
 
-  it("[FD-GH-010] MAMEKO-OUT-022 MAMEKO-OUT-024 a lost acknowledgement is adopted by lookup", async () => {
+  it("[FD-GH-010] MAMEKO-OUT-024 MAMEKO-OUT-026 a lost acknowledgement is adopted by lookup", async () => {
     const gh = fakeGithub();
     const outbox = memoryOutboxStore();
     await outbox.seed([stored("1", row("check.open", ref))]);
@@ -103,7 +103,7 @@ describe("the applier under the drainer", () => {
     expect(gh.calls.filter((c) => c === "create")).toHaveLength(1);
   });
 
-  it("[FD-GH-052] MAMEKO-OUT-042 the outcome row goes first; the later check.open adopts its check run", async () => {
+  it("[FD-GH-052] MAMEKO-OUT-044 the outcome row goes first; the later check.open adopts its check run", async () => {
     const gh = fakeGithub();
     const outbox = memoryOutboxStore();
     await outbox.seed([
@@ -172,7 +172,7 @@ describe("githubApplicationLayer", () => {
     output: { title: null, summary: null },
   };
 
-  it("MAMEKO-OUT-040 headers the client observes stop the next permit; the waiting row stays pending", async () => {
+  it("MAMEKO-OUT-042 headers the client observes stop the next permit; the waiting row stays pending", async () => {
     const calls: string[] = [];
     const application = githubApplicationLayer({
       fetch: (async (_input: string | URL | Request, init?: RequestInit) => {

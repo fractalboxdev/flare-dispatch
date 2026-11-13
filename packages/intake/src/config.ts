@@ -81,7 +81,7 @@ export class IntakeConfig extends Context.Service<IntakeConfig, IntakeSettings>(
 /**
  * One request as intake hands it to mameko's `admit`: the id intake writes its record under, the class and labels
  * intake's class resolution returned, the dedup key, the placement facts and the run's limits. It is plain data, so a
- * request held for its cooldown window is admitted later from the stored value under the same id (MAMEKO-ADM-105).
+ * request held for its cooldown window is admitted later from the stored value under the same id (MAMEKO-ADM-107).
  */
 export interface IntakeAdmitInput {
   readonly executionId: string;
@@ -92,10 +92,10 @@ export interface IntakeAdmitInput {
   readonly labels: readonly string[];
   readonly enqueuedAtMs: number;
   readonly dedup: {
-    /** The SHA-256 of `canonical`, as `dedupKey` computes it and admission stores it (MAMEKO-ADM-034). */
+    /** The SHA-256 of `canonical`, as `dedupKey` computes it and admission stores it (MAMEKO-ADM-036). */
     readonly sha256: string;
     readonly canonical: string;
-    /** The SHA-256 of the dispatch body's canonical JSON, as admission stores it beside the key (MAMEKO-ADM-094). */
+    /** The SHA-256 of the dispatch body's canonical JSON, as admission stores it beside the key (MAMEKO-ADM-096). */
     readonly requestDigest: string | null;
     /** The dispatch body the digest covers; admission hashes its canonical JSON itself, so it gets the body, not the digest. */
     readonly digestBody: unknown;
@@ -110,10 +110,10 @@ export interface IntakeAdmitInput {
   readonly grants: { readonly setup: readonly string[]; readonly agent: readonly string[] };
   /**
    * The supersession group the request joins, from the profile's `supersessionKey` binding; null or absent joins none
-   * (MAMEKO-ADM-061, FD-PROF-027).
+   * (MAMEKO-ADM-063, FD-PROF-027).
    */
   readonly supersessionKey?: string | null;
-  /** The serial group the request joins, for a run that declares `serialize`; null or absent joins none (MAMEKO-ADM-068). */
+  /** The serial group the request joins, for a run that declares `serialize`; null or absent joins none (MAMEKO-ADM-070). */
   readonly serialKey?: string | null;
   /**
    * The check run the execution owns, as the `checkOpenPayload` binding reads it: `flare-dispatch/<run>[:<checkLabel>]`
@@ -159,7 +159,7 @@ export class Admission extends Context.Service<
     /** Runs after a request is queued, for the caller to wake standing claims. */
     readonly queued: (className: string) => Effect.Effect<void>;
     /**
-     * Cancels every live member of one supersession group with `cause`, and answers their ids (MAMEKO-ADM-064). A cause
+     * Cancels every live member of one supersession group with `cause`, and answers their ids (MAMEKO-ADM-066). A cause
      * outside the profile's closed set is `misconfigured`.
      */
     readonly cancelGroup: (
@@ -168,7 +168,7 @@ export class Admission extends Context.Service<
     ) => Effect.Effect<readonly string[], IntakeUnavailable | IntakeError>;
     /**
      * Cancels one execution, queued or claimed, with `cause`, and answers whether it was live; a terminal execution is
-     * left unchanged (MAMEKO-ADM-065). A cause outside the profile's closed set is `misconfigured`.
+     * left unchanged (MAMEKO-ADM-067). A cause outside the profile's closed set is `misconfigured`.
      */
     readonly cancel: (
       executionId: string,
@@ -188,18 +188,18 @@ export interface AdmissionPorts {
   readonly alarms?: Layer.Layer<AlarmPort>;
   /**
    * Records the cancel of an execution's workflow and its lease, for a member a supersession, a group cancel or a
-   * per-execution cancel ended (MAMEKO-ADM-062, MAMEKO-ADM-066); absent, the member's workflow ends at its deadline.
+   * per-execution cancel ended (MAMEKO-ADM-064, MAMEKO-ADM-068); absent, the member's workflow ends at its deadline.
    */
   readonly cancelExecution?: (executionId: string, cause: string) => Effect.Effect<void>;
   /**
-   * Whether an operator has quarantined the repository (MAMEKO-ADM-037). The operator operations are not served yet,
+   * Whether an operator has quarantined the repository (MAMEKO-ADM-039). The operator operations are not served yet,
    * so no repository is quarantined while this is absent.
    */
   readonly quarantined?: (scopeId: string) => Effect.Effect<boolean>;
   /**
    * The installation key of the request's repository, the installation that serves it (FD-GH-056); every row admission
    * inserts carries `deliveryLimitKey` of its kind over it (FD-PROF-068). Absent, a row's limit key is its scope
-   * (MAMEKO-OUT-057).
+   * (MAMEKO-OUT-059).
    */
   readonly limitKey?: (scopeId: string) => Effect.Effect<string>;
 }
@@ -218,7 +218,7 @@ const admittedPayloads: Readonly<Record<string, (input: IntakeAdmitInput) => unk
 /**
  * The rows admission inserts with the execution: each kind whose `on` is `admitted` gets the payload its `payload`
  * binding returns for this request, and a kind whose binding returns none, or names no binding served here, gets no row
- * (MAMEKO-OUT-050). `check.open` is the one such kind, so admission opens the check run of exactly the executions that
+ * (MAMEKO-OUT-052). `check.open` is the one such kind, so admission opens the check run of exactly the executions that
  * own one (FD-GH-005, FD-PROF-043).
  */
 const admittedIntents = (profile: Profile, input: IntakeAdmitInput) => ({

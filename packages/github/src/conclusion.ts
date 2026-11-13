@@ -90,7 +90,7 @@ export type RecordedOutcome = typeof RecordedOutcome.Type;
 export const OutcomePayload = Schema.Struct({ outcome: RecordedOutcome });
 
 /**
- * The verdict of mameko's execution outcome, one case per tag (MAMEKO-RUN-047). A run's `skipped` carries only the
+ * The verdict of mameko's execution outcome, one case per tag (MAMEKO-RUN-051). A run's `skipped` carries only the
  * detail, so its reason is `not-applicable`.
  */
 export const verdictOf = (
@@ -115,7 +115,7 @@ export const verdictOf = (
     Match.exhaustive,
   );
 
-/** The cause mameko's parent-ended cascade records on each child a parent's end cancels (MAMEKO-RUN-084). */
+/** The cause mameko's parent-ended cascade records on each child a parent's end cancels (MAMEKO-RUN-088). */
 export const PARENT_ENDED = "parent-ended";
 
 /** The verdict a child concludes with when its parent reaches its outcome first (FD-GH-020). */
@@ -295,7 +295,8 @@ export const provenanceLines = (statements: readonly StatementLink[]): readonly 
   statements.map((s) => {
     const statement = `[\`${s.envelope_digest}\`](${s.statement_url})`;
     if (s.status === "log-pending") return `- Statement ${statement}: log-pending`;
-    const proof = s.inclusion_proof_url === null ? "" : `, [inclusion proof](${s.inclusion_proof_url})`;
+    const proof =
+      s.inclusion_proof_url === null ? "" : `, [inclusion proof](${s.inclusion_proof_url})`;
     const subjects =
       s.subjects.length === 0
         ? ""

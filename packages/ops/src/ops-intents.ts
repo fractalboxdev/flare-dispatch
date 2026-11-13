@@ -1,6 +1,6 @@
 // Ops intents: outbox rows with no execution, keyed `ops:<intent_key>`, that the drainer applies under the
-// installation's permit like any other row (MAMEKO-OUT-056). mameko's coordinator exposes no `insertOpsIntent` at the
-// pinned commit; this function writes the row MAMEKO-OUT-056 specifies through host-cloudflare's `insertOutboxRows`.
+// installation's permit like any other row (MAMEKO-OUT-058). mameko's coordinator exposes no `insertOpsIntent` at the
+// pinned commit; this function writes the row MAMEKO-OUT-058 specifies through host-cloudflare's `insertOutboxRows`.
 import type { Profile } from "@fractalboxdev/flare-dispatch-profile";
 import { insertOutboxRows, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { newRow } from "@fractalboxdev/mameko-kernel";
@@ -29,7 +29,7 @@ export interface OpsIntent {
 
 /**
  * Inserts the ops intent with `execution_id` null, the key `ops:<intent_key>` and the rank of `delivery.ops_class`;
- * a key that already has a row is left as it is (MAMEKO-OUT-056).
+ * a key that already has a row is left as it is (MAMEKO-OUT-058).
  */
 export const insertOpsIntent = (db: D1Like, profile: Profile, intent: OpsIntent, now: number) =>
   Effect.gen(function* () {

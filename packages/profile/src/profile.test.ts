@@ -158,7 +158,7 @@ describe("load", () => {
     expect(acceptanceReasonKinds).toEqual(["provenance"]);
   });
 
-  it("MAMEKO-PROF-036 every terminal reason and acceptance-check reason kind is built in or declared", () => {
+  it("MAMEKO-PROF-037 every terminal reason and acceptance-check reason kind is built in or declared", () => {
     expect(
       validateProfile(profile, validationContext).filter((r) => r.item === "reason_kinds"),
     ).toEqual([]);
@@ -221,7 +221,7 @@ describe("load", () => {
     expect(paths).toContain("delivery.limit_key");
   });
 
-  it("MAMEKO-PROF-034 pools the runtime adapter does not declare or minimums above its cap are rejected", () => {
+  it("MAMEKO-PROF-035 pools the runtime adapter does not declare or minimums above its cap are rejected", () => {
     const { lean: _, ...withoutLean } = poolAdmissionCaps;
     const undeclared = { ...validationContext, declaredPools: withoutLean };
     expect(rejections(committed, committed.policy_version, undeclared)).toEqual([
@@ -429,11 +429,11 @@ describe("class catalogue", () => {
     expect(cls("interactive").terminal_outcome).toEqual({ outcome: "failure", reason: "budget" });
   });
 
-  it("MAMEKO-ADM-058 batch ends deferred", () => {
+  it("MAMEKO-ADM-060 batch ends deferred", () => {
     expect(cls("batch").terminal_outcome).toBe("deferred");
   });
 
-  it("MAMEKO-ADM-077 only interactive and batch are sheddable", () => {
+  it("MAMEKO-ADM-079 only interactive and batch are sheddable", () => {
     expect(profile.classes.filter((c) => c.sheddable === true).map((c) => c.name)).toEqual([
       "interactive",
       "batch",
@@ -733,7 +733,7 @@ describe("check-run lifecycle kinds", () => {
     });
   });
 
-  it("MAMEKO-OUT-044, MAMEKO-OUT-059, MAMEKO-OUT-060 check kinds apply in insertion order; start and progress void after the outcome", () => {
+  it("MAMEKO-OUT-046, MAMEKO-OUT-061, MAMEKO-OUT-062 check kinds apply in insertion order; start and progress void after the outcome", () => {
     const checks = ["check.open", "check.start", "check.progress", "check.conclude"];
     for (const k of checks) expect(kind(k).in_order).toBe(true);
     expect(checks.filter((k) => kind(k).void_after_outcome === true)).toEqual([
@@ -751,7 +751,7 @@ describe("check-run lifecycle kinds", () => {
     expect(drawing.sort()).toEqual(["check.conclude", "check.open"]);
   });
 
-  it("MAMEKO-OUT-042 permit order: check.conclude, check.open, check.start, the other kinds, check.progress", () => {
+  it("MAMEKO-OUT-044 permit order: check.conclude, check.open, check.start, the other kinds, check.progress", () => {
     const ordered = Object.entries(profile.intent_kinds)
       .sort(([, a], [, b]) => {
         const [ta, pa] = deliveryOrder(a);
@@ -831,7 +831,7 @@ describe("deployments", () => {
     expect(development.policyVersion).not.toBe(profileDocument.policyVersion);
   });
 
-  it("[FD-PROF-052] MAMEKO-PROF-037 a production deployment at phase 0 rejects a hardware key store nothing attests", () => {
+  it("[FD-PROF-052] MAMEKO-PROF-038 a production deployment at phase 0 rejects a hardware key store nothing attests", () => {
     const unattested = {
       ...committed,
       registration: { key_stores: ["secure-enclave"], attestation: "none" },

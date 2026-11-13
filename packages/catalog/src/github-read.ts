@@ -1,5 +1,5 @@
 // `GithubRead`: FlareDispatch's application capability for reads of a repository (specs/run-model.md § `GithubRead`).
-// A failed read is an error, never an empty answer (FD-RUN-017, MAMEKO-RUN-022). The per-lease token is the egress
+// A failed read is an error, never an empty answer (FD-RUN-017, MAMEKO-RUN-023). The per-lease token is the egress
 // proxy's to attach, so this module holds no credential.
 import { Context, Effect, Layer, Schema } from "effect";
 

@@ -41,7 +41,7 @@ describe("the check.open row admission inserts", () => {
         payload_json: { name: "flare-dispatch/check:ci", head_sha: SHA },
       },
     ]);
-    // The row's insertion marks the execution as having opened its surface (MAMEKO-OUT-053).
+    // The row's insertion marks the execution as having opened its surface (MAMEKO-OUT-055).
     expect(h.rows("select surface_opened from executions where id = ?", executionId)).toEqual([
       { surface_opened: 1 },
     ]);

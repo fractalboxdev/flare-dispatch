@@ -1,5 +1,5 @@
 // The outcomes a FlareDispatch run returns, typed so that a failure reason names a declared kind (FD-RUN-057,
-// MAMEKO-RUN-055), a skip names a not-applicable detail the profile lists and a cancel names a declared cause.
+// MAMEKO-RUN-059), a skip names a not-applicable detail the profile lists and a cancel names a declared cause.
 import type { RunResult } from "@fractalboxdev/mameko-run";
 
 /** The closed category union of mameko's run model (specs/run-model.md § Outcome partition). */

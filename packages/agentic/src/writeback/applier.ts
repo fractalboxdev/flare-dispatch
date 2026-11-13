@@ -39,7 +39,7 @@ export interface AcceptedResult {
 
 /**
  * The `prProposePayload` binding: the manifest of a `success` result that carries a staged write, else `none`, so the
- * coordinator inserts at most one `pr.propose` row per execution (FD-AGT-034, MAMEKO-OUT-058).
+ * coordinator inserts at most one `pr.propose` row per execution (FD-AGT-034, MAMEKO-OUT-060).
  */
 export const prProposePayload = (
   result: AcceptedResult,

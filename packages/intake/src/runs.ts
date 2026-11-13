@@ -63,7 +63,7 @@ export interface IntakeRun {
   };
   /**
    * The serial group a request with these inputs joins, for a run that declares `serialize`: one `worker-deploy`
-   * target, `worker-deploy:<repo>@<branch>[:<label>]` (FD-GATE-063). Absent or null joins none (MAMEKO-ADM-068).
+   * target, `worker-deploy:<repo>@<branch>[:<label>]` (FD-GATE-063). Absent or null joins none (MAMEKO-ADM-070).
    */
   readonly serialKey?: (inputs: unknown) => string | null;
   /**

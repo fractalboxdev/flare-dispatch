@@ -1,6 +1,6 @@
 # ADR-0018: Formal models for the spend, placement, outbox, staged-write and fencing kernels
 
-Status: Superseded in part by mameko [ADR-0016](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/adr/0016-formal-models.md) · 2026-10-24
+Status: Superseded in part by mameko [ADR-0016](https://github.com/fractalboxdev/mameko/blob/3fb2861f698c9fe906097890769b933cd5eab733/specs/adr/0016-formal-models.md) · 2026-10-24
 
 mameko's ADR-0016 covers the Lean 4 models of the spend, fencing, placement and outbox kernels, their differential testing, the tested assumptions, the axiom gate and Veil for the lease protocols: decisions 1 to 5 and 7 here. Decision 6, Tamarin for the provenance protocol, stands, and so does decision 1's Lean model of the staged-write allowlist, which mameko does not model.
 
