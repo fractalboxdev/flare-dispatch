@@ -38,6 +38,11 @@ export interface CommandOptions {
   /** The execution's `deadline_at`, epoch milliseconds; the command stops there whatever its timeout. */
   readonly deadlineAt?: number;
   readonly outputLimitBytes?: number;
+  /**
+   * Where set, the command's output reaches the runner's log only once the command ends, as `logAs` rewrites it, and
+   * never as it is written. A scan withholds a scanner's matched values from the log this way (FD-GATE-098).
+   */
+  readonly logAs?: (output: Uint8Array) => Uint8Array;
 }
 
 /**
@@ -136,7 +141,7 @@ const supervise = (
       written += chunk.length;
       if (written > limit) return stop(CommandExit.OverLimit());
       chunks.push(chunk);
-      process.stderr.write(chunk);
+      if (options.logAs === undefined) process.stderr.write(chunk);
     };
     child.stdout.on("data", count);
     child.stderr.on("data", count);
@@ -155,6 +160,7 @@ const supervise = (
       // the output open, takes the SIGKILL now rather than after the grace period the runner may not live through.
       if (verdict !== undefined) signalGroup(pid, "SIGKILL");
       release();
+      if (options.logAs !== undefined) process.stderr.write(options.logAs(concat(chunks)));
       resume(
         Effect.succeed({
           exit:

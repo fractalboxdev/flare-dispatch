@@ -34,7 +34,13 @@ import { d1IntakeStore, IntakeStore } from "@fractalboxdev/flare-dispatch-intake
 import { APP_BINDINGS, unsetBindings } from "@fractalboxdev/flare-dispatch-ops";
 import type { ActuatorRateLimit, Actuators, AlarmPort } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
-import { apiEnvOf, concludeKindOf, profileOf, type ControlPlaneEnv } from "./config.ts";
+import {
+  apiEnvOf,
+  concludeKindOf,
+  profileOf,
+  recordsUrlOf,
+  type ControlPlaneEnv,
+} from "./config.ts";
 import {
   devFile,
   devRepositoryOf,
@@ -60,9 +66,23 @@ export const appOptionsOf = (env: ControlPlaneEnv): AppOptions | undefined =>
 export const appLoginOf = (env: ControlPlaneEnv) =>
   `${env.GITHUB_APP_SLUG ?? "flare-dispatch"}[bot]`;
 
-/** The identity the App commits as, and the Slack endpoint when the deploy names one. */
+/**
+ * `records.url` and the verdict record signing key, which the `verdictRecord` applier posts and signs each record with
+ * (FD-GH-098); undefined where the overlay sets no `records.url` or the deploy holds no signing key, so every record row
+ * is refused rather than sent unsigned.
+ */
+export const recordsEndpointOf = (env: ControlPlaneEnv) => {
+  const url = recordsUrlOf(env);
+  const secret = env.RECORDS_SIGNING_KEY?.trim();
+  return url === undefined || secret === undefined || secret === ""
+    ? undefined
+    : { url, secret: env.RECORDS_SIGNING_KEY as string };
+};
+
+/** The identity the App commits as, and the Slack and records endpoints where the deploy names them. */
 export const sideOutputLayer = (env: ControlPlaneEnv, app: AppOptions) => {
   const slug = env.GITHUB_APP_SLUG ?? "flare-dispatch";
+  const records = recordsEndpointOf(env);
   return Layer.succeed(SideOutputConfig, {
     commentWrites: d1CommentWrites(env.DB),
     appBot: {
@@ -74,6 +94,7 @@ export const sideOutputLayer = (env: ControlPlaneEnv, app: AppOptions) => {
       env.SLACK_URL === undefined || env.SLACK_SECRET === undefined
         ? undefined
         : { url: env.SLACK_URL, secret: env.SLACK_SECRET },
+    ...(records === undefined ? {} : { records }),
     fetch: boundFetch,
   });
 };

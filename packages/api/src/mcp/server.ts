@@ -12,7 +12,7 @@ import type { ApiError } from "../errors.ts";
 import { CurrentIdentity, inGroup, type AccessIdentity } from "../identity.ts";
 import { ApiConfig } from "../config.ts";
 import { routerGroup, type Surface } from "../router.ts";
-import { submissionOf, submit } from "../routes/dispatch.ts";
+import { authorizeDispatch, submissionOf, submit } from "../routes/dispatch.ts";
 import { awaitExecution, cancelExecution, failureSummary, viewOf } from "../routes/executions.ts";
 import {
   boundResult,
@@ -65,6 +65,7 @@ export const DispatcherToolsLive = DispatcherTools.toLayer({
       Effect.gen(function* () {
         const wait = yield* checkWait(params.wait_seconds, MAX_WAIT_S);
         const identity = yield* dispatcher;
+        yield* authorizeDispatch(identity, params.run, params.repo);
         const submission = yield* submissionOf(
           identity,
           params.run,

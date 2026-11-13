@@ -24,6 +24,9 @@
     "DISPATCHERS": "{{dispatchers}}",
     // The Actions OIDC audience of a dispatch; empty where the overlay sets none, which refuses every Actions token.
     "DISPATCH_OIDC_AUDIENCE": "{{dispatch.oidcAudience}}",
+    // The `dispatch.scoped` entries `{ identity, runs, repositories, classCeiling }`, none where the overlay names none:
+    // each identity dispatches only its entry's runs to its entry's repositories (FD-IFC-089, FD-IFC-090).
+    "DISPATCH_SCOPED": "{{dispatch.scoped}}",
     // The webhook events intake admits: `null` where the overlay sets no list, which admits every supported event,
     // and `[]` for an empty list, which admits none (FD-INT-027).
     "WEBHOOK_EVENTS": "{{intake.webhookEvents}}",
