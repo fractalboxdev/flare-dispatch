@@ -12,9 +12,11 @@ import {
   StatementBinding,
 } from "./countersign.ts";
 import {
+  derToP1363,
   DSSE_PAYLOAD_TYPE,
   dssePae,
   fromBase64,
+  p1363ToDer,
   parseProvenanceKey,
   signPae,
   unsignedEnvelope,
@@ -45,7 +47,40 @@ const deviceEnvelope = async (device: ProvenanceKey): Promise<DsseEnvelope> => {
 const payloadOf = (envelope: DsseEnvelope) =>
   JSON.parse(new TextDecoder().decode(fromBase64(envelope.payload))) as Record<string, any>;
 
+const toBase64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
+
 describe("countersignature", () => {
+  it("[FD-PROV-032] a countersignature's sig is the ASN.1 DER ECDSA-Sig-Value Rekor verifies, and a P1363 sig does not verify", async () => {
+    const device = await keyPair("device-1");
+    const provenance = await keyPair("prov-2026-11");
+    const signed = await Effect.runPromise(
+      countersign(await deviceEnvelope(device.private), provenance.private),
+    );
+    const der = fromBase64(signed.signatures[1]!.sig)!;
+    expect(der[0]).toBe(0x30);
+    const p1363 = derToP1363(der)!;
+    expect(p1363.byteLength).toBe(64);
+    expect(p1363ToDer(p1363)).toEqual(der);
+    const asP1363 = { ...signed.signatures[1]!, sig: toBase64(p1363) };
+    expect(await verifyDsseSignature(provenance.public, signed, asP1363)).toBe(false);
+
+    // Scalars with the top bit set gain a 0x00; scalars with leading zeros lose them; both round-trip.
+    const high = Uint8Array.from({ length: 64 }, (_, i) => (i === 0 || i === 32 ? 0x80 : i));
+    const highDer = p1363ToDer(high);
+    expect([...highDer.subarray(0, 5)]).toEqual([0x30, 70, 0x02, 33, 0x00]);
+    expect(derToP1363(highDer)).toEqual(high);
+    const low = new Uint8Array(64);
+    low[31] = 1;
+    low[63] = 2;
+    expect([...p1363ToDer(low)]).toEqual([0x30, 6, 0x02, 1, 1, 0x02, 1, 2]);
+    expect(derToP1363(p1363ToDer(low))).toEqual(low);
+    // A non-minimal integer, a negative one, trailing bytes and a short sequence are not DER.
+    expect(derToP1363(Uint8Array.of(0x30, 7, 0x02, 2, 0, 1, 0x02, 1, 2))).toBeUndefined();
+    expect(derToP1363(Uint8Array.of(0x30, 6, 0x02, 1, 0x81, 0x02, 1, 2))).toBeUndefined();
+    expect(derToP1363(Uint8Array.of(0x30, 6, 0x02, 1, 1, 0x02, 1, 2, 0))).toBeUndefined();
+    expect(derToP1363(Uint8Array.of(0x30, 3, 0x02, 1, 1))).toBeUndefined();
+  });
+
   it("[FD-PROV-032] an accepted statement gains a countersignature by the active provenance key beside the device signature", async () => {
     const device = await keyPair("device-1");
     const provenance = await keyPair("prov-2026-11");

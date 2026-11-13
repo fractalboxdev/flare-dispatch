@@ -8,7 +8,7 @@
 // of tree level `8L`, indices `256N` to `256N + W − 1`, concatenated. A full tile has width 256; a partial tile is
 // written once per width it reaches, at its own path, so no tile object is ever rewritten.
 import { asBuffer, utf8 } from "../crypto.ts";
-import { fromBase64, signPae, type ProvenanceKey } from "./dsse.ts";
+import { fromBase64, signP1363, type ProvenanceKey } from "./dsse.ts";
 
 export const HASH_SIZE = 32;
 /** C2SP tlog-tiles' tile height: 2^8 hashes per full tile. */
@@ -239,7 +239,7 @@ export const signCheckpoint = async (
   key: ProvenanceKey,
 ): Promise<string> => {
   const body = checkpointBody(checkpoint);
-  const { sig } = await signPae(key, utf8(body));
+  const sig = toBase64(await signP1363(key, utf8(body)));
   return `${body}\n— ${key.kid} ${sig}\n`;
 };
 
