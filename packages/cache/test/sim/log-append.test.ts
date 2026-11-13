@@ -6,7 +6,7 @@ import { PR_SEEDS, readKeptSeeds, seedsOf } from "../../../ops/src/verification/
 import { simulateLogAppend } from "./log-append.sim.ts";
 
 describe("simulation: a log append that fails", () => {
-  it("[FD-PROV-041] a failed log append is retried 5 s, then doubling to at most 10 min, after each failure until it succeeds, and the check summary shows the statement as log-pending until then", async () => {
+  it("[FD-PROV-041] a failed log append is retried 5 s, then doubling to at most 10 min, after each failure until it succeeds, inside the one-minute tick when the retry falls due before the tick stops, and the check summary shows the statement as log-pending until then", async () => {
     const messages: string[] = [];
     const reached: Record<string, number> = {};
     for (const seed of seedsOf("log-append", PR_SEEDS, readKeptSeeds())) {
@@ -15,13 +15,15 @@ describe("simulation: a log append that fails", () => {
       for (const [k, n] of Object.entries(run.reached)) reached[k] = (reached[k] ?? 0) + n;
     }
     expect(messages.slice(0, 5)).toEqual([]);
-    // The seeds reach both logs, failed first appends, retries up to the 10 min cap, early drains and the pending line.
+    // The seeds reach both logs, failed first appends, retries at their due times up to the 10 min cap, and the pending
+    // line. A first attempt runs at a tick and every delay is a multiple of 5 s that keeps the retry out of a minute's
+    // last 5 s, so no seed reaches the next-tick case; the scenario still checks it wherever it occurs.
     expect(reached.rekor).toBeGreaterThan(0);
     expect(reached.private).toBeGreaterThan(0);
     expect(reached.failedFirst).toBeGreaterThan(0);
     expect(reached.retries).toBeGreaterThan(0);
     expect(reached.cappedDelay).toBeGreaterThan(0);
-    expect(reached.earlyDrain).toBeGreaterThan(0);
+    expect(reached.inTickRetry).toBeGreaterThan(0);
     expect(reached.pendingShown).toBeGreaterThan(0);
   }, 300_000);
 });

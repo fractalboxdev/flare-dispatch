@@ -1,9 +1,10 @@
 // The log-append retry as a V-SIM scenario (specs/provenance.md FD-PROV-041). Each seed countersigns one to four
 // statements of repositories that are public, private or of unreadable visibility, and fails each statement's first
 // appends a seeded number of times, up to 14, with Rekor's 503, a lost connection or a refused private-log write. A
-// driver drains the intents on one simulated clock: at the time the previous drain named as the next due, and at
-// seeded times before it. The scenario checks that every failed append is retried, never earlier and never later than
-// its delay of 5 s doubling to 10 min, until it succeeds, and that the check summary line shows the statement as
+// driver runs the control plane's one-minute tick on one simulated clock, each tick draining through
+// `drainLogAppendsUntilNextTick` as the Worker does. The scenario checks that every failed append is retried after its
+// delay of 5 s doubling to 10 min: at its due time when that falls before the stop of the minute's tick, else at the
+// next tick, until it succeeds, and that the check summary line shows the statement as
 // `log-pending` exactly while no append has succeeded.
 //
 // `scenarios` is what the `sim` job runs (packages/ops/scripts/harness.ts): each seed fails on any violation.
@@ -15,8 +16,10 @@ import {
   type SimViolation,
 } from "../../../ops/src/verification/harness.ts";
 import {
-  drainLogAppends,
+  drainLogAppendsUntilNextTick,
   LOG_PENDING,
+  TICK_MARGIN_MS,
+  TICK_PERIOD_MS,
   LogAppendFailed,
   LogAppendStatus,
   LogAppendStore,
@@ -158,25 +161,21 @@ export const simulateLogAppend = async (seed: number): Promise<SimOutcome> => {
     }
   };
 
-  // The driver: drains at the time the previous drain named, or earlier, until every statement is logged.
-  let nextDueAt: number | null = now;
-  for (let step = 0; nextDueAt !== null && step < 400; step++) {
-    const early = random() < 0.3 && nextDueAt > now;
-    now = early ? now + Math.floor(random() * (nextDueAt - now)) : Math.max(now, nextDueAt);
-    const before = new Map([...attempts].map(([d, t]) => [d, t.length]));
-    const drained = await run(drainLogAppends(now));
-    if (early) {
-      reach("earlyDrain");
-      const attempted = [...attempts].filter(([d, t]) => t.length > (before.get(d) ?? 0));
-      for (const [digest, times] of attempted) {
-        const previous = times.at(-2);
-        if (previous !== undefined && now - previous < expectedDelay(times.length - 1))
-          violate(
-            `${digest} was attempted ${now - previous} ms after its failure ${times.length - 1}, before its delay`,
-          );
-      }
-    }
-    nextDueAt = drained.nextDueAt;
+  // The driver: the one-minute tick, each draining every intent due and every retry due before its stop.
+  const tickOf = (t: number) => START + Math.floor((t - START) / TICK_PERIOD_MS) * TICK_PERIOD_MS;
+  const clock = {
+    now: Effect.sync(() => now),
+    sleep: (ms: number) =>
+      Effect.sync(() => {
+        now += ms;
+      }),
+  };
+  let pending = true;
+  let tickAt = tickOf(now) + (now === tickOf(now) ? 0 : TICK_PERIOD_MS);
+  for (let tick = 0; pending && tick < 2_000; tick++, tickAt += TICK_PERIOD_MS) {
+    now = tickAt;
+    const drained = await run(drainLogAppendsUntilNextTick(tickAt, clock));
+    pending = drained.nextDueAt !== null;
     checkSummaries();
   }
 
@@ -191,10 +190,20 @@ export const simulateLogAppend = async (seed: number): Promise<SimOutcome> => {
     if (times.length !== failures + 1)
       violate(`${digest} took ${times.length} attempts for ${failures} failures`);
     for (let n = 1; n < times.length; n++) {
-      const gap = times[n]! - times[n - 1]!;
+      const failedAt = times[n - 1]!;
       const delay = expectedDelay(n);
-      if (gap !== delay)
-        violate(`${digest} retry ${n} came ${gap} ms after failure ${n}, not ${delay} ms`);
+      const dueAt = failedAt + delay;
+      // A retry due in the first `TICK_PERIOD_MS - TICK_MARGIN_MS` of a minute runs at its due time, inside that
+      // minute's tick; one due in the margin runs at the next tick.
+      const inTick = dueAt - tickOf(dueAt) < TICK_PERIOD_MS - TICK_MARGIN_MS;
+      const expected = inTick
+        ? dueAt
+        : tickOf(dueAt) + (dueAt === tickOf(dueAt) ? 0 : TICK_PERIOD_MS);
+      if (times[n] !== expected)
+        violate(
+          `${digest} retry ${n} came ${times[n]! - failedAt} ms after failure ${n}, not ${expected - failedAt} ms (delay ${delay} ms)`,
+        );
+      reach(inTick ? "inTickRetry" : "nextTickRetry");
       reach("retries");
       if (delay === 600_000) reach("cappedDelay");
     }

@@ -11,7 +11,8 @@ import {
   CloudAttestation,
   CloudStatementFailed,
   d1LogAppendStore,
-  drainLogAppends,
+  drainLogAppendsUntilNextTick,
+  type DrainClock,
   enqueueLogAppend,
   LogAppendFailed,
   LogAppendStore,
@@ -36,7 +37,7 @@ import { GithubRead } from "@fractalboxdev/flare-dispatch-github";
 import { d1IntakeStore, IntakeStore } from "@fractalboxdev/flare-dispatch-intake";
 import type { TickStep } from "@fractalboxdev/flare-dispatch-ops";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
-import { type Context, Effect, Layer, Option, Schema } from "effect";
+import { Clock, type Context, Effect, Layer, Option, Schema } from "effect";
 import { migrateCache } from "./cache-retention.ts";
 import type { CacheEnv } from "./cache.ts";
 import { isolateServices } from "./composition.ts";
@@ -525,11 +526,20 @@ export const logAppendLayer = (env: ControlPlaneEnv) => {
   );
 };
 
-/** The tick's drain of every log-append intent due now (FD-PROV-041), into Rekor or the private log. */
+/** The Worker's clock for a tick's in-tick retries. */
+const workerClock: DrainClock = {
+  now: Clock.currentTimeMillis,
+  sleep: (ms) => Effect.sleep(ms),
+};
+
+/**
+ * The tick's drain of every log-append intent due now into Rekor or the private log, and of each retry that falls due
+ * before the next tick, at its due time (FD-PROV-041).
+ */
 export const logAppendStep = (env: ControlPlaneEnv, now: number): TickStep => ({
   step: "log-appends",
   effect: Effect.promise(() => migrateCache(env.DB)).pipe(
-    Effect.andThen(drainLogAppends(now)),
+    Effect.andThen(drainLogAppendsUntilNextTick(now, workerClock)),
     Effect.provide(logAppendLayer(env)),
   ),
 });
