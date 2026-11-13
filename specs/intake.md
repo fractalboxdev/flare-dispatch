@@ -218,6 +218,11 @@ The dispatch action (`actions/flare-dispatch-action`) is specified in [interface
 - **FD-INT-052** · phase 0 · `V-UNIT` — When the dispatcher Worker submits a scheduled run, it must pin the head SHA of the branch the schedule names, or of the default branch when it names none, at intake.
 - **FD-INT-053** · phase 0 · `V-UNIT` `V-SIM` — If the platform fires the tick for one scheduled minute more than once, the control plane must create at most one execution per (run, label, repository) for that minute.
 
+### Containment hold
+
+- **FD-INT-071** · phase 2 · `V-UNIT` `V-SIM` — While the containment hold is set, when a trigger names a repository, the dispatcher Worker must pause the delivery key of that repository's installation before it submits the request to admission.
+- **FD-INT-072** · phase 2 · `V-UNIT` — If the containment hold is set and the repository's installation cannot be read, then the dispatcher Worker must submit nothing and record a `shed` row through `recordShed` with reason `containment: installation unread`.
+
 ### Check re-runs
 
 - **FD-INT-054** · phase 0 · `V-UNIT` — When a `check_run` or `check_suite` `rerequested` event names a FlareDispatch check run, the dispatcher Worker must submit attempt *n* + 1 with the dedup key suffix `:attempt-<n+1>`, the same check name, the same class, the same labels and the same placement constraint, and without applying a cooldown.
