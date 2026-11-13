@@ -203,6 +203,12 @@ export const devGithubRead = (dev: DevRepository) => {
     },
     defaultBranch: (repo) =>
       ours(repo) ? Effect.succeed(dev.default_branch) : uncredentialed(repo),
+    visibility: (repo) =>
+      !ours(repo)
+        ? uncredentialed(repo)
+        : dev.visibility === undefined
+          ? unknown("its visibility")
+          : Effect.succeed(dev.visibility),
     branchHead: (repo, branch) =>
       !ours(repo)
         ? uncredentialed(repo)
@@ -223,6 +229,7 @@ export const noGithubRead = Layer.succeed(GithubRead, {
   installation: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
   file: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
   defaultBranch: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
+  visibility: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
   branchHead: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
   openPulls: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
   checkRuns: (repo) => Effect.fail(new GithubUncredentialed({ repo })),
