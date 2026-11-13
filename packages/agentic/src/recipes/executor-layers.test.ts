@@ -186,6 +186,7 @@ const cloudConfig = (
   const api: ApiRequest[] = [];
   const stored = new Map<string, { bytes: Uint8Array; sha256: string }>();
   const config: CloudAgenticConfig = {
+    executionId: "01HEXEC0000000000000000000",
     stagingDir: join(tmpdir(), `fd-cloud-staging-${Math.random().toString(16).slice(2)}`),
     editLoop: ["sh", "-c", "true"],
     modelGatewayUrl: GATEWAY,
