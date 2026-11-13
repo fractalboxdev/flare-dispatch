@@ -54,13 +54,13 @@ const p256 = async () => {
   const pub = (await crypto.subtle.exportKey("jwk", pair.publicKey)) as JsonWebKey;
   const priv = (await crypto.subtle.exportKey("jwk", pair.privateKey)) as JsonWebKey;
   const keyid = await jwkThumbprint(pub);
-  const spki = new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey));
+  const spki = new Uint8Array((await crypto.subtle.exportKey("spki", pair.publicKey)) as ArrayBuffer);
   const json = JSON.stringify({ ...priv, kid: keyid });
   return {
     keyid,
     json,
     signing: parseProvenanceKey(json)!,
-    spki: btoa(String.fromCharCode(...spki)),
+    spki: btoa(String.fromCharCode(...Array.from(spki))),
   };
 };
 
@@ -122,8 +122,14 @@ const world = async () => {
   } as unknown as ControlPlaneEnv;
   const write = (attestation: unknown, executorId = "mac-1") =>
     Effect.runPromise(
-      writeAcceptedDeviceStatement(env, { executionId: EXECUTION, epoch: 1, executorId, attestation }, now).pipe(
-        Effect.provide(Layer.succeed(RepositoryVisibility, { of: () => Effect.succeed("private") })),
+      writeAcceptedDeviceStatement(
+        env,
+        { executionId: EXECUTION, epoch: 1, executorId, attestation },
+        now,
+      ).pipe(
+        Effect.provide(
+          Layer.succeed(RepositoryVisibility, { of: () => Effect.succeed("private") }),
+        ),
       ),
     );
   const intents = () =>

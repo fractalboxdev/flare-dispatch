@@ -427,7 +427,11 @@ export const drainLogAppendsUntilNextTick = (tickAt: number, clock: DrainClock) 
     let drained = yield* drainLogAppends(tickAt);
     let attempted = drained.attempted;
     const stopAt = tickAt + TICK_PERIOD_MS - TICK_MARGIN_MS;
-    for (let n = 1; n < TICK_DRAINS && drained.nextDueAt !== null && drained.nextDueAt < stopAt; n++) {
+    for (
+      let n = 1;
+      n < TICK_DRAINS && drained.nextDueAt !== null && drained.nextDueAt < stopAt;
+      n++
+    ) {
       const dueAt = drained.nextDueAt;
       const now = yield* clock.now;
       if (dueAt > now) yield* clock.sleep(dueAt - now);

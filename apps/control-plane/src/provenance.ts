@@ -423,9 +423,11 @@ export const writeAcceptedDeviceStatement = (
   now: number,
 ) =>
   Effect.gen(function* () {
-    if (accepted.attestation === undefined) return { skipped: "the result carries no statement" } as const;
+    if (accepted.attestation === undefined)
+      return { skipped: "the result carries no statement" } as const;
     const key = parseProvenanceKey(apiEnvOf(env as unknown as ControlPlaneEnv).PROVENANCE_KEY);
-    if (key === undefined) return yield* new CloudBuilderUnconfigured({ missing: "PROVENANCE_KEY" });
+    if (key === undefined)
+      return yield* new CloudBuilderUnconfigured({ missing: "PROVENANCE_KEY" });
     const db = env.DB;
     const query = <Row>(sql: string, ...values: unknown[]) =>
       Effect.promise(async () => {
@@ -447,7 +449,9 @@ export const writeAcceptedDeviceStatement = (
       accepted.executorId,
     );
     if (placement === undefined)
-      return { skipped: "the placement did not accept this device's result at this epoch" } as const;
+      return {
+        skipped: "the placement did not accept this device's result at this epoch",
+      } as const;
     const envelope = yield* Schema.decodeUnknownEffect(DsseEnvelope)(accepted.attestation).pipe(
       Effect.mapError(
         (e) => new CloudStatementFailed({ reason: "invalid-input", detail: e.message }),
@@ -457,7 +461,11 @@ export const writeAcceptedDeviceStatement = (
     let deviceKey: JsonWebKey | undefined;
     for (const signature of envelope.signatures) {
       const record = yield* records.deviceKey(signature.keyid);
-      if (record !== null && record.executorId === accepted.executorId && record.revokedAt === null) {
+      if (
+        record !== null &&
+        record.executorId === accepted.executorId &&
+        record.revokedAt === null
+      ) {
         deviceKey = record.publicKey;
         break;
       }
@@ -485,7 +493,10 @@ export const writeAcceptedDeviceStatement = (
       );
       return yield* countersignAndAppend(
         envelope,
-        StatementBinding.ExecutionLease({ executionId: accepted.executionId, epoch: accepted.epoch }),
+        StatementBinding.ExecutionLease({
+          executionId: accepted.executionId,
+          epoch: accepted.epoch,
+        }),
         key,
         { executionId: accepted.executionId, repository: placement.scope_id, deviceKey },
         now,
