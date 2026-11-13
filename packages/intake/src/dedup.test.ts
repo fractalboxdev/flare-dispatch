@@ -10,6 +10,7 @@ const base: KeyedRequest = {
   sha: "a".repeat(40),
   idempotency: null,
   followOn: null,
+  release: null,
   attempt: 1,
   cronMinute: null,
   local: null,
@@ -23,6 +24,17 @@ describe("dedup recipes", () => {
     const k = await key({});
     expect(k).toMatchObject({ recipe: "commit", requestDigest: null, onMismatch: "duplicate" });
     expect(k.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("[FD-INT-066] a release publish keys on its pull request, whatever commit it names", async () => {
+    const release = { pullRequest: 40 };
+    const merge = await key({ run: "release-notes", release, sha: "f".repeat(40) });
+    const label = await key({ run: "release-notes", release, sha: "e".repeat(40) });
+    expect(merge.canonical).toBe("release-notes:acme/app:release-pr-40");
+    expect(label.sha256).toBe(merge.sha256);
+    expect((await key({ run: "release-notes", release: { pullRequest: 41 } })).sha256).not.toBe(
+      merge.sha256,
+    );
   });
 
   it("[FD-INT-054] an attempt n >= 2 appends :attempt-<n>", async () => {

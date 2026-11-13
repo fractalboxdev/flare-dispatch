@@ -18,6 +18,7 @@ import {
   type CheckRunSummary,
   type GithubReadError,
   type PullSummary,
+  type RepoPermission,
 } from "./read.ts";
 
 export interface FakeGithub {
@@ -151,6 +152,8 @@ export interface FakeRepo {
   required: Record<string, string[]>;
   /** The refs, `refs/heads/<branch>` or `refs/tags/<tag>`, a ruleset or branch protection protects. */
   protectedRefs: string[];
+  /** Each collaborator's permission by login; any other login has `none`. */
+  permissions: Record<string, RepoPermission>;
 }
 
 export const fakeRepo = (overrides: Partial<FakeRepo> = {}): FakeRepo => ({
@@ -161,6 +164,7 @@ export const fakeRepo = (overrides: Partial<FakeRepo> = {}): FakeRepo => ({
   checkRuns: {},
   required: {},
   protectedRefs: [],
+  permissions: {},
   ...overrides,
 });
 
@@ -221,6 +225,7 @@ export const fakeReadLayer = (state: FakeReads) => {
     checkRuns: (repo, sha) => read("checkRuns", repo, (r) => r.checkRuns[sha] ?? []),
     requiredChecks: (repo, branch) => read("requiredChecks", repo, (r) => r.required[branch] ?? []),
     refProtected: (repo, ref) => read("refProtected", repo, (r) => r.protectedRefs.includes(ref)),
+    permission: (repo, login) => read("permission", repo, (r) => r.permissions[login] ?? "none"),
     repositories: (installation) =>
       Effect.sync(() => {
         state.calls.push(`repositories ${installation}`);

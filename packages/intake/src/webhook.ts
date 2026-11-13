@@ -15,6 +15,7 @@ import { commitOf, isForkPr, WebhookFields, type WebhookEvent } from "./event.ts
 import { json, parseJson, readBody } from "./http.ts";
 import { InstallationEviction } from "./ports.ts";
 import { PROTECTION_EVENTS, ProtectionSnapshots } from "./protection.ts";
+import { releaseApproval } from "./release-approval.ts";
 import { rerunCheckRun, rerunCheckSuite } from "./rerun.ts";
 import { checkName } from "./runs.ts";
 import { verifySignature } from "./signature.ts";
@@ -47,6 +48,17 @@ const answer = (o: TriggerOutcome) =>
     : Effect.succeed(
         json({ executions: o.executions, ...(o.duplicate ? { duplicate: true } : {}) }, 202),
       );
+
+/** Two triggers' outcomes as one answer: every execution either reached, duplicate only when each one already existed. */
+const both = (a: TriggerOutcome, b: TriggerOutcome): TriggerOutcome => {
+  const executions = [...a.executions, ...b.executions];
+  const dup = (o: TriggerOutcome) => o.executions.length === 0 || o.duplicate;
+  return {
+    executions,
+    duplicate: executions.length > 0 && dup(a) && dup(b),
+    unavailable: a.unavailable ?? b.unavailable,
+  };
+};
 
 const branchOf = (ref: string) =>
   ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
@@ -105,6 +117,7 @@ const pullRequestClosed = (
   closedAt: string | null | undefined,
   updatedAt: string | undefined,
   deliveryId: string,
+  executions: readonly string[],
 ) =>
   Effect.gen(function* () {
     const admission = yield* Admission;
@@ -117,7 +130,7 @@ const pullRequestClosed = (
     const cancelled = yield* Effect.forEach(groups, (key) =>
       admission.cancelGroup(key, "pr-closed").pipe(cancelUnavailable("group cancel")),
     );
-    return json({ executions: [], cancelled: cancelled.flat() }, 202);
+    return json({ executions, cancelled: cancelled.flat() }, 202);
   });
 
 const timestampOf = (value: string | null | undefined): number | undefined => {
@@ -160,6 +173,11 @@ const route = (event: WebhookEvent, fields: WebhookFields) =>
           : rerunCheckSuite(fields, repo),
       );
     }
+    // A release pull request's merge, close or label may start its publish execution (FD-INT-066); a submission the
+    // store could not take answers 503, so GitHub redelivers the event.
+    const release =
+      event.event === "pull_request" ? yield* releaseApproval(event.action, fields, repo) : nothing;
+    if (release.unavailable !== null) return yield* Effect.fail(release.unavailable);
     if (
       event.event === "pull_request" &&
       event.action === "closed" &&
@@ -171,6 +189,7 @@ const route = (event: WebhookEvent, fields: WebhookFields) =>
         fields.pull_request.closed_at,
         fields.pull_request.updated_at,
         event.deliveryId,
+        release.executions,
       );
     // Retain the reopened event's time and identity, so an older close cannot expire its cache again (FD-CACHE-064).
     if (
@@ -192,13 +211,16 @@ const route = (event: WebhookEvent, fields: WebhookFields) =>
     if (event.event === "merge_group")
       return yield* answer(yield* mergeGroup(event, fields, repo, sha.value));
     return yield* answer(
-      yield* triggerWebhook({
-        event,
-        fields,
-        repo,
-        sha: sha.value,
-        trigger: isForkPr(fields) ? "fork-pr" : "webhook",
-      }),
+      both(
+        release,
+        yield* triggerWebhook({
+          event,
+          fields,
+          repo,
+          sha: sha.value,
+          trigger: isForkPr(fields) ? "fork-pr" : "webhook",
+        }),
+      ),
     );
   });
 

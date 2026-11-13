@@ -15,6 +15,8 @@ export interface KeyedRequest {
   readonly idempotency: { readonly key: string; readonly body: unknown } | null;
   /** The intent a `dispatch.followOn` applier submits for (FD-GH-088). */
   readonly followOn: { readonly executionId: string; readonly intentKey: string } | null;
+  /** The release pull request whose approval this publish request answers (FD-INT-066). */
+  readonly release: { readonly pullRequest: number } | null;
   /** 1 for a first attempt; a check re-run submits *n* ≥ 2. */
   readonly attempt: number;
   /** The cron tick's scheduled minute, epoch ms. */
@@ -55,6 +57,8 @@ export const dedupRecipes: readonly DedupRecipe<KeyedRequest>[] = [
   {
     name: "commit",
     run: (r) => {
+      // One publish execution per release pull request, whichever approval, commit or delivery reaches it (FD-INT-066).
+      if (r.release !== null) return `${runLabel(r)}:${r.repo}:release-pr-${r.release.pullRequest}`;
       if (r.local !== null)
         return `local:${r.local.leaseId}:${r.run}:${r.local.treeHash}:${r.local.inputsDigest}`;
       if (r.cronMinute !== null) return `${runLabel(r)}:${r.repo}:cron:${minuteIso(r.cronMinute)}`;

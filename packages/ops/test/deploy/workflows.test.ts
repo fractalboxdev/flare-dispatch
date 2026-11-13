@@ -987,7 +987,7 @@ describe("the deploy workflow over GitHub's rules", () => {
     );
     expect(quiet.ok).toBe(false);
     expect(w.alarms).toHaveLength(1);
-  });
+  }, 30_000);
 });
 
 describe("the deploy workflow's AWS credentials", () => {

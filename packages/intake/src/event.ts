@@ -72,6 +72,8 @@ export type WebhookEvent = typeof WebhookEvent.Type;
 
 const Sha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/));
 const Repo = Schema.Struct({ full_name: Schema.String });
+/** A GitHub account as a payload names it: a user, or an App's bot (`type: "Bot"`). */
+const Account = Schema.Struct({ login: Schema.String, type: Schema.optionalKey(Schema.String) });
 /** The event's repository, with its visibility. */
 const EventRepo = Schema.Struct({
   full_name: Schema.String,
@@ -93,6 +95,15 @@ export const WebhookFields = Schema.Struct({
       author_association: Schema.optionalKey(Schema.String),
       closed_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
       updated_at: Schema.optionalKey(Schema.String),
+      created_at: Schema.optionalKey(Schema.String),
+      /** The pull request's author; a release pull request's is the App's bot (FD-INT-066). */
+      user: Schema.optionalKey(Schema.NullOr(Account)),
+      body: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      state: Schema.optionalKey(Schema.String),
+      merged: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+      merged_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      /** The commit a merge wrote to the base branch. */
+      merge_commit_sha: Schema.optionalKey(Schema.NullOr(Schema.String)),
       head: Schema.Struct({
         sha: Schema.optionalKey(Schema.String),
         ref: Schema.optionalKey(Schema.String),
@@ -127,6 +138,10 @@ export const WebhookFields = Schema.Struct({
     }),
   ),
   repositories_removed: Schema.optionalKey(Schema.Array(Repo)),
+  /** The label a `labeled` or `unlabeled` event applied or removed. */
+  label: Schema.optionalKey(Schema.Struct({ name: Schema.String })),
+  /** The principal whose action raised the event. */
+  sender: Schema.optionalKey(Account),
 });
 export type WebhookFields = typeof WebhookFields.Type;
 

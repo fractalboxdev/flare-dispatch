@@ -52,6 +52,12 @@ export const CheckRunSummary = Schema.Struct({
 });
 export type CheckRunSummary = typeof CheckRunSummary.Type;
 
+export const RepoPermission = Schema.Literals(["admin", "write", "read", "none"]);
+export type RepoPermission = typeof RepoPermission.Type;
+
+/** Whether a permission lets its principal push, merge and manage labels: `write` or `admin`. */
+export const canWrite = (p: RepoPermission) => p === "admin" || p === "write";
+
 export class GithubRead extends Context.Service<
   GithubRead,
   {
@@ -83,6 +89,15 @@ export class GithubRead extends Context.Service<
      * branch protection guards the branch; false for any other ref.
      */
     readonly refProtected: (repo: string, ref: string) => Effect.Effect<boolean, GithubReadError>;
+    /**
+     * The principal's permission on the repository as GitHub's collaborator permission reports it: `admin`, `write`
+     * (which `maintain` reports as), `read` (which `triage` reports as) or `none`; `none` for a login GitHub does not
+     * know as a collaborator.
+     */
+    readonly permission: (
+      repo: string,
+      login: string,
+    ) => Effect.Effect<RepoPermission, GithubReadError>;
     /** The `<owner>/<repo>` names an installation covers, at most 100. */
     readonly repositories: (
       installation: number,
@@ -243,6 +258,14 @@ export const githubReadLayer = (options: GithubClientOptions) =>
             ),
             (r) => r.check_runs,
           ),
+        permission: (repo, login) =>
+          Effect.gen(function* () {
+            const raw = yield* notFound(
+              get(repo, `/repos/${repo}/collaborators/${encodeURIComponent(login)}/permission`),
+            );
+            if (raw === null) return "none" as const;
+            return (yield* decode(Schema.Struct({ permission: RepoPermission }))(raw)).permission;
+          }),
         repositories: (id) =>
           Effect.map(
             Effect.flatMap(

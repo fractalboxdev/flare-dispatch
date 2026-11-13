@@ -78,6 +78,12 @@ export const INTAKE_MIGRATIONS: readonly string[] = [
     number integer not null,
     delivery_id text not null,
     primary key (repo, number, delivery_id))`,
+  // A release pull request a principal with write permission rejected; no later approval publishes it (FD-AGT-086).
+  `create table if not exists intake_release_rejections (
+    repo text not null,
+    number integer not null,
+    rejected_at integer not null,
+    primary key (repo, number))`,
 ];
 
 const DATA_CLASS_COLUMNS = [
@@ -304,6 +310,17 @@ export class IntakeStore extends Context.Service<
       at: number,
       deliveryId: string,
     ) => Effect.Effect<void, StoreUnavailable>;
+    /** Records that the release pull request was rejected; the first rejection's time stays (FD-AGT-086). */
+    readonly rejectRelease: (
+      repo: string,
+      number: number,
+      at: number,
+    ) => Effect.Effect<void, StoreUnavailable>;
+    /** Whether the release pull request was rejected. */
+    readonly releaseRejected: (
+      repo: string,
+      number: number,
+    ) => Effect.Effect<boolean, StoreUnavailable>;
   }
 >()("@fractalboxdev/flare-dispatch-intake/IntakeStore") {}
 
@@ -727,6 +744,22 @@ export const d1IntakeStore = (db: D1Like) =>
       recordPullRequestLifecycle(db, repo, number, event?.updatedAt ?? at, at, event?.deliveryId),
     pullRequestReopened: (repo, number, at, deliveryId) =>
       recordPullRequestLifecycle(db, repo, number, at, null, deliveryId),
+    rejectRelease: (repo, number, at) =>
+      query(() =>
+        db
+          .prepare(
+            "insert or ignore into intake_release_rejections (repo, number, rejected_at) values (?, ?, ?)",
+          )
+          .bind(repo.toLowerCase(), number, at)
+          .run(),
+      ).pipe(Effect.asVoid),
+    releaseRejected: (repo, number) =>
+      query(() =>
+        db
+          .prepare("select 1 from intake_release_rejections where repo = ? and number = ?")
+          .bind(repo.toLowerCase(), number)
+          .all(),
+      ).pipe(Effect.map(({ results }) => results.length > 0)),
   });
 
 /**
