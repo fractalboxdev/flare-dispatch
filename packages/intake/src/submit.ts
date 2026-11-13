@@ -74,6 +74,11 @@ export interface Submission extends Omit<KeyedRequest, "run"> {
   /** False for `cron` triggers and check re-runs (FD-INT-058). */
   readonly applyCooldown: boolean;
   readonly placementConstraint: string | null;
+  /**
+   * The constraints the run declares that `placementConstraint` supersedes: a reproduction drops a release run's
+   * `cloud-pinned`, since its own constraint decides where it runs (FD-PROV-064).
+   */
+  readonly supersededConstraints: readonly string[];
   readonly extraLabels: readonly string[];
   /** What the cache namespaces read of the trigger (FD-CACHE-019); `Other` unless a webhook says more. */
   readonly cacheTrigger: CacheTriggerRecord;
@@ -109,6 +114,7 @@ export const submission = (
   spendLine: null,
   applyCooldown: true,
   placementConstraint: null,
+  supersededConstraints: [],
   extraLabels: [],
   cacheTrigger: OTHER_CACHE_TRIGGER,
   defaultBranch: null,
@@ -223,8 +229,8 @@ const cooldownWait = (s: Submission, now: number) =>
 /**
  * The executor kinds the profile's placement allows a request, with the constraints that held: its class, the labels
  * class resolution returned with the run's capability labels and any recorded placement constraint, and the
- * constraints the run declares for these inputs, so a `cloud-pinned` run never reaches a device (FD-GATE-061,
- * FD-GATE-080).
+ * constraints the run declares for these inputs but the ones `supersededConstraints` names, so a `cloud-pinned` run
+ * never reaches a device (FD-GATE-061, FD-GATE-080).
  */
 const placementRequest = (
   s: Submission,
@@ -243,7 +249,7 @@ const placementRequest = (
         ...(s.placementConstraint === null ? [] : [s.placementConstraint]),
       ]),
     ],
-    constraints: declared.constraints,
+    constraints: declared.constraints.filter((c) => !s.supersededConstraints.includes(c)),
     ...(tagPush ? { trigger: "tag-push" } : {}),
     ...(confidentiality === undefined ? {} : { confidentiality }),
   };

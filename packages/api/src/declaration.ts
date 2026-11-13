@@ -282,6 +282,51 @@ export const PolicyPublished = Schema.Struct({
   integrated_time: Schema.Number,
 });
 
+// --- Provenance statements -------------------------------------------------------------------------------------------
+
+/** A `sha256:<hex>` subject digest, the one key a statement is looked up by besides its execution id (FD-PROV-071). */
+export const SubjectDigest = Schema.String.check(Schema.isPattern(/^sha256:[0-9a-f]{64}$/));
+
+/**
+ * One statement as the lookups answer it: the countersigned DSSE envelope, its subjects, and its entry in the log that
+ * holds it, with the URL of its inclusion proof there. Until its append succeeds the statement is `log-pending`, with
+ * no entry and no proof (FD-PROV-041).
+ */
+export const StatementView = Schema.Struct({
+  envelope_digest: Schema.String,
+  execution_id: Schema.String,
+  envelope: Schema.Struct({
+    payloadType: Schema.String,
+    payload: Schema.String,
+    signatures: Schema.Array(Schema.Struct({ keyid: Schema.String, sig: Schema.String })),
+  }),
+  /** Each subject's name and one of its digests, `<algorithm>:<value>`. */
+  subjects: Schema.Array(Schema.Struct({ name: Schema.String, digest: Schema.String })),
+  log: Schema.Literals(["rekor", "private"]),
+  status: Schema.Literals(["logged", "log-pending"]),
+  log_index: Schema.NullOr(Schema.Number),
+  entry_id: Schema.NullOr(Schema.String),
+  /** The log entry's integrated time in epoch milliseconds: the statement's time (FD-PROV-040). */
+  integrated_time: Schema.NullOr(Schema.Number),
+  /** Rekor's entry, which carries its inclusion proof, or the private log's inclusion-proof route for the leaf. */
+  inclusion_proof_url: Schema.NullOr(Schema.String),
+});
+export type StatementView = typeof StatementView.Type;
+
+export const StatementsView = Schema.Struct({ statements: Schema.Array(StatementView) });
+export type StatementsView = typeof StatementsView.Type;
+
+/** One leaf's RFC 9162 inclusion proof in the private log, against the checkpoint it carries. */
+export const InclusionProofView = Schema.Struct({
+  leaf_index: Schema.Number,
+  tree_size: Schema.Number,
+  /** The proof's hashes in order, standard base64 like the checkpoint's root. */
+  hashes: Schema.Array(Schema.String),
+  /** The signed checkpoint the proof is against. */
+  checkpoint: Schema.String,
+});
+export type InclusionProofView = typeof InclusionProofView.Type;
+
 // --- Operability -----------------------------------------------------------------------------------------------------
 
 /** One executor of the fleet view: kind, heartbeat age, drain and quarantine flags, slots per class (FD-OPS-071). */
@@ -468,6 +513,33 @@ export class ProvenancePolicyGroup extends HttpApiGroup.make("provenancePolicy")
   .middleware(ErrorModel) {}
 
 /**
+ * The verification surface over statements: a lookup by execution id or by subject digest, and the private log's
+ * inclusion proof of one leaf. No route searches, lists, exports or streams statements, verdicts or execution history
+ * (FD-PROV-071); a lookup that finds no statement answers 404 `not_found`.
+ */
+export class ProvenanceGroup extends HttpApiGroup.make("provenance")
+  .add(
+    HttpApiEndpoint.get("byExecution", "/v1/provenance/executions/:id", {
+      ...IdParam,
+      success: StatementsView,
+      ...errors,
+    }),
+    HttpApiEndpoint.get("bySubject", "/v1/provenance/subjects/:digest", {
+      params: { digest: SubjectDigest },
+      success: StatementsView,
+      ...errors,
+    }),
+    HttpApiEndpoint.get("inclusionProof", "/v1/provenance/log/proof/inclusion", {
+      query: {
+        leaf_index: Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+      },
+      success: InclusionProofView,
+      ...errors,
+    }),
+  )
+  .middleware(ErrorModel) {}
+
+/**
  * A log as the route serves it: NDJSON, plain text with `?format=text` (FD-CACHE-083), or the HTML viewer with
  * `?format=html` (FD-CACHE-084).
  */
@@ -584,5 +656,6 @@ export class FlareDispatchApi extends HttpApi.make("flare-dispatch")
   .add(ExecutorsGroup)
   .add(WellKnownGroup)
   .add(ProvenancePolicyGroup)
+  .add(ProvenanceGroup)
   .add(LogsGroup)
   .add(ArtifactsGroup) {}

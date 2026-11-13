@@ -151,14 +151,14 @@ The verification policy is a JSON document in a DSSE envelope signed by the poli
 
 - `policy_version` and `issued_at`;
 - the provenance key history: `kid`, public JWK, `not_before`, `not_after` (absent for the active key);
-- the logs: kind (`rekor` or `private`), the log key history, and for a private log the witnesses with their keys;
-- the device registry: device key thumbprint, `executor_id`, posture tier (`attested-dedicated` or `managed-workstation`), `registered_at`, `revoked_at`, `compromised_from`;
+- the logs: kind (`rekor` or `private`), the log key history, and for a private log the witnesses, each with its C2SP note verifier key (`<name>+<key id>+<base64 key>`), whose tlog-cosignature lines a cosigned checkpoint carries;
+- the device registry: device key thumbprint (RFC 7638, of the public JWK), `executor_id`, posture tier (`attested-dedicated` or `managed-workstation`), `registered_at`, `revoked_at`, `compromised_from`;
 - the required tier per artifact class: `release`, `package`, `image`, `pr-artifact`, `preview`, `verdict`;
 - the SLSA Build level each builder tier may claim.
 
 Times in the policy are milliseconds since the Unix epoch, as a log entry's integrated time is. The DSSE payload type is `application/vnd.flare-dispatch.provenance-policy+json`. The operator publishes a version with `PUT /v1/provenance-policy`; the control plane checks it, appends the envelope to the private log, and serves it once the log holds it. The control plane records every provenance key and log key it uses, with the window of each, in its own key history; each publish records the keys the deploy holds, and the first publish that holds a key the control plane has not recorded is the rotation instant. `GET /v1/provenance-policy/key-history` answers that record to an operator, and a refusal over the key history names each entry the control plane expects. A version is refused when its key history drops or changes an entry of the earlier version, lists a kid twice, or omits or misstates a key in that record. `packages/cache/src/provenance/policy.ts` implements the checks and the key history.
 
-A verifier runs the procedure below. `fd verify` implements it with no network access when given the policy and a statement bundle.
+A verifier runs the procedure below. `fd verify <artifact> --policy <file> --bundle <file> --root-key <file> --class <artifact class>` implements it with no network access and exits 0 only when the artifact passes. The statement bundle holds one statement, or two with a reproduction record, each with its log proof: the leaf index, the integrated time, the inclusion proof and the signed checkpoint, and for a Rekor entry the entry body, which names the envelope's payload hash and exactly its signatures. A device statement carries its device's public JWK. A cloud-builder statement is one every signature of which verifies under a provenance key and whose builder id names no `device` executor; every other statement is a device statement, checked against the device registry. `packages/fd/src/verify.ts` implements the procedure.
 
 ```mermaid
 flowchart TD
@@ -189,7 +189,7 @@ flowchart TD
 
 ### Reproduction
 
-A release rule may set `reproduce: true`. The release itself always builds in the cloud; a reproduction execution builds the same inputs cold on a dedicated device, and the release publishes only when the two digests match.
+A release rule may set `reproduce: true`. The release itself always builds in the cloud; a reproduction execution builds the same inputs cold on a dedicated device, and the release publishes only when the two digests match. The reproduction record is a DSSE envelope with payload type `application/vnd.flare-dispatch.reproduction+json`, whose payload `{"envelope_digests": [...]}` names the two statements' envelope digests, each `sha256:` of the envelope's canonical JSON, signed by the provenance key.
 
 ```mermaid
 flowchart LR
@@ -350,4 +350,5 @@ A Secure Enclave key's `identity` evidence is a JSON object: `format` `managed-d
 - TODO(operator): enrollment does not yet bound an attestation's age beyond its leaf's validity period. `freshness` is a value the device chooses, so evidence captured while SIP was enabled and Secure Boot was `full` still enrolls the key after either changes, until the leaf's `notAfter`. Decide whether the control plane issues single-use freshness values with a TTL at enrollment, as FD-PROV-030 does for re-attestation.
 - TODO(maintainer): `code_hash` names the digest of the device executor build in mameko's registry and the key helper's code-signing hash in check 11 of § Acceptance; settle which one the row holds before phase 4.
 - TODO(operator): name the external witness for the private log (FD-PROV-039, FD-PROV-055).
+- TODO(maintainer): a log entry's integrated time is authenticated by neither the checkpoint nor a cosignature (private log) nor a verified signed entry timestamp (Rekor), so `fd verify` reads it from the statement bundle and the key and device windows (FD-PROV-056, FD-PROV-057) check a time the bundle's author chose; decide whether the private-log leaf records it and the bundle carries Rekor's signed entry timestamp, so both windows check an authenticated time.
 - TODO(maintainer): decide whether the egress proxy installs a TLS interception CA inside the job sandbox; without one, HTTPS dependencies carry `lockfile` digests only (FD-PROV-006).

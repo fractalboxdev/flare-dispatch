@@ -6,6 +6,7 @@ import {
   type IntakeRecord,
 } from "@fractalboxdev/flare-dispatch-intake";
 import type { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
+import { LOG_APPEND_SCHEMA } from "@fractalboxdev/flare-dispatch-cache";
 import {
   emptyQuotaLedger,
   quotaObjectOver,
@@ -95,3 +96,57 @@ export const envOf = (db: unknown, extra: Record<string, string> = {}) =>
     INSTALLATION_QUOTA: memoryQuotaNamespace(),
     ...extra,
   }) as unknown as ControlPlaneEnv;
+
+/** A countersigned envelope's canonical JSON whose statement names one `sha256` subject. */
+export const envelopeNaming = (name: string, sha256: string) =>
+  JSON.stringify({
+    payload: Buffer.from(
+      JSON.stringify({
+        _type: "https://in-toto.io/Statement/v1",
+        subject: [{ name, digest: { sha256 } }],
+      }),
+    ).toString("base64"),
+    payloadType: "application/vnd.in-toto+json",
+    signatures: [{ keyid: "device-1", sig: "MEUCIQ==" }],
+  });
+
+/**
+ * One log-append intent as the countersign step records it in `provenance_log_appends` and its subject in
+ * `provenance_statement_subjects`; `logged` gives its log entry, a pending intent has none.
+ */
+export const seedStatement = (
+  db: TestD1,
+  statement: {
+    readonly envelopeDigest: string;
+    readonly executionId: string;
+    readonly log: "rekor" | "private";
+    readonly subject: string;
+    readonly logged?: { readonly logIndex: number; readonly entryId: string };
+    readonly insertedAt?: number;
+  },
+) => {
+  for (const sql of LOG_APPEND_SCHEMA) db.sqlite.exec(sql);
+  db.sqlite
+    .prepare(
+      `insert into provenance_log_appends (envelope_digest, execution_id, repository, log, envelope, verifiers, attempts,
+         next_attempt_at, log_index, entry_id, integrated_time, inserted_at)
+       values (?, ?, 'acme/app', ?, ?, '[]', ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      statement.envelopeDigest,
+      statement.executionId,
+      statement.log,
+      envelopeNaming("app.tar", statement.subject),
+      statement.logged === undefined ? 0 : 1,
+      statement.logged === undefined ? NOW : null,
+      statement.logged?.logIndex ?? null,
+      statement.logged?.entryId ?? null,
+      statement.logged === undefined ? null : NOW,
+      statement.insertedAt ?? NOW,
+    );
+  db.sqlite
+    .prepare(
+      "insert into provenance_statement_subjects (subject_digest, envelope_digest) values (?, ?)",
+    )
+    .run(`sha256:${statement.subject}`, statement.envelopeDigest);
+};

@@ -16,6 +16,15 @@ export { canonicalJson, idempotencyOf, submissionOf, submit } from "./routes/dis
 export { d1Executions, recordOf, reportedStatus } from "./live/executions.ts";
 export { oidcKeyFromSecret } from "./live/oidc-key.ts";
 export { provenancePolicies } from "./live/provenance-policy.ts";
+export { provenanceStatements, statementRecordOf } from "./live/statements.ts";
+export {
+  inclusionProofUrl,
+  REKOR_ORIGIN,
+  statementLinks,
+  statementUrl,
+  statementView,
+  subjectUrl,
+} from "./routes/statements.ts";
 export {
   appleAttestationVerifier,
   attestationVerifier,

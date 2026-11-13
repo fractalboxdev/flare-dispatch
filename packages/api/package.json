@@ -22,6 +22,8 @@
     "./registry": "./src/live/registry.ts",
     "./request-id": "./src/request-id.ts",
     "./router": "./src/router.ts",
+    "./statements": "./src/routes/statements.ts",
+    "./statements-live": "./src/live/statements.ts",
     "./test-support": "./src/api.test-support.ts"
   },
   "scripts": {

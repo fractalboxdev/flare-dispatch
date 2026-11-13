@@ -24,6 +24,14 @@ export const DsseEnvelope = Schema.Struct({
 });
 export type DsseEnvelope = typeof DsseEnvelope.Type;
 
+/** A signed DSSE envelope of any payload type: a statement, or a reproduction record. */
+export const AnyDsseEnvelope = Schema.Struct({
+  payloadType: Schema.String,
+  payload: Schema.String,
+  signatures: Schema.Array(DsseSignature),
+});
+export type AnyDsseEnvelope = typeof AnyDsseEnvelope.Type;
+
 /** A public ES256 JWK with its `kid`. */
 export const ProvenancePublicJwk = Schema.Struct({
   kty: Schema.Literal("EC"),
@@ -93,7 +101,7 @@ export const unsignedEnvelope = (payload: Uint8Array): DsseEnvelope => ({
 });
 
 /** The pre-authentication encoding of an envelope's payload, or `undefined` when its payload is not base64. */
-export const envelopePae = (envelope: DsseEnvelope): Uint8Array | undefined => {
+export const envelopePae = (envelope: AnyDsseEnvelope): Uint8Array | undefined => {
   const payload = fromBase64(envelope.payload);
   return payload === undefined ? undefined : dssePae(envelope.payloadType, payload);
 };
@@ -162,7 +170,7 @@ export const signPae = async (key: ProvenanceKey, pae: Uint8Array): Promise<Dsse
  */
 export const verifyDsseSignature = async (
   publicJwk: JsonWebKey,
-  envelope: DsseEnvelope,
+  envelope: AnyDsseEnvelope,
   signature: DsseSignature,
 ): Promise<boolean> => {
   const pae = envelopePae(envelope);

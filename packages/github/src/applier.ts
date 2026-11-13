@@ -21,7 +21,11 @@ import {
   type GithubError,
   type RepoCall,
 } from "./client.ts";
-import { ConcludeFacts, type ConcludeFactsUnavailable } from "./conclude-facts.ts";
+import {
+  ConcludeFacts,
+  type ConcludeFactsUnavailable,
+  type ConclusionFacts,
+} from "./conclude-facts.ts";
 import {
   checkConclusion,
   checkNeutralInvariant,
@@ -35,6 +39,7 @@ import {
   Verdict,
 } from "./conclusion.ts";
 import { InstallationDirectory } from "./directory.ts";
+import { ProvenanceLoggedPayload } from "./provenance-refresh.ts";
 
 export { InstallationDirectory };
 
@@ -374,12 +379,25 @@ const reasonOf = (e: GithubError): string =>
     Match.exhaustive,
   );
 
+/** The statement a provenance update names is not logged yet in the records the conclusion is rendered from. */
+class StatementNotLogged extends Schema.TaggedError<StatementNotLogged>()("StatementNotLogged", {
+  envelopeDigest: Schema.String,
+}) {}
+
+/** Where a conclusion's verdict comes from: the row itself, or the records once the named statement is logged. */
+type VerdictSource = { readonly logged: string } | { readonly stated: Verdict };
+
 /** More than one check run carries the execution id. */
 class AmbiguousCheckRun extends Schema.TaggedError<AmbiguousCheckRun>()("AmbiguousCheckRun", {
   count: Schema.Number,
 }) {}
 
-type ReadFailure = GithubError | AmbiguousCheckRun | Unservable | ConcludeFactsUnavailable;
+type ReadFailure =
+  | GithubError
+  | AmbiguousCheckRun
+  | Unservable
+  | ConcludeFactsUnavailable
+  | StatementNotLogged;
 
 const found = (run: CheckRun | null): LookupAnswer =>
   run === null ? { _tag: "absent" } : { _tag: "found", externalRef: String(run.id) };
@@ -418,28 +436,53 @@ export const makeCheckRunApplier = Effect.gen(function* () {
       Effect.provideService(GithubClient, github),
     );
 
+  /** The verdict a row states: a fan-out child's `{ verdict }`, or the verdict of mameko's `{ outcome }`. */
+  const statedVerdict = (payload: unknown) => {
+    const child = Schema.decodeUnknownOption(ChildVerdictPayload)(payload);
+    return Option.isSome(child)
+      ? Effect.succeed(child.value.verdict)
+      : Schema.decodeUnknownEffect(OutcomePayload)(payload).pipe(
+          Effect.map(({ outcome }) => concludedVerdictOf(outcome)),
+          Effect.catchTag("SchemaError", (e) => unservable(`payload: ${e.message}`)),
+        );
+  };
+
+  /** The verdict a logged statement's update concludes with: the recorded one, once the records show it logged. */
+  const loggedVerdict = (known: ConclusionFacts, envelopeDigest: string) =>
+    Effect.gen(function* () {
+      if (known.recorded === null)
+        return yield* unservable("provenance: the execution has no recorded outcome");
+      const link = known.details.provenance?.find((l) => l.envelope_digest === envelopeDigest);
+      if (link === undefined)
+        return yield* unservable(`provenance: the summary links no statement ${envelopeDigest}`);
+      if (link.status === "log-pending") return yield* new StatementNotLogged({ envelopeDigest });
+      return known.recorded;
+    });
+
   /**
    * The `check.conclude` payload. The outcome row mameko's terminal write inserts carries `{ outcome }`; its verdict is
    * `verdictOf(outcome)`, and a child the parent-ended cascade cancelled concludes `failure` "parent closed before this
    * part settled" (FD-GH-020). The `cp:check:conclude` row a fan-out parent's outcome inserts for a child carries
    * `{ verdict }` (FD-GH-020). Either way the name, head SHA, attempt, summary facts and log link come from the
    * execution's records (FD-GH-008, FD-GH-013, FD-GH-014, FD-GH-015). A row that carries the whole payload is taken as
-   * it is.
+   * it is. The `cp:check:provenance:<digest>` row of a statement logged after the conclusion carries
+   * `{ provenance_logged }`: it concludes again with the execution's recorded outcome, so the summary links the
+   * statement's inclusion proof and subjects (FD-PROV-042); it waits while the records still show the statement
+   * pending, and is refused for an execution with no recorded outcome.
    */
   const concludePayload = (executionId: string, payload: unknown) =>
     Effect.gen(function* () {
       const given = Schema.decodeUnknownOption(Payloads["check.conclude"])(payload);
       if (Option.isSome(given)) return { payload: given.value, recorded: null };
-      const child = Schema.decodeUnknownOption(ChildVerdictPayload)(payload);
-      const verdict = Option.isSome(child)
-        ? child.value.verdict
-        : concludedVerdictOf(
-            (yield* Schema.decodeUnknownEffect(OutcomePayload)(payload).pipe(
-              Effect.catchTag("SchemaError", (e) => unservable(`payload: ${e.message}`)),
-            )).outcome,
-          );
+      // The payload is decoded before the records are read, so a row no payload schema matches is refused at once.
+      const logged = Schema.decodeUnknownOption(ProvenanceLoggedPayload)(payload);
+      const source: VerdictSource = Option.isSome(logged)
+        ? { logged: logged.value.provenance_logged }
+        : { stated: yield* statedVerdict(payload) };
       const known = yield* facts.of(executionId);
       if (known === null) return yield* unservable("conclude: no record of the execution");
+      const verdict =
+        "logged" in source ? yield* loggedVerdict(known, source.logged) : source.stated;
       const built: PayloadOf<"check.conclude"> = {
         name: known.name,
         head_sha: known.headSha,
@@ -510,6 +553,11 @@ export const makeCheckRunApplier = Effect.gen(function* () {
         Unservable: ({ reason }) => Effect.succeed<ApplyAnswer>({ _tag: "refused", reason }),
         ConcludeFactsUnavailable: ({ message }) =>
           Effect.succeed<ApplyAnswer>({ _tag: "retryable", reason: `records: ${message}` }),
+        StatementNotLogged: ({ envelopeDigest }) =>
+          Effect.succeed<ApplyAnswer>({
+            _tag: "retryable",
+            reason: `provenance: ${envelopeDigest} is not logged yet`,
+          }),
         GithubHttpError: (e) =>
           e.status === 401
             ? Effect.as(raiseInstallationLost(row, "installation: unauthorized"), classify(e))
@@ -540,6 +588,10 @@ export const makeCheckRunApplier = Effect.gen(function* () {
       Match.tag("AmbiguousCheckRun", ({ count }) => `check run: ${count} carry the execution id`),
       Match.tag("Unservable", ({ reason }) => reason),
       Match.tag("ConcludeFactsUnavailable", ({ message }) => `records: ${message}`),
+      Match.tag(
+        "StatementNotLogged",
+        ({ envelopeDigest }) => `provenance: ${envelopeDigest} is not logged yet`,
+      ),
       Match.orElse(reasonOf),
     );
 

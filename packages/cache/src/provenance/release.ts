@@ -67,6 +67,7 @@ const SlsaClaims = Schema.Struct({
   predicateType: Schema.Literal(SLSA_PROVENANCE_V1),
   predicate: Schema.Struct({
     buildDefinition: Schema.Struct({
+      externalParameters: Schema.Struct({ run_definition_digest: Schema.optional(Schema.String) }),
       internalParameters: Schema.Struct({ lease: LeaseClaim }),
       resolvedDependencies: Schema.Array(Descriptor),
     }),
@@ -85,11 +86,17 @@ const decodeTestResult = Schema.decodeUnknownOption(TestResultClaims);
 const decodeLease = Schema.decodeUnknownOption(LeaseClaim);
 
 /** What the gate reads from a statement's payload. */
-interface ReleaseClaims {
+export interface ReleaseClaims {
   readonly lease: typeof LeaseClaim.Type;
   readonly subjectDigests: readonly string[];
   /** The restored cache entries the statement lists, as `cache:<namespace>/<key>` descriptors. */
   readonly restoredCache: readonly Descriptor[];
+  /** The commit the statement's `commit` descriptor names. */
+  readonly commit: string | undefined;
+  /** `sha256:<hex>` of the image the statement's `image` descriptor names. */
+  readonly imageDigest: string | undefined;
+  /** `sha256:<hex>` of the run definition the statement names. */
+  readonly definitionDigest: string | undefined;
 }
 
 const sha256Subjects = (subject: readonly Descriptor[]) =>
@@ -97,6 +104,15 @@ const sha256Subjects = (subject: readonly Descriptor[]) =>
 
 const restoredCacheOf = (descriptors: readonly Descriptor[]) =>
   descriptors.filter((d) => d.name?.startsWith("cache:") === true);
+
+const sha256Of = (d: Descriptor | undefined) =>
+  d?.digest?.["sha256"] === undefined ? undefined : `sha256:${d.digest["sha256"]}`;
+
+/** The commit and image the statement's input descriptors name. */
+const inputsOf = (descriptors: readonly Descriptor[]) => ({
+  commit: descriptors.find((d) => d.name === "commit")?.digest?.["gitCommit"],
+  imageDigest: sha256Of(descriptors.find((d) => d.name === "image")),
+});
 
 const claimsOf = (payload: Uint8Array): ReleaseClaims | undefined => {
   let json: unknown;
@@ -106,52 +122,64 @@ const claimsOf = (payload: Uint8Array): ReleaseClaims | undefined => {
     return undefined;
   }
   const slsa = Option.getOrUndefined(decodeSlsa(json));
-  if (slsa !== undefined)
+  if (slsa !== undefined) {
+    const { externalParameters, internalParameters, resolvedDependencies } = slsa.predicate.buildDefinition;
     return {
-      lease: slsa.predicate.buildDefinition.internalParameters.lease,
+      lease: internalParameters.lease,
       subjectDigests: sha256Subjects(slsa.subject),
-      restoredCache: restoredCacheOf(slsa.predicate.buildDefinition.resolvedDependencies),
+      restoredCache: restoredCacheOf(resolvedDependencies),
+      ...inputsOf(resolvedDependencies),
+      definitionDigest: externalParameters.run_definition_digest,
     };
+  }
   const gate = Option.getOrUndefined(decodeTestResult(json));
   if (gate === undefined) return undefined;
+  const { configuration } = gate.predicate;
   const lease = Option.getOrUndefined(
-    decodeLease(gate.predicate.configuration.find((d) => d.name === "lease")?.annotations),
+    decodeLease(configuration.find((d) => d.name === "lease")?.annotations),
   );
   if (lease === undefined) return undefined;
   return {
     lease,
     subjectDigests: sha256Subjects(gate.subject),
-    restoredCache: restoredCacheOf(gate.predicate.configuration),
+    restoredCache: restoredCacheOf(configuration),
+    ...inputsOf(configuration),
+    definitionDigest: sha256Of(configuration.find((d) => d.name === "run-definition")),
   };
 };
 
-/** Whether the envelope carries at least one signature and every one verifies under the provenance key it names. */
-const signedByCloudBuilder = async (
+/** How many of the envelope's signatures verify under the provenance key they name, and how many do not. */
+const provenanceSignatures = async (
   envelope: DsseEnvelope,
   keys: ReadonlyMap<string, ProvenancePublicKey>,
-): Promise<boolean> => {
-  if (envelope.signatures.length === 0) return false;
+): Promise<{ readonly verified: number; readonly other: number }> => {
+  let verified = 0;
   for (const signature of envelope.signatures) {
     const key = keys.get(signature.keyid);
-    if (key === undefined || !(await verifyDsseSignature(key, envelope, signature))) return false;
+    if (key !== undefined && (await verifyDsseSignature(key, envelope, signature))) verified++;
   }
-  return true;
+  return { verified, other: envelope.signatures.length - verified };
 };
 
-interface CloudStatement extends ReleaseClaims {
+/** One logged statement of an execution, bound by its execution lease, with how a provenance key signed it. */
+export interface LoggedStatement extends ReleaseClaims {
   readonly envelopeDigest: string;
   readonly entry: LogEntry;
+  /** Every signature verifies under a provenance key: the cloud builder's statement. */
+  readonly cloudBuilder: boolean;
+  /** At least one signature verifies under a provenance key: the control plane signed or countersigned it. */
+  readonly provenanceSigned: boolean;
 }
 
 /**
- * The execution's `platform` statements from a cloud builder: logged, bound by its execution lease, and signed by a
- * provenance key alone.
+ * The execution's logged statements whose lease binding is the execution's own execution lease, in the order the
+ * store answers them. `keys` is the provenance key history, retired keys included.
  */
-const cloudStatementsOf = (executionId: string, keys: ReadonlyMap<string, ProvenancePublicKey>) =>
+export const loggedStatementsOf = (executionId: string, keys: ReadonlyMap<string, ProvenancePublicKey>) =>
   Effect.gen(function* () {
     const store = yield* LogAppendStore;
     const intents = yield* store.forExecution(executionId);
-    const out: CloudStatement[] = [];
+    const out: LoggedStatement[] = [];
     for (const intent of intents) {
       const entry = LogAppendStatus.$match(intent.status, {
         Pending: () => undefined,
@@ -168,11 +196,24 @@ const cloudStatementsOf = (executionId: string, keys: ReadonlyMap<string, Proven
         claims.lease.execution_id !== executionId
       )
         continue;
-      if (!(yield* Effect.promise(() => signedByCloudBuilder(envelope, keys)))) continue;
-      out.push({ ...claims, envelopeDigest: intent.envelopeDigest, entry });
+      const signed = yield* Effect.promise(() => provenanceSignatures(envelope, keys));
+      out.push({
+        ...claims,
+        envelopeDigest: intent.envelopeDigest,
+        entry,
+        cloudBuilder: signed.verified > 0 && signed.other === 0,
+        provenanceSigned: signed.verified > 0,
+      });
     }
     return out;
   });
+
+/**
+ * The execution's `platform` statements from a cloud builder: logged, bound by its execution lease, and signed by a
+ * provenance key alone.
+ */
+const cloudStatementsOf = (executionId: string, keys: ReadonlyMap<string, ProvenancePublicKey>) =>
+  Effect.map(loggedStatementsOf(executionId, keys), (statements) => statements.filter((s) => s.cloudBuilder));
 
 /**
  * Admits or refuses a release's publish. For each artifact, in order, the gate refuses with
@@ -187,7 +228,7 @@ export const gateReleasePublish = (
 ) =>
   Effect.gen(function* () {
     const keys = new Map(provenanceKeys.map((key) => [key.kid, key]));
-    const byExecution = new Map<string, readonly CloudStatement[]>();
+    const byExecution = new Map<string, readonly LoggedStatement[]>();
     const admitted: ReleaseStatement[] = [];
     for (const artifact of artifacts) {
       let statements = byExecution.get(artifact.executionId);

@@ -24,6 +24,7 @@ import type { Bucket } from "../manifest.ts";
 import type { ProvenanceKey } from "./dsse.ts";
 import {
   CHECKPOINT_PATH,
+  inclusionProof,
   leafHash,
   leafPath,
   newTiles,
@@ -33,6 +34,7 @@ import {
   storedHashesForAppend,
   tileBytes,
   tilePath,
+  toBase64,
   treeHead,
   type ReadStoredHash,
 } from "./merkle.ts";
@@ -398,6 +400,46 @@ export const publishCheckpoint = (store: LogStore, config: TransparencyLogConfig
     if (put === null) return yield* refuse("checkpoint-changed", path, { size });
     store.signed(size, now);
     return CheckpointOutcome.Published({ size, root: hex(root), signedAt: now });
+  });
+
+/**
+ * One leaf's RFC 9162 inclusion proof in the tree the published checkpoint signs: the checkpoint's text, its tree size,
+ * and the proof's hashes in order, standard base64 like the checkpoint's root.
+ */
+export interface PrivateLogInclusionProof {
+  readonly leafIndex: number;
+  readonly treeSize: number;
+  readonly hashes: readonly string[];
+  readonly checkpoint: string;
+}
+
+/**
+ * The inclusion proof of leaf `index` against the published checkpoint, or `null` when no checkpoint is published or
+ * the checkpoint does not cover the leaf yet. The proof is computed from the object's stored hashes.
+ */
+export const proveInclusion = (store: LogStore, config: TransparencyLogConfig, index: number) =>
+  Effect.gen(function* () {
+    const path = `${config.prefix}${CHECKPOINT_PATH}`;
+    const text = yield* Effect.tryPromise({
+      try: async () => (await config.bucket.get(path))?.text() ?? null,
+      catch: storeFailed(path),
+    });
+    const checkpoint = text === null ? undefined : parseCheckpoint(text);
+    if (
+      text === null ||
+      checkpoint === undefined ||
+      !Number.isSafeInteger(index) ||
+      index < 0 ||
+      index >= checkpoint.size
+    )
+      return null;
+    const hashes = yield* Effect.promise(() => inclusionProof(index, checkpoint.size, store.read));
+    return {
+      leafIndex: index,
+      treeSize: checkpoint.size,
+      hashes: hashes.map(toBase64),
+      checkpoint: text,
+    } satisfies PrivateLogInclusionProof;
   });
 
 /** A refused write answers its outcome after raising the page alarm. */

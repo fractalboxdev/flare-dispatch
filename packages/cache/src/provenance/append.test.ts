@@ -20,6 +20,9 @@ import {
   LogAppendStore,
   privateLogAppend,
   RepositoryVisibility,
+  RETRY_FLOOR_MS,
+  StatementLogged,
+  SubjectRetention,
   statementSummaryLine,
   statementTime,
   TransparencyLogs,
@@ -39,6 +42,11 @@ import {
 import type { AppendOutcome } from "./log.ts";
 import { leafPath } from "./merkle.ts";
 import { publicKeyPem, rekorAppend } from "./rekor.ts";
+import {
+  recordedStatementLogged,
+  recordedSubjectRetention,
+  type LoggedCall,
+} from "./append.test-support.ts";
 
 const keyPair = async (kid: string) => {
   const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
@@ -54,11 +62,12 @@ const keyPair = async (kid: string) => {
 const deviceEnvelope = async (
   device: ProvenanceKey,
   executionId: string,
+  subject: readonly unknown[] = [{ name: "commit", digest: { gitCommit: "a".repeat(40) } }],
 ): Promise<DsseEnvelope> => {
   const payload = utf8(
     JSON.stringify({
       _type: "https://in-toto.io/Statement/v1",
-      subject: [{ name: "commit", digest: { gitCommit: "a".repeat(40) } }],
+      subject,
       predicate: {
         buildDefinition: { internalParameters: { lease: { execution_id: executionId } } },
         runDetails: { metadata: { finishedOn: "2031-01-01T00:00:00Z" } },
@@ -130,7 +139,11 @@ const fakeRekor = (integratedTime = 1_700_000_000) => {
       ).spec.proposedContent;
       if (!rekorVerifies(envelope, verifiers))
         return Response.json(
-          { code: 400, message: "verifying signatures: invalid signature when validating ASN.1 encoded signature" },
+          {
+            code: 400,
+            message:
+              "verifying signatures: invalid signature when validating ASN.1 encoded signature",
+          },
           { status: 400 },
         );
       const existing = entries.get(envelope);
@@ -188,6 +201,8 @@ describe("the transparency-log append of a countersigned statement", () => {
     await log.usePrefix(prefix);
     const rekor = fakeRekor();
     const store = d1LogAppendStore(db);
+    const notices: LoggedCall[] = [];
+    const notice = { fails: false };
     const layer = Layer.mergeAll(
       Layer.succeed(LogAppendStore, store),
       Layer.succeed(RepositoryVisibility, {
@@ -200,15 +215,25 @@ describe("the transparency-log append of a countersigned statement", () => {
         rekor: rekorAppend({ url: REKOR_URL, fetch: rekor.fetch }),
         private: privateLogAppend(log),
       }),
+      recordedSubjectRetention(),
+      recordedStatementLogged(notices, () => notice.fails),
     );
     const run = <A, E>(
-      effect: Effect.Effect<A, E, LogAppendStore | RepositoryVisibility | TransparencyLogs>,
+      effect: Effect.Effect<
+        A,
+        E,
+        | LogAppendStore
+        | RepositoryVisibility
+        | TransparencyLogs
+        | SubjectRetention
+        | StatementLogged
+      >,
     ) => Effect.runPromise(Effect.provide(effect, layer));
     const leaf = async (index: number) => {
       const got = await bucket.get(`${prefix}${leafPath(index)}`);
       return got === null ? null : await got.text();
     };
-    return { log, rekor, store, run, leaf, visibility, visibilityReads };
+    return { log, rekor, store, run, leaf, visibility, visibilityReads, notices, notice };
   };
 
   let executions = 0;
@@ -217,9 +242,10 @@ describe("the transparency-log append of a countersigned statement", () => {
     p: Awaited<ReturnType<typeof plane>>,
     repository: string,
     now = 1_000,
+    subject?: readonly unknown[],
   ) => {
     const executionId = `exec-append-${++executions}`;
-    const submitted = await deviceEnvelope(device.private, executionId);
+    const submitted = await deviceEnvelope(device.private, executionId, subject);
     const { outcome, intent } = await p.run(
       countersignAndAppend(
         submitted,
@@ -282,6 +308,31 @@ describe("the transparency-log append of a countersigned statement", () => {
     await p.run(applyLogAppend(intent.digest, 5_000));
     expect(await p.log.size()).toBe(1);
     expect(await p.leaf(0)).toBe(json);
+  });
+
+  it("[FD-PROV-071] the store finds a statement by each subject digest it names, exactly, and by no other digest", async () => {
+    const p = await plane({ "acme/widgets": "private" });
+    const app = "1".repeat(64);
+    const lib = "2".repeat(64);
+    const both = await countersigned(p, "acme/widgets", 1_000, [
+      { name: "app.tar", digest: { sha256: app } },
+      { name: "lib.tar", digest: { sha256: lib } },
+    ]);
+    const libOnly = await countersigned(p, "acme/widgets", 1_000, [
+      { name: "lib.tar", digest: { sha256: lib } },
+    ]);
+    const bySubject = (digest: string) =>
+      p.run(Effect.flatMap(LogAppendStore, (s) => s.forSubject(digest)));
+    expect((await bySubject(`sha256:${app}`)).map((i) => i.envelopeDigest)).toEqual([
+      both.intent.digest,
+    ]);
+    expect((await bySubject(`sha256:${lib}`)).map((i) => i.envelopeDigest).sort()).toEqual(
+      [both.intent.digest, libOnly.intent.digest].sort(),
+    );
+    // A prefix or another algorithm of a named digest finds nothing: the lookup is by the whole digest only.
+    expect(await bySubject(`sha256:${app.slice(0, 32)}`)).toEqual([]);
+    expect(await bySubject(`sha512:${app}`)).toEqual([]);
+    expect(await bySubject("sha256:%")).toEqual([]);
   });
 
   it("[FD-PROV-034] a statement left advisory is not countersigned and records no log-append intent", async () => {
@@ -414,5 +465,27 @@ describe("the transparency-log append of a countersigned statement", () => {
     // A later append of the same envelope answers the leaf's first integrated time.
     const repeat = await p.log.append(utf8(canonicalJson(privateStatement.envelope)));
     expect(repeat).toMatchObject({ _tag: "Appended", duplicate: true, integratedAt: time });
+  });
+  it("[FD-PROV-042] a statement's successful append tells the control plane its execution and envelope digest, and a notice that fails leaves the statement log-pending for the next attempt", async () => {
+    const p = await plane({ "acme/closed": "private" });
+    const { executionId, intent } = await countersigned(p, "acme/closed", 1_000);
+    p.notice.fails = true;
+    await p.run(applyLogAppend(intent.digest, 1_000));
+    // The append reached the log, but the summary update was not recorded: the statement stays pending and retries.
+    expect(p.notices).toEqual([]);
+    expect((await get(p, intent.digest)).status).toMatchObject({
+      _tag: "Pending",
+      attempts: 1,
+      nextAttemptAt: 1_000 + RETRY_FLOOR_MS,
+    });
+    p.notice.fails = false;
+    await p.run(applyLogAppend(intent.digest, 1_000 + RETRY_FLOOR_MS));
+    expect(p.notices).toEqual([{ executionId, envelopeDigest: intent.digest }]);
+    expect((await get(p, intent.digest)).status).toMatchObject({ _tag: "Logged", attempts: 2 });
+    // The retried append answered the leaf the first attempt wrote.
+    expect(await p.log.size()).toBe(1);
+    // A logged statement is not attempted again, so it is not noticed again.
+    await p.run(applyLogAppend(intent.digest, 10_000_000));
+    expect(p.notices).toHaveLength(1);
   });
 });
