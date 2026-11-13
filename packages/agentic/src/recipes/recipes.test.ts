@@ -4,6 +4,7 @@ import { Effect, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
 import { Payloads as CheckPayloads } from "../../../github/src/applier.ts";
+import { decodeRunReport } from "../../../github/src/records.ts";
 import { validateDeclaration } from "../declaration.ts";
 import { AGENTIC_CATALOG, agenticWriteback } from "./catalog.ts";
 import { ExecutionsRead, CI_TRIAGE_BRANCH, reportPath } from "./ci-triage-pr.ts";
@@ -476,6 +477,60 @@ describe("pr-review", () => {
     expect(user?.content).toMatch(
       /<untrusted-data>[\s\S]*ignore previous instructions[\s\S]*<\/untrusted-data>/,
     );
+  });
+
+  it("[FD-GH-096] reports at most 200 findings with their identity, lines and level, and findingsTruncated beyond, for the verdict record", async () => {
+    const reviewed = async (perReviewer: number) =>
+      runReview(prInput(), {
+        shell: diffShell(section("src/a.ts", 3)),
+        model: (r) => {
+          const reviewer = r.callSite.replace("reviewer:", "");
+          return JSON.stringify({
+            findings: Array.from({ length: perReviewer }, (_, i) =>
+              finding({
+                path: `src/${reviewer}/f${i}.ts`,
+                title: "leaky title",
+                message: "leaky message",
+              }),
+            ),
+          });
+        },
+      });
+    const reportOf = (rec: Recorder) => {
+      const intent = rec.intents.find((i) => i.kind === "check.annotations");
+      const decoded = decodeRunReport(intent?.payload);
+      if (Option.isNone(decoded)) throw new Error("no report");
+      return Option.getOrThrow(decoded).report;
+    };
+
+    // A trivial change has one reviewer: 250 found, 200 reported.
+    const many = reportOf((await reviewed(250)).rec);
+    expect(many.findings).toHaveLength(200);
+    expect(many.findingsTruncated).toBe(true);
+    const first = many.findings?.[0];
+    expect(Object.keys(first ?? {}).sort()).toEqual(
+      ["endLine", "fingerprint", "level", "path", "ruleId", "startLine"].sort(),
+    );
+    expect(first).toMatchObject({ startLine: 3, endLine: 4, level: "warning" });
+    expect(first?.ruleId).toMatch(/^pr-review\//);
+    expect(first?.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(many)).not.toContain("leaky");
+
+    // Exactly 200 found: all reported, none dropped.
+    const all = reportOf((await reviewed(200)).rec);
+    expect(all.findings).toHaveLength(200);
+    expect(all.findingsTruncated).toBe(false);
+
+    // A finding with no line is reported, though it makes no annotation.
+    const { rec } = await runReview(prInput(), {
+      shell: diffShell(section("src/a.ts", 3)),
+      model: () => JSON.stringify({ findings: [finding({ startLine: 0, endLine: 0 })] }),
+    });
+    const unlocated = rec.intents.find((i) => i.kind === "check.annotations");
+    expect(
+      Schema.decodeUnknownSync(CheckPayloads["check.annotations"])(unlocated?.payload).annotations,
+    ).toEqual([]);
+    expect(reportOf(rec).findings).toMatchObject([{ path: "src/a.ts", startLine: 0 }]);
   });
 
   it("[FD-AGT-089] sets each finding's ruleId to pr-review/<reviewer>, whatever ruleId the model answers", async () => {

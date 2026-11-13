@@ -16,6 +16,7 @@ import { Outcome, type Reason } from "./reasons.ts";
 import { advisoryPreconditions, prepareScan, SCANNERS, type PreparedScan } from "./scan-bundle.ts";
 import { prepareScanCheckout, ScanBase } from "./scan-checkout.ts";
 import { runScanTools, type ScanFiles, type ScanStep } from "./scan.ts";
+import { StepFindings, type ScanFinding } from "./scan-findings.ts";
 
 /** The two scan recipes, each reporting under `flare-dispatch/<run>` with no label (FD-GATE-111). */
 export type ScanRunName = "security-gate" | "security-rescan";
@@ -141,6 +142,92 @@ export const scanSummary = (
   return { title: `${run}: ${verdict}`.slice(0, 255), markdown: `${lines.join("\n")}\n` };
 };
 
+/** The most findings a scan reports in its `report`, the most a `verdict.record` holds. */
+export const REPORTED_FINDINGS_MAX = 200;
+
+/** One finding as a scan reports it, with the identity FD-GATE-096 gives it. */
+export interface ReportedScanFinding {
+  readonly ruleId: string;
+  readonly fingerprint: string;
+  readonly path: string;
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly level: ScanFinding["level"];
+}
+
+/**
+ * The `report` member of a scan's `check.summary` payload, which the control plane copies into the execution's
+ * `verdict.record` (specs/github-output.md FD-GH-096; decoded by `RunReport` in `packages/github/src/records.ts`).
+ */
+export interface ScanRunReport {
+  readonly scan?: {
+    readonly bundle_digest: string;
+    readonly advisory_snapshots: readonly { readonly ecosystem: string; readonly digest: string }[];
+    readonly scanners: readonly {
+      readonly name: string;
+      readonly version: string;
+      readonly result: ScanStep["result"] | null;
+    }[];
+  };
+  readonly findings?: readonly ReportedScanFinding[];
+  readonly findingsTruncated?: boolean;
+}
+
+/**
+ * What a scan reports of itself: from the point its bundle and scanner versions held, the bundle's digest, each
+ * advisory snapshot's digest and each scanner's name, version and result, null for a scanner the scan stopped before;
+ * and once a scanner ran, at most 200 findings, with `findingsTruncated` true where it found more, or a step reported a
+ * finding the list does not hold: a scanner whose report could not be read, or a baseline check. A scan that ran no scanner reports no finding list, so none reads as none found.
+ */
+export const scanReport = (facts: ScanFacts): ScanRunReport => {
+  const prepared = facts.prepared;
+  const read = facts.steps.flatMap((s) =>
+    s.findings === undefined
+      ? []
+      : Match.value(s.findings).pipe(
+          Match.tagsExhaustive({
+            Read: ({ findings }) => findings,
+            Unreadable: () => [],
+          }),
+        ),
+  );
+  const unlisted = facts.steps.some(
+    (s) =>
+      s.result === "finding" && (s.findings === undefined || StepFindings.$is("Unreadable")(s.findings)),
+  );
+  return {
+    ...(prepared === undefined
+      ? {}
+      : {
+          scan: {
+            bundle_digest: `sha256:${prepared.bundle.digest}`,
+            advisory_snapshots: Object.values(prepared.snapshots).map((s) => ({
+              ecosystem: s.ecosystem,
+              digest: `sha256:${s.digest}`,
+            })),
+            scanners: SCANNERS.map((name) => ({
+              name,
+              version: prepared.versions[name],
+              result: facts.steps.find((s) => s.id === name)?.result ?? null,
+            })),
+          },
+        }),
+    ...(facts.steps.length === 0
+      ? {}
+      : {
+          findings: read.slice(0, REPORTED_FINDINGS_MAX).map((f) => ({
+            ruleId: f.ruleId,
+            fingerprint: f.fingerprint,
+            path: f.path,
+            startLine: f.startLine,
+            endLine: f.startLine,
+            level: f.level,
+          })),
+          findingsTruncated: read.length > REPORTED_FINDINGS_MAX || unlisted,
+        }),
+  };
+};
+
 /**
  * One scan of `ctx.sha` from `base`: the preconditions, the checkout, every scanner and baseline check, then the
  * verdict. A refused precondition records its `config` reason and runs no scanner; a checkout that fails records
@@ -193,7 +280,10 @@ export const scanFacts = (
     );
   });
 
-/** A scan run: the scan, then its check summary as a `check.summary` intent; the run answers the scan's verdict. */
+/**
+ * A scan run: the scan, then its check summary as a `check.summary` intent carrying the scan's `report`; the run
+ * answers the scan's verdict.
+ */
 const scanRun = (
   run: ScanRunName,
   ctx: GateContext,
@@ -205,7 +295,7 @@ const scanRun = (
     const intents = yield* Intents;
     yield* intents.emit("summary", {
       kind: "check.summary",
-      payload: { name: scanCheckName(run), head_sha: ctx.sha, ...summary },
+      payload: { name: scanCheckName(run), head_sha: ctx.sha, ...summary, report: scanReport(facts) },
     });
     return facts.outcome;
   }).pipe(

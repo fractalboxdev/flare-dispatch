@@ -358,16 +358,21 @@ describe("the security gate recipes as intake reads them", () => {
       },
     });
     const inputs = { repo: `https://github.com/${REPO}.git`, sha: HEAD, ref: "refs/heads/main" };
+    // A dispatch of the read-only scan run carries an Idempotency-Key (FD-IFC-092).
+    const idempotency = { key: "rescan-1", body: { repository: REPO, inputs } };
     const admitted = await admit(
       h,
-      authenticated({ run: "security-rescan", label: null, sha: HEAD, inputs }),
+      authenticated({ run: "security-rescan", label: null, sha: HEAD, inputs, idempotency }),
     );
     expect(admitted.duplicate).toBe(false);
     expect(h.records()).toMatchObject([{ run: "security-rescan", trigger: "dispatch", label: null }]);
     expect(h.recorded.resolved.map((r) => r.checkName)).toEqual(["flare-dispatch/security-rescan"]);
     // A dispatch naming a label matches no manifest entry.
     expect(
-      await refusal(h, authenticated({ run: "security-rescan", label: "x", sha: HEAD, inputs })),
+      await refusal(
+        h,
+        authenticated({ run: "security-rescan", label: "x", sha: HEAD, inputs, idempotency }),
+      ),
     ).toMatchObject({ status: 404, code: "run_not_found" });
 
     const followOn = await h.run(

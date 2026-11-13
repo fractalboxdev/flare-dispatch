@@ -102,6 +102,7 @@ const intakeOverAdmission = (db: D1Like, deployment: Deployment, profile: Profil
               id: s.caller,
             },
             classInput: s.class ?? null,
+            classCeiling: s.classCeiling ?? null,
             idempotency:
               s.idempotency === undefined
                 ? null

@@ -1,13 +1,16 @@
-import { Exit } from "effect";
+import { Exit, Option } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   decodeJobRecord,
+  decodeRunReport,
   decodeVerdictRecord,
   JobRecordPayload,
   jobRecordPayload,
   VerdictRecordPayload,
   verdictRecordPayload,
   type JobRecordRequest,
+  type ReportedFinding,
+  type RunReport,
   type VerdictRecordRequest,
 } from "./records.ts";
 
@@ -121,6 +124,113 @@ describe("verdict.record", () => {
   });
 });
 
+describe("verdict.record scan results and findings", () => {
+  const finding = (i: number, ruleId = "generic-api-key"): ReportedFinding => ({
+    ruleId,
+    fingerprint: i.toString(16).padStart(64, "0"),
+    path: `src/f${i}.ts`,
+    startLine: i + 1,
+    endLine: i + 1,
+    level: "failure",
+  });
+  const scan: NonNullable<RunReport["scan"]> = {
+    bundle_digest: `sha256:${"b".repeat(64)}`,
+    advisory_snapshots: [
+      { ecosystem: "npm", digest: `sha256:${"e".repeat(64)}` },
+      { ecosystem: "PyPI", digest: `sha256:${"f".repeat(64)}` },
+    ],
+    scanners: [
+      { name: "gitleaks", version: "8.30.1", result: "finding" },
+      { name: "zizmor", version: "1.32.0", result: "nothing-in-scope" },
+      { name: "osv-scanner", version: "2.7.0", result: null },
+    ],
+  };
+
+  it("[FD-GH-096] holds the scan bundle digest, each advisory snapshot digest, each scanner's name, version and result, and the findings the run reports", () => {
+    const findings = [finding(0), finding(1, "unpinned-uses")];
+    const payload = verdictRecordPayload({
+      ...terminal,
+      reports: [{ scan, findings, findingsTruncated: false }],
+    });
+    expect(payload).toMatchObject({ schema: "verdict-record/v1", execution_id: "exec-1" });
+    expect(payload.scan).toEqual(scan);
+    expect(payload.findings).toEqual(findings);
+    expect(payload.findingsTruncated).toBe(false);
+    expect(Exit.isSuccess(decodeVerdictRecord(payload))).toBe(true);
+
+    // A run that reports neither yields neither member, so an absent list is never read as no finding.
+    const plain = verdictRecordPayload({ ...terminal, reports: [] });
+    expect(Object.keys(plain)).not.toContain("scan");
+    expect(Object.keys(plain)).not.toContain("findings");
+    expect(Object.keys(plain)).not.toContain("findingsTruncated");
+    expect(Exit.isSuccess(decodeVerdictRecord(plain))).toBe(true);
+    // A run that reports an empty list holds it: no finding was found.
+    expect(verdictRecordPayload({ ...terminal, reports: [{ findings: [] }] })).toMatchObject({
+      findings: [],
+      findingsTruncated: false,
+    });
+  });
+
+  it("[FD-GH-096] holds at most 200 findings, and sets findingsTruncated where the run found more", () => {
+    // Two reports of one execution, 150 findings each: the record holds the first 200 in report order.
+    const first = Array.from({ length: 150 }, (_, i) => finding(i));
+    const second = Array.from({ length: 150 }, (_, i) => finding(150 + i, "pr-review/security"));
+    const payload = verdictRecordPayload({
+      ...terminal,
+      reports: [
+        { scan, findings: first },
+        { findings: second, findingsTruncated: false },
+      ],
+    });
+    expect(payload.findings).toHaveLength(200);
+    expect(payload.findings).toEqual([...first, ...second].slice(0, 200));
+    expect(payload.findingsTruncated).toBe(true);
+    expect(Exit.isSuccess(decodeVerdictRecord(payload))).toBe(true);
+    // A record of 201 findings is refused.
+    expect(
+      Exit.isFailure(
+        decodeVerdictRecord({ ...payload, findings: [...first, ...second].slice(0, 201) }),
+      ),
+    ).toBe(true);
+
+    // Exactly 200 is not truncated; a run that says it listed fewer than it found is.
+    const exactly = Array.from({ length: 200 }, (_, i) => finding(i));
+    expect(
+      verdictRecordPayload({ ...terminal, reports: [{ findings: exactly }] }).findingsTruncated,
+    ).toBe(false);
+    expect(
+      verdictRecordPayload({
+        ...terminal,
+        reports: [{ findings: [finding(0)], findingsTruncated: true }],
+      }),
+    ).toMatchObject({ findings: [finding(0)], findingsTruncated: true });
+  });
+
+  it("[FD-GH-096] reads a run's report from its check payload and copies only the declared fields", () => {
+    // A pr-review finding as the run holds it: the reviewer's title and message stay out of the record.
+    const reviewed = {
+      ...finding(3, "pr-review/security"),
+      title: "t",
+      message: "secret-ish text",
+    };
+    const decoded = decodeRunReport({
+      name: "flare-dispatch/pr-review",
+      head_sha: "a".repeat(40),
+      annotations: [],
+      report: { findings: [reviewed], findingsTruncated: false },
+    });
+    expect(Option.isSome(decoded)).toBe(true);
+    const report = Option.getOrThrow(decoded).report;
+    const payload = verdictRecordPayload({ ...terminal, reports: [report] });
+    expect(payload.findings).toEqual([finding(3, "pr-review/security")]);
+    expect(JSON.stringify(payload)).not.toContain("secret-ish text");
+    // A payload without a report, or with a finding that has no fingerprint, reports nothing.
+    expect(Option.isNone(decodeRunReport({ name: "x", markdown: "" }))).toBe(true);
+    const { fingerprint: _f, ...unidentified } = finding(4);
+    expect(Option.isNone(decodeRunReport({ report: { findings: [unidentified] } }))).toBe(true);
+  });
+});
+
 describe("record contents", () => {
   it("[FD-GH-097] neither record payload holds input_json, log text or a secret value", () => {
     // The schemas declare exactly the record's fields.
@@ -151,6 +261,9 @@ describe("record contents", () => {
         "reason",
         "conclusion",
         "check_name",
+        "scan",
+        "findings",
+        "findingsTruncated",
       ].sort(),
     );
 

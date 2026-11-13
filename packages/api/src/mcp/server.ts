@@ -65,7 +65,7 @@ export const DispatcherToolsLive = DispatcherTools.toLayer({
       Effect.gen(function* () {
         const wait = yield* checkWait(params.wait_seconds, MAX_WAIT_S);
         const identity = yield* dispatcher;
-        yield* authorizeDispatch(identity, params.run, params.repo);
+        const classCeiling = yield* authorizeDispatch(identity, params.run, params.repo);
         const submission = yield* submissionOf(
           identity,
           params.run,
@@ -78,6 +78,7 @@ export const DispatcherToolsLive = DispatcherTools.toLayer({
           },
           undefined,
           "mcp",
+          classCeiling,
         );
         const dispatched = yield* submit(submission);
         if (wait === 0) return yield* boundResult(dispatched);

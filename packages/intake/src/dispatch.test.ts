@@ -7,6 +7,7 @@ import {
   authenticated,
   BASE,
   bodyOf,
+  CATALOG,
   harness,
   HEAD,
   manifest,
@@ -15,6 +16,7 @@ import {
   refusal,
   repoWithManifest,
   signedWebhook,
+  testRun,
 } from "./harness.test-support.ts";
 import { catalogRuns } from "./catalog.ts";
 import { handleIntake } from "./routes.ts";
@@ -245,6 +247,93 @@ describe("dispatch to admission", () => {
       }),
     );
     expect(admitted.className).toBe("batch");
+  });
+});
+
+describe("a scoped dispatch", () => {
+  const SCANNER = { kind: "access", id: "scan-bot.access" } as const;
+
+  it("[FD-IFC-091] a scoped dispatcher's classCeiling reaches class resolution, and caps the class resolveClass assigns", async () => {
+    const recording = await harness();
+    await admit(recording, authenticated({ caller: SCANNER, classCeiling: "batch" }));
+    await admit(recording, authenticated({ caller: SCANNER, sha: BASE }));
+    expect(recording.recorded.resolved.map((r) => r.classCeiling)).toEqual(["batch", null]);
+
+    const profile = await harness({ profileResolver: true });
+    const capped = await admit(profile, authenticated({ caller: SCANNER, classCeiling: "batch" }));
+    const uncapped = await admit(profile, authenticated({ caller: SCANNER, sha: BASE }));
+    expect([capped.className, uncapped.className]).toEqual(["batch", "interactive"]);
+  });
+
+  it("[FD-IFC-091] an MCP call's assigned class is resolved under the caller's classCeiling", async () => {
+    const h = await harness();
+    await admit(
+      h,
+      authenticated({ trigger: "mcp", caller: SCANNER, classCeiling: "batch", classInput: null }),
+    );
+    expect(h.recorded.resolved.map((r) => [r.trigger, r.classCeiling])).toEqual([
+      ["mcp", "batch"],
+      ["mcp", "batch"],
+    ]);
+  });
+});
+
+describe("a dispatch of a read-only scan run", () => {
+  const SCAN_MANIFEST = manifest([
+    { recipe: "check", label: "ci", triggers: ["dispatch"], params: { steps: ["test"] } },
+    { recipe: "scan", triggers: ["dispatch"] },
+  ]);
+  const scanHarness = () =>
+    harness({
+      settings: {
+        catalog: (name) =>
+          name === "scan" ? testRun("scan", { readOnlyScan: true }) : CATALOG[name],
+      },
+      repos: { [REPO]: repoWithManifest(SCAN_MANIFEST) },
+    });
+  const scan = (over: Parameters<typeof authenticated>[0] = {}) =>
+    authenticated({ run: "scan", label: null, ...over });
+
+  it("[FD-IFC-092] with no Idempotency-Key answers 400 invalid_idempotency_key before any read or row", async () => {
+    const h = await scanHarness();
+    expect(await refusal(h, scan())).toEqual({ status: 400, code: "invalid_idempotency_key" });
+    expect(h.reads.calls).toEqual([]);
+    expect(h.executions()).toEqual([]);
+    expect(h.records()).toEqual([]);
+    const keyed = await admit(
+      h,
+      scan({ idempotency: { key: "scan-1", body: { repository: REPO, inputs: { sha: HEAD } } } }),
+    );
+    expect(keyed.duplicate).toBe(false);
+    expect(h.executions()).toMatchObject([{ id: keyed.executionId, run: "scan" }]);
+    // A run that is not a read-only scan run takes a dispatch with no key.
+    expect((await admit(h, authenticated())).duplicate).toBe(false);
+  });
+
+  it("[FD-IFC-092] security-rescan is the catalogue's read-only scan run, and a dispatch of it with no key answers 400", async () => {
+    const production = catalogRuns("production");
+    expect(production("security-rescan")?.readOnlyScan).toBe(true);
+    expect(production("security-gate")?.readOnlyScan).toBeUndefined();
+    expect(production("check")?.readOnlyScan).toBeUndefined();
+    const h = await harness({ settings: { catalog: production } });
+    expect(
+      await refusal(
+        h,
+        authenticated({ run: "security-rescan", label: null, inputs: { sha: HEAD } }),
+      ),
+    ).toEqual({ status: 400, code: "invalid_idempotency_key" });
+    expect(h.reads.calls).toEqual([]);
+  });
+
+  it("[FD-IFC-092] [FD-IFC-074] an MCP dispatch with no Idempotency-Key answers 400 invalid_idempotency_key, as the HTTP route does", async () => {
+    const h = await scanHarness();
+    expect(await refusal(h, scan({ trigger: "mcp" }))).toEqual({
+      status: 400,
+      code: "invalid_idempotency_key",
+    });
+    expect(h.reads.calls).toEqual([]);
+    expect(h.executions()).toEqual([]);
+    expect(h.records()).toEqual([]);
   });
 });
 

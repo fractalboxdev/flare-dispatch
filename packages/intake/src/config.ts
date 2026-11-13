@@ -388,6 +388,8 @@ export interface ClassRequest {
   readonly checkName: string;
   /** A dispatch's or an MCP call's `class` input (FD-IFC-033). */
   readonly classInput: string | null;
+  /** The `classCeiling` of a scoped dispatcher's `dispatch.scoped` entry (FD-IFC-091); null for any other caller. */
+  readonly classCeiling: string | null;
   readonly caller: Caller | null;
 }
 

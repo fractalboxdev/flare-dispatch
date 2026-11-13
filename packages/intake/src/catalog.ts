@@ -15,6 +15,7 @@ import {
   DeploySmokeEntrySchema,
   deploymentStatusDecoder,
   gateContextOf,
+  isReadOnlyScanRun,
   lookupRun,
   MatrixEntrySchema,
   offloadTestDecoder,
@@ -247,6 +248,7 @@ export const catalogRuns =
         ...requiredCheckOf(entry),
         ...(manifestRecipeOf(entry)?.dispatchOnly === true ? { dispatchOnly: true } : {}),
         ...(manifestRecipeOf(entry)?.labelless === true ? { labelless: true } : {}),
+        ...(isReadOnlyScanRun(entry.spec.name, entry) ? { readOnlyScan: true } : {}),
       })),
       Match.orElse(() => undefined),
     );

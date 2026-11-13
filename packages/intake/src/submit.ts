@@ -66,6 +66,8 @@ export interface Submission extends Omit<KeyedRequest, "run"> {
   readonly installation: number | null;
   readonly caller: Caller | null;
   readonly classInput: string | null;
+  /** The `classCeiling` of a scoped dispatcher's entry, which caps the class (FD-IFC-091); null for any other caller. */
+  readonly classCeiling: string | null;
   /** The id of attempt 1 when this request is a re-run; null for a first attempt. */
   readonly familyRoot: string | null;
   /** A re-run keeps its family's class (FD-INT-054). */
@@ -103,6 +105,7 @@ export const submission = (
   installation: null,
   caller: null,
   classInput: null,
+  classCeiling: null,
   idempotency: null,
   followOn: null,
   release: null,
@@ -361,6 +364,7 @@ export const submit = (
       refProtection: s.refProtection,
       checkName: name,
       classInput: s.classInput,
+      classCeiling: s.classCeiling,
       caller: s.caller,
     };
     const resolution =

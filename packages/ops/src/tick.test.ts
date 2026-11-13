@@ -883,6 +883,86 @@ describe("the minute tick's job and verdict records", () => {
     ]);
   });
 
+  it("[FD-GH-096] each verdict.record holds the scan and at most 200 findings its run reported, with findingsTruncated", async () => {
+    const finding = (i: number, ruleId: string) => ({
+      ruleId,
+      fingerprint: i.toString(16).padStart(64, "0"),
+      path: `src/f${i}.ts`,
+      startLine: i + 1,
+      endLine: i + 2,
+      level: "warning",
+    });
+    const scan = {
+      bundle_digest: `sha256:${"b".repeat(64)}`,
+      advisory_snapshots: [{ ecosystem: "npm", digest: `sha256:${"e".repeat(64)}` }],
+      scanners: [
+        { name: "gitleaks", version: "8.30.1", result: "finding" },
+        { name: "zizmor", version: "1.32.0", result: "clean" },
+        { name: "osv-scanner", version: "2.7.0", result: "nothing-in-scope" },
+      ],
+    };
+    const scanned = Array.from({ length: 150 }, (_, i) => finding(i, "generic-api-key"));
+    const reviewed = Array.from({ length: 100 }, (_, i) => finding(150 + i, "pr-review/security"));
+    await seed("e-scan", "failure", { reason: "scan: gitleaks" });
+    await seed("e-plain", "success");
+    await seed("e-clean", "success");
+    await insertOutboxRows(t.db, [
+      row("e-scan", "summary:0", "check.summary", {
+        name: "flare-dispatch/security-gate",
+        head_sha: SHA,
+        title: "security-gate: failure: scan: gitleaks",
+        markdown: "…",
+        report: { scan, findings: scanned, findingsTruncated: false },
+      }),
+      row("e-scan", "annotate:0", "check.annotations", {
+        name: "flare-dispatch/security-gate",
+        head_sha: SHA,
+        title: "t",
+        summary: "s",
+        annotations: [],
+        report: { findings: reviewed, findingsTruncated: false },
+      }),
+      // A kind that carries no report, and a check payload with none, add nothing.
+      row("e-scan", "comment:0", "comment", { body: "x", report: { findings: reviewed } }),
+      row("e-plain", "annotate:0", "check.annotations", {
+        name: "flare-dispatch/ci",
+        head_sha: SHA,
+        title: "t",
+        summary: "s",
+        annotations: [],
+      }),
+      // A run that reports an empty list found nothing.
+      row("e-clean", "summary:0", "check.summary", {
+        name: "flare-dispatch/security-gate",
+        head_sha: SHA,
+        title: "security-gate: success",
+        markdown: "…",
+        report: { scan, findings: [], findingsTruncated: false },
+      }),
+    ]);
+
+    const { deps: d } = deps({ profile: withRecords, probes: undefined });
+    const report = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0);
+    expect(report.steps.find((s) => s.step === "verdict-records")).toMatchObject({
+      detail: ["e-clean", "e-plain", "e-scan"],
+    });
+    const rows = await records();
+    const payload = (id: string) =>
+      JSON.parse(rows.find((r) => r.intent_key === `ops:verdict-record:${id}`)!.payload_json);
+
+    const recorded = payload("e-scan");
+    expect(recorded).toMatchObject({ execution_id: "e-scan", verdict: "failure", scan });
+    // The summary's 150 findings, then the first 50 of the annotations' 100.
+    expect(recorded.findings).toEqual([...scanned, ...reviewed].slice(0, 200));
+    expect(recorded.findingsTruncated).toBe(true);
+
+    expect(payload("e-clean")).toMatchObject({ scan, findings: [], findingsTruncated: false });
+    const plain = payload("e-plain");
+    expect(Object.keys(plain)).not.toContain("scan");
+    expect(Object.keys(plain)).not.toContain("findings");
+    expect(Object.keys(plain)).not.toContain("findingsTruncated");
+  });
+
   it("[FD-GH-094] [FD-GH-102] where the overlay sets no records.url, the tick inserts no verdict.record and pages for no record", async () => {
     await seed("e-pass", "success");
     const { deps: d, alarms } = deps({ probes: undefined });
