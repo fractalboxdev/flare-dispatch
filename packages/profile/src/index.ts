@@ -11,6 +11,7 @@ export {
   profile,
   profileDocument,
   profileDocumentFor,
+  RECORDS_PHASE,
   spendConfigWith,
   spendDefaults,
   spendSettings,
@@ -18,6 +19,7 @@ export {
   developmentRuntimeFields,
   type Deployment,
   type Phase,
+  type ProfileOptions,
   type SpendConfig,
 } from "./document.ts";
 export {

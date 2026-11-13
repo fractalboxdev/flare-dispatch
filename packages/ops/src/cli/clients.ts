@@ -13,11 +13,11 @@ export interface CloudflareClient {
     path: string,
     body?: unknown,
   ) => Effect.Effect<unknown, TargetFailed>;
-  /** A raw object body (R2 objects), or null for a 404. */
+  /** A raw object body (R2 objects), or null for a 404. A text body goes as JSON, a byte body as it is. */
   readonly raw: (
     method: string,
     path: string,
-    body?: string,
+    body?: string | Uint8Array,
   ) => Effect.Effect<string | null, TargetFailed>;
 }
 
@@ -27,7 +27,12 @@ export const cloudflareClient = (
   token: string,
   fetcher: typeof fetch = fetch,
 ): CloudflareClient => {
-  const call = (method: string, path: string, body: string | undefined, contentType: string) =>
+  const call = (
+    method: string,
+    path: string,
+    body: string | Uint8Array | undefined,
+    contentType: string,
+  ) =>
     Effect.tryPromise({
       try: () =>
         fetcher(`${CLOUDFLARE_API}${path}`, {
@@ -36,7 +41,7 @@ export const cloudflareClient = (
             authorization: `Bearer ${token}`,
             ...(body === undefined ? {} : { "content-type": contentType }),
           },
-          ...(body === undefined ? {} : { body }),
+          ...(body === undefined ? {} : { body: body as BodyInit }),
         }),
       catch: (e) => new TargetFailed({ operation: `${method} ${path}`, message: String(e) }),
     });
@@ -65,7 +70,12 @@ export const cloudflareClient = (
       }),
     raw: (method, path, body) =>
       Effect.gen(function* () {
-        const res = yield* call(method, path, body, "application/json");
+        const res = yield* call(
+          method,
+          path,
+          body,
+          typeof body === "string" ? "application/json" : "application/octet-stream",
+        );
         if (res.status === 404) return null;
         if (!res.ok)
           return yield* new TargetFailed({

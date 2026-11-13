@@ -113,7 +113,10 @@ export interface OperabilityOptions<E> {
   readonly runner?: CommandRunner;
   /** Replaces the live target, for tests. */
   readonly target?: (overlay: OverlayValues) => Layer.Layer<DeployTarget>;
-  /** The profile document the deploy carries; the production document at the current phase by default (FD-OPS-021). */
+  /**
+   * The profile document the deploy carries; by default the production document at the current phase, with the record
+   * kinds where the overlay sets `records.url` (FD-OPS-021, FD-GH-093).
+   */
   readonly profile?: ProfileDocument;
   /** The agentic recipes the run catalogue carries; `AGENTIC_CATALOG` by default (FD-AGT-002, FD-AGT-004). */
   readonly agenticRegistry?: AgenticRegistry;
@@ -275,9 +278,13 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
   const checks = renderedChecks(specs, options.agenticRegistry ?? AGENTIC_CATALOG, runRegistry);
   const readOnlyScanRuns = readOnlyScanRunsOf(runRegistry);
   const assetsBuilt = assetsDirectoryCheck(root, specs);
-  const profileDocument = options.profile ?? profileDocumentFor("production");
+  // The document the control plane serves under this overlay: the record kinds where it sets `records.url` (FD-GH-093).
   const profileFindings = (overlay: OverlayValues) =>
-    profileDriftFindings(profileDocument, spendConfigOf(overlay));
+    profileDriftFindings(
+      options.profile ??
+        profileDocumentFor("production", CURRENT_PHASE, { records: overlay.records !== undefined }),
+      spendConfigOf(overlay),
+    );
   const workers = (): WorkerTemplate[] =>
     specs.map((s) => ({
       worker: s.worker,
@@ -402,6 +409,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
                 last: "record",
                 details: {
                   drift: r.warnings.map((w) => `warning ${w.path}: ${w.detail}`).join("\n"),
+                  "scan-bundle": r.scanBundle ?? "",
                   migrations: r.migrations.join(", "),
                   deploy: [
                     ...r.deployed.map((d) => `${d.worker} ${d.version}`),

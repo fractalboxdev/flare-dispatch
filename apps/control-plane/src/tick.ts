@@ -1,6 +1,7 @@
 // The minute tick's composition: the operability package's tick with the GitHub applier draining the outbox, the
 // GitHub probes under the App, the admission of held requests, the enqueue of intake's sweep and schedule units for
-// every installation of the App, the conclusions of ended fan-out parents' children and the daily advisory refresh.
+// every installation of the App, the conclusions of ended fan-out parents' children, the daily advisory refresh, the
+// advisory snapshot staleness alarm and the drain of the transparency-log appends.
 import {
   GithubApp,
   insertChildConclusions,
@@ -27,10 +28,11 @@ import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
 import { d1ExecutionStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import type { ActuatorRateLimit, Actuators } from "@fractalboxdev/mameko-ports";
 import { Cause, Effect, Exit, Layer, Schema } from "effect";
-import { advisoryRefreshStep } from "./advisory-snapshots.ts";
+import { advisoryRefreshStep, advisoryWatchOf } from "./advisory-snapshots.ts";
 import { isolateServices } from "./composition.ts";
 import { channelConfig, concludeKindOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { appOptionsOf } from "./github.ts";
+import { logAppendStep } from "./provenance.ts";
 
 /** Installations whose `IntakeUnits` object refused the minute's enqueue; every other installation's units are queued. */
 export class IntakeEnqueueFailed extends Schema.TaggedError<IntakeEnqueueFailed>()(
@@ -169,6 +171,8 @@ export const tickDeps = (
   });
   return {
     ...base,
+    // `advisory-snapshot-stale` while a watched ecosystem's snapshot is missing or too old (FD-OPS-103).
+    advisory: advisoryWatchOf(env),
     ...(withApp
       ? {
           appliers: services as unknown as Layer.Layer<Actuators | ActuatorRateLimit>,
@@ -210,6 +214,8 @@ export const tickDeps = (
       childConclusionsStep(env, now),
       // Each `scan.advisoryEcosystems` archive into `cas/<sha256>`, once per UTC day (FD-OPS-100).
       advisoryRefreshStep(env, now),
+      // Each log-append intent due now goes to Rekor or the private log (FD-PROV-034, FD-PROV-041).
+      logAppendStep(env, now),
       ...steps(now),
     ],
   };

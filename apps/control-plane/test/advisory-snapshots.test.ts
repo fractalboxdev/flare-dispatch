@@ -1,9 +1,21 @@
-// The minute tick's `advisory-refresh` step over the Worker's ports (specs/operability.md FD-OPS-100, FD-OPS-101).
+// The minute tick's `advisory-refresh` step over the Worker's ports (specs/operability.md FD-OPS-100, FD-OPS-101),
+// and the `advisory-snapshot-stale` watch the tick reads from the rendered vars (FD-OPS-103).
 // Node has no `crypto.DigestStream` or `FixedLengthStream`, so the suite passes stream constructors that behave as
 // they do: a SHA-256 sink and a pass-through that errors unless exactly its length passes.
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
-import { readSnapshotRecord, runOpsMigrations } from "@fractalboxdev/flare-dispatch-ops";
+import {
+  checkAdvisorySnapshotsStale,
+  parseJsonc,
+  placeholderOverlay,
+  readSnapshotRecord,
+  recordSnapshot,
+  renderTemplate,
+  runOpsMigrations,
+  type AdvisoryWatch,
+} from "@fractalboxdev/flare-dispatch-ops";
 import { Cause, Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import {
@@ -12,8 +24,10 @@ import {
   sha256,
   type Published,
 } from "../../../packages/ops/src/advisory.test-support.ts";
+import { recordingAlarms } from "../../../packages/ops/src/d1.test-support.ts";
 import {
   advisoryRefreshStep,
+  advisoryWatchOf,
   workerAdvisoryPorts,
   type AdvisoryBucket,
   type StreamRuntime,
@@ -151,6 +165,58 @@ describe("the tick's advisory-refresh step", () => {
       expect(Exit.isFailure(e) && Cause.squash(e.cause)).toMatchObject({
         _tag: "ConfigInvalid",
         path: "ADVISORY_ECOSYSTEMS",
+      });
+    }
+  });
+});
+
+describe("the tick's advisory-snapshot-stale watch", () => {
+  it("[FD-OPS-103] the tick watches the rendered scan.advisoryEcosystems against scan.advisoryMaxAgeHours, 48 where the overlay sets none, and pages while a snapshot is missing or older", async () => {
+    const template = readFileSync(join(import.meta.dirname, "../wrangler.jsonc"), "utf8");
+    const varsOf = async (scan: Record<string, unknown>) =>
+      parseJsonc(
+        await Effect.runPromise(
+          renderTemplate("control-plane", template, { ...placeholderOverlay, scan } as never),
+        ),
+      )["vars"] as Record<string, unknown>;
+    const watchRead = (env: ControlPlaneEnv) =>
+      tickDeps(env).advisory as Effect.Effect<AdvisoryWatch, unknown>;
+    const watchOf = (env: ControlPlaneEnv) => Effect.runPromise(watchRead(env));
+
+    const defaults = await envOf(await varsOf({ advisoryEcosystems: ["npm"] }));
+    expect(defaults.ADVISORY_MAX_AGE_HOURS).toBe(48);
+    expect(await watchOf(defaults)).toEqual({ ecosystems: ["npm"], maxAgeHours: 48 });
+    const set = await envOf(await varsOf({ advisoryEcosystems: ["npm"], advisoryMaxAgeHours: 12 }));
+    expect(await watchOf(set)).toEqual({ ecosystems: ["npm"], maxAgeHours: 12 });
+    // A `.dev.vars` entry arrives as text; an unset var is the default.
+    expect(await Effect.runPromise(advisoryWatchOf({ ADVISORY_MAX_AGE_HOURS: "6" }))).toEqual({
+      ecosystems: [],
+      maxAgeHours: 6,
+    });
+
+    // The watch the tick reads pages while npm has no snapshot, and resolves once it has a fresh one.
+    const alarms = recordingAlarms();
+    const check = (now: number) =>
+      Effect.runPromise(
+        watchRead(set).pipe(
+          Effect.flatMap((watch) => checkAdvisorySnapshotsStale(set.DB, watch, now)),
+          Effect.provide(alarms.layer),
+        ),
+      );
+    expect(await check(DAY)).toMatchObject({ alarm: "sent" });
+    await recordSnapshot(set.DB, "npm", { digest: sha256(archive("npm")), lastModified: PUBLISHED, size: 9 }, DAY);
+    expect(await check(DAY + 60_000)).toMatchObject({ alarm: "sent" });
+    expect(alarms.delivered.map((a) => [a.name, a.severity, a.state])).toEqual([
+      ["advisory-snapshot-stale", "page", "raised"],
+      ["advisory-snapshot-stale", "page", "resolved"],
+    ]);
+
+    // A malformed var fails the watch rather than widening or guessing it.
+    for (const bad of ["two days", 0, -1, 1.5, {}]) {
+      const exit = await Effect.runPromiseExit(advisoryWatchOf({ ADVISORY_MAX_AGE_HOURS: bad }));
+      expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({
+        _tag: "ConfigInvalid",
+        path: "ADVISORY_MAX_AGE_HOURS",
       });
     }
   });

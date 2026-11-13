@@ -6,6 +6,7 @@ import {
   GateExec,
   WorkspaceReadFailed,
   WorkspaceWriteFailed,
+  type ArgvOptions,
   type CommandOptions,
 } from "./command.ts";
 import { GithubRead, GithubReadFailed } from "./github-read.ts";
@@ -31,30 +32,42 @@ export const ctx = {
 
 const encoder = new TextEncoder();
 
-/** A scripted answer to a command: matched by a substring of the command. */
+/** A scripted answer to a command: matched by a substring of the command, or of an argv joined by spaces. */
 export interface Scripted {
   readonly match: string;
   readonly exit?: CommandExit;
   readonly output?: string;
 }
 
-/** `GateExec` that answers each command from a script, exit 0 by default, and records every command it ran. */
+/**
+ * `GateExec` that answers each command from a script, exit 0 by default, and records every shell command in `ran` and
+ * every argv in `ranArgv`.
+ */
 export const fakeExec = (
   script: readonly Scripted[] = [],
   files: Readonly<Record<string, string>> = {},
 ) => {
   const ran: CommandOptions[] = [];
+  const ranArgv: ArgvOptions[] = [];
   let workspaces = 0;
+  const answer = (text: string) => {
+    const hit = script.find((s) => text.includes(s.match));
+    return {
+      exit: hit?.exit ?? CommandExit.Exited({ code: 0 }),
+      output: encoder.encode(hit?.output ?? ""),
+    };
+  };
   const layer = Layer.succeed(GateExec, {
     workspace: Effect.sync(() => `/ws/${++workspaces}`),
     run: (options) =>
       Effect.sync(() => {
         ran.push(options);
-        const hit = script.find((s) => options.command.includes(s.match));
-        return {
-          exit: hit?.exit ?? CommandExit.Exited({ code: 0 }),
-          output: encoder.encode(hit?.output ?? ""),
-        };
+        return answer(options.command);
+      }),
+    runArgv: (options) =>
+      Effect.sync(() => {
+        ranArgv.push(options);
+        return answer(options.argv.join(" "));
       }),
     readFile: (path) => {
       const key = Object.keys(files).find((f) => path.endsWith(f));
@@ -64,7 +77,7 @@ export const fakeExec = (
     },
     writeFile: (path) => Effect.fail(new WorkspaceWriteFailed({ path, detail: "read-only" })),
   });
-  return { layer, ran, workspaces: () => workspaces };
+  return { layer, ran, ranArgv, workspaces: () => workspaces };
 };
 
 export const fakeArtifacts = (options: { readonly fail?: boolean } = {}) => {

@@ -1,7 +1,11 @@
 // The operator overlay: a JSON document of values only, decoded against the value schema with every undeclared key
 // rejected (specs/operability.md § Template, overlay and rendered configuration, FD-OPS-002 to FD-OPS-004, FD-OPS-056).
 import type { RegistryEntry } from "@fractalboxdev/flare-dispatch-agentic";
-import { BundleDigest, ScanBundleKey } from "@fractalboxdev/flare-dispatch-catalog";
+import {
+  ADVISORY_MAX_AGE_DEFAULT_HOURS,
+  BundleDigest,
+  ScanBundleKey,
+} from "@fractalboxdev/flare-dispatch-catalog";
 import {
   PolicyRules,
   spendConfigWith,
@@ -23,6 +27,11 @@ export const AlertSink = NonEmpty.check(
       ? undefined
       : "an HTTPS URL or an email address",
   ),
+);
+
+/** An HTTPS URL. */
+const HttpsUrl = NonEmpty.check(
+  Schema.makeFilter((s: string) => (/^https:\/\/[^\s/]+/.test(s) ? undefined : "an HTTPS URL")),
 );
 
 /**
@@ -145,6 +154,11 @@ export const OverlayValues = Schema.Struct({
       advisoryMaxAgeHours: opt(Count),
     }),
   ),
+  /**
+   * The HTTPS URL that receives job and verdict records; set, the profile declares `job.record` and `verdict.record`
+   * from phase 2 (specs/github-output.md § Job and verdict records, FD-GH-093).
+   */
+  records: opt(Schema.Struct({ url: HttpsUrl })),
   provenance: opt(
     Schema.Struct({
       attestationMaxAgeDays: opt(Count),
@@ -249,11 +263,17 @@ export const policyRulesOf = (overlay: OverlayValues): PolicyRules => overlay.po
 /** The values a template's placeholders resolve against (`renderValuesOf`). */
 export type RenderValues = Omit<
   OverlayValues,
-  "spend" | "policy" | "dispatchers" | "intake" | "dispatch" | "provenance" | "scan"
+  "spend" | "policy" | "dispatchers" | "intake" | "dispatch" | "provenance" | "scan" | "records"
 > & {
-  /** `advisoryEcosystems`, none where the overlay sets none, so `advisory-refresh` stores no archive. */
+  /** `records.url`, empty where the overlay sets none, so the control plane declares no record kind. */
+  readonly records: { readonly url: string };
+  /**
+   * `advisoryEcosystems`, none where the overlay sets none, so `advisory-refresh` stores no archive, and
+   * `advisoryMaxAgeHours` at its 48 h default where the overlay sets none (FD-OPS-103).
+   */
   readonly scan: NonNullable<OverlayValues["scan"]> & {
     readonly advisoryEcosystems: readonly string[];
+    readonly advisoryMaxAgeHours: number;
   };
   /** `attestationMaxAgeDays` at its 10-day default where the overlay sets none (FD-PROV-016). */
   readonly provenance: NonNullable<OverlayValues["provenance"]> & {
@@ -273,7 +293,8 @@ export type RenderValues = Omit<
  * its policy rules and dispatchers, an empty set where it holds none, its Actions OIDC audience, empty where it sets
  * none, its intake webhook events, `null` where it sets none, so the rendered Worker tells an absent list (every
  * supported event) from an empty one (none) (FD-INT-027), its `attestation_max_age` in days, at its default where
- * it sets none (FD-PROV-016), and its advisory ecosystems, none where it sets none (FD-OPS-100).
+ * it sets none (FD-PROV-016), its advisory ecosystems, none where it sets none (FD-OPS-100), its advisory snapshot
+ * age, at its default where it sets none (FD-OPS-103), and its `records.url`, empty where it sets none (FD-GH-093).
  */
 export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   ...overlay,
@@ -282,7 +303,12 @@ export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   dispatchers: overlay.dispatchers ?? [],
   intake: { webhookEvents: overlay.intake?.webhookEvents ?? null },
   dispatch: { oidcAudience: overlay.dispatch?.oidcAudience ?? "" },
-  scan: { ...overlay.scan, advisoryEcosystems: overlay.scan?.advisoryEcosystems ?? [] },
+  records: { url: overlay.records?.url ?? "" },
+  scan: {
+    ...overlay.scan,
+    advisoryEcosystems: overlay.scan?.advisoryEcosystems ?? [],
+    advisoryMaxAgeHours: overlay.scan?.advisoryMaxAgeHours ?? ADVISORY_MAX_AGE_DEFAULT_HOURS,
+  },
   provenance: {
     ...overlay.provenance,
     attestationMaxAgeDays:

@@ -161,6 +161,7 @@ sequenceDiagram
   alt drift found
     CLI-->>GHA: fail, no state changed
   else clean
+    CLI->>API: write verified scan bundle to R2 cas, keyed by its digest
     CLI->>API: apply D1 migrations
     CLI->>W: deploy Workers, bound services first
     CLI->>W: GET /health, container canary on deployed digest
@@ -235,7 +236,7 @@ FlareDispatch's alarm port records each alarm for the dashboard and sends it to 
 | `advisory-snapshot-stale` | page | An advisory snapshot in `scan.advisoryEcosystems` is older than `scan.advisoryMaxAgeHours` | R17 |
 | `record-undelivered` | page | A `job.record` or `verdict.record` row reaches `refused` or `expired` ([github-output.md](github-output.md) FD-GH-102) | R18 |
 | `delivery-key-paused` | notify | A delivery key stays paused for more than 10 min ([MAMEKO-OPS-049](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md)) | R15 |
-| `private-log-refused` | page | The `TransparencyLog` object refuses a private-log write that would change an existing leaf or tile or reduce the tree size ([provenance.md](provenance.md) FD-PROV-038) | R17 |
+| `private-log-refused` | page | The `TransparencyLog` object refuses a private-log write that would change an existing leaf or tile or reduce the tree size ([provenance.md](provenance.md) FD-PROV-038) | R20 |
 
 Other files and mameko define their own alarms (spend, admission, delivery); every alarm travels the same alarm port.
 
@@ -277,7 +278,7 @@ FlareDispatch surfaces no `resolve`, because no FlareDispatch intent kind is `re
 | R14 Secret rotation | Scheduled or after exposure | `wrangler secret put` for each Worker that holds the secret, then `fd doctor` | FD-OPS-024 |
 | R15 Delivery key paused | `delivery-key-paused` | While the containment hold is set, follow R19 and resume nothing; otherwise confirm the pause is intended, or `fd ops resume-key <installation>` | FD-OPS-077, [MAMEKO-OPS-046](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md) |
 | R16 AWS budget check failed | `drift` or a failed deploy naming `aws.budgetAction`, or an `aws-sts`, `aws-budgets`, `aws-iam` or `aws-organizations` read | Where a read failed, set the repository variable `FD_AWS_ROLE_ARN` to an AWS role that trusts GitHub's OIDC provider for this repository and grants `sts:GetCallerIdentity`, `budgets:ViewBudget`, `budgets:DescribeBudgetActionsForAccount`, `iam:GetPolicy`, `iam:GetPolicyVersion` and, for an SCP action, `organizations:DescribePolicy`, `organizations:DescribeOrganization`, `organizations:ListParents` and `organizations:ListRoots`. For an IAM action, set `aws.launcherRoleArn` to the actual ECS launcher's role in the authenticated account and target that role; a same-named user or group does not qualify. An SCP must be a `SERVICE_CONTROL_POLICY`, enabled on the account's organization root, and affect a member account through that account or a proven organization ancestor; SCPs do not affect the management account. Use an active budget whose complete `TimePeriod` is readable and whose legacy filters and modern `FilterExpression` cover all ECS spend. An unread billing view scope, failed or reversed action does not qualify. Otherwise add the Budgets action the listed reasons say is missing; then `fd doctor` | [executors.md](executors.md) FD-EXEC-083                                                                                                                                                                                                                                 |
-| R17 Advisory snapshot stale | `advisory-snapshot-stale` | Read the `advisory-refresh` run's failure; confirm the OSV archive answers; re-run the tick | FD-OPS-100 to FD-OPS-102 |
+| R17 Advisory snapshot stale | `advisory-snapshot-stale` | Read the `advisory-refresh` run's failure; confirm the OSV archive answers; re-run the tick | FD-OPS-100 to FD-OPS-103 |
 | R18 Record undelivered | `record-undelivered` | Confirm `records.url` answers and the signing key matches; compare the execution with the receiver's records | [github-output.md](github-output.md) FD-GH-102 |
 | R19 Containment | A security incident | A `containment` identity: read `GET /v1/ops/delivery-keys`; `pause-key` each key; `halt halt-all`; read the keys again and `pause-key` each new one; `GET /v1/executions?class=release`; `cancel` each non-terminal execution; `quarantine` each affected executor. An `operators` identity ends it: `halt run`, then `resume-key` each key | [interfaces.md](interfaces.md) FD-IFC-094 to FD-IFC-101, [intake.md](intake.md) FD-INT-071 |
 | R20 Private log write refused | `private-log-refused` | Leave every object under `tlog/private/` in the `CACHE` bucket in place; read the alarm's reason and path, and compare the published checkpoint's tree size and root with the `TransparencyLog` object's leaves | [provenance.md](provenance.md) FD-PROV-038, FD-PROV-074 |
@@ -381,6 +382,8 @@ FlareDispatch surfaces no `resolve`, because no FlareDispatch intent kind is `re
 ### Scan bundle and advisory snapshot
 
 The scan-bundle verifier samples the deploy host's current time once when verification starts and applies every key's validity window to that verification time. A missing, malformed or reversed window authorizes no deploy. The DSSE envelope supplies no trusted signing time: the verifier accepts no historical or signer-declared timestamp in place of its current-time check. A key retained in history after expiry, or removed from `scan.bundleKeys`, cannot authorize a new deploy, including a redeploy of a previously signed envelope. A failed verification leaves the already-running Worker's previous pin unchanged; runs continue to verify that pinned envelope's digest under FD-GATE-100.
+
+A rendered image declares each scanner's version as the default of its Dockerfile's `ARG <SCANNER>_VERSION` (`GITLEAKS_VERSION`, `ZIZMOR_VERSION`, `OSV_SCANNER_VERSION`); the image's build fails where the installed binary reports another version. The drift check reads the Dockerfile each rendered container's `image` names, beside the Worker's template, from the deploy host. An image with no such declaration, or a path the deploy host holds no file at, declares no version, and no version lies inside a range.
 
 - **FD-OPS-094** · phase 2 · `V-DEPLOY` `V-UNIT` — Where the overlay sets `scan.bundleDigest`, before any deploy step changes Cloudflare state, the drift check must verify the envelope at `scan.bundleFile`.
 - **FD-OPS-095** · phase 2 · `V-DEPLOY` `V-UNIT` — If no DSSE signature of the envelope verifies under a key in `scan.bundleKeys` whose valid `notBefore`/`notAfter` window contains the deploy-verification time, then the drift check must fail, so that an expired or removed key cannot authorize a new deploy and the running Worker keeps enforcing the previous pin.

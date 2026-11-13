@@ -43,7 +43,8 @@ const settingsOf = (worker: string): DeployedSettings =>
 
 const fakeTarget = (calls: string[], opts: { probe?: boolean } = {}) =>
   Layer.succeed(DeployTarget, {
-    readScanBundle: () => Effect.succeed(null),
+    readLocalFile: () => Effect.succeed(null),
+    writeScanBundle: () => Effect.void,
     deployedSettings: (r) => Effect.succeed(settingsOf(r.worker)),
     lastRecord: (r) => Effect.succeed(settingsOf(r.worker)),
     appRegistration: Effect.succeed(APP_PERMISSIONS),
@@ -89,6 +90,7 @@ describe("Operability service", () => {
       ["decode", true],
       ["render", true],
       ["drift", true],
+      ["scan-bundle", true],
       ["migrations", true],
       ["deploy", true],
       ["probes", true],

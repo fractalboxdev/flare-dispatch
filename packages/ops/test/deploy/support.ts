@@ -8,7 +8,8 @@
 // presign token the placeholder overlay names, with Object Read & Write on its cache and artifact buckets, and answers
 // its policies, never its value, as `GET /accounts/{account_id}/tokens/{token_id}` does. The runner repository
 // `acme/runner` serves its workflow files to a contents-scoped token of the App's installation there. The deploy host's
-// local files, such as a scan bundle envelope, are a map by absolute path, and each read of one is a recorded call.
+// local files, such as a scan bundle envelope, are a map by absolute path, and each read of one is a recorded call. The
+// account's cache bucket keeps each object's bytes as the R2 object API received them.
 import type { AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
 import {
   RUN_CATALOG,
@@ -175,6 +176,8 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
   // so the composition supplies every port phase 0 requires (FD-ARCH-039).
   const secrets = new Map<string, Map<string, string>>([[SCRIPT, new Map(COMPOSITION_SECRETS)]]);
   const objects = new Map<string, string>();
+  /** The cache bucket's objects by key, each as the bytes the R2 object API received: `cas/<sha256>`. */
+  const cacheObjects = new Map<string, Uint8Array>();
   const files = new Map<string, string>();
   /** The deploy host's local files by absolute path, beside the repository's: the scan bundle envelope. */
   const localFiles = new Map<string, Uint8Array>();
@@ -197,6 +200,10 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     accessReadFails: boolean;
     /** Every API token read answers 403, as for a deploy token without Account API Tokens:Read. */
     tokensReadFails: boolean;
+    /** Every cache bucket object write answers 403, as for a deploy token without write on that bucket. */
+    cacheWriteFails: boolean;
+    /** Every cache bucket object write answers 404, as for an overlay whose r2.CACHE bucket does not exist. */
+    cacheBucketMissing: boolean;
     /** The GitHub App's registration as `GET /app` answers it; the committed manifest by default. */
     app: AppPermissions;
     /** The status checks the default branch's ruleset requires; the merge gate and `check:ci` by default. */
@@ -226,6 +233,8 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     accessFails: false,
     accessReadFails: false,
     tokensReadFails: false,
+    cacheWriteFails: false,
+    cacheBucketMissing: false,
     app: APP_PERMISSIONS,
     required: [...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"],
     runnerWorkflows: {},
@@ -408,8 +417,23 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
   };
 
   const ok = (result: unknown) => Response.json({ success: true, result, errors: [] });
-  const cloudflare = (method: string, url: URL, body: string): Response => {
+  const cloudflare = (
+    method: string,
+    url: URL,
+    body: string,
+    bytes: Uint8Array | null,
+  ): Response => {
     const path = url.pathname.slice(API.length);
+    const cacheKey = new RegExp(
+      `^/r2/buckets/${placeholderOverlay.r2["CACHE"]}/objects/(.+)$`,
+    ).exec(path)?.[1];
+    if (cacheKey !== undefined) {
+      if (method !== "PUT") return new Response(null, { status: 405 });
+      if (state.cacheBucketMissing) return new Response(null, { status: 404 });
+      if (state.cacheWriteFails) return new Response(null, { status: 403 });
+      cacheObjects.set(cacheKey, new Uint8Array(bytes ?? new TextEncoder().encode(body)));
+      return new Response(null, { status: 200 });
+    }
     const objectKey = /^\/r2\/buckets\/flare-dispatch-artifacts\/objects\/(.+)$/.exec(path)?.[1];
     if (objectKey !== undefined) {
       if (method === "PUT") {
@@ -666,10 +690,11 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     const url = new URL(input);
     const method = init?.method ?? "GET";
     const body = typeof init?.body === "string" ? init.body : "";
+    const bytes = init?.body instanceof Uint8Array ? init.body : null;
     calls.push(`${method} ${url.host}${url.pathname}${url.search}`);
     if (AWS_SERVICES[url.host] !== undefined)
       return aws(url.host, new Headers(init?.headers), body);
-    if (url.host === "api.cloudflare.com") return cloudflare(method, url, body);
+    if (url.host === "api.cloudflare.com") return cloudflare(method, url, body, bytes);
     if (url.host === "api.github.com")
       return (
         runnerRepository(method, url.pathname, new Headers(init?.headers), body) ??
@@ -696,6 +721,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
       scripts: [...scripts],
       secrets: [...secrets].map(([k, v]) => [k, [...v]]),
       objects: [...objects],
+      cacheObjects: [...cacheObjects].map(([k, v]) => [k, Buffer.from(v).toString("base64")]),
       access: [...access],
     });
 
@@ -703,6 +729,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     calls,
     scripts,
     objects,
+    cacheObjects,
     tokens,
     access,
     files,

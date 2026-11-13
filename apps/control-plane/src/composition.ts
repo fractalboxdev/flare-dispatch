@@ -34,16 +34,20 @@ import {
   actuatorRegistry,
   ObjectStorePresigner,
 } from "@fractalboxdev/mameko-ports";
-import {
-  ConfigurationSourceLive,
-  GateDecisionSourceLive,
-} from "@fractalboxdev/flare-dispatch-profile";
+import { GateDecisionSourceLive } from "@fractalboxdev/flare-dispatch-profile";
 import type { ExecutionPayload } from "@fractalboxdev/mameko-coordinator";
 import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
 import { d1Sql } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { cancelledLease } from "@fractalboxdev/mameko-store-sqlite";
 import { Context, Effect, Layer, Scope } from "effect";
-import { deployment, presignerConfigOf, presignerMissingOf, profileOf, type ControlPlaneEnv } from "./config.ts";
+import {
+  configurationSourceOf,
+  deployment,
+  presignerConfigOf,
+  presignerMissingOf,
+  profileOf,
+  type ControlPlaneEnv,
+} from "./config.ts";
 import { repositoryConfidentiality } from "./dev-repository.ts";
 import { policyRulesOf } from "./policy.ts";
 import { resultAcceptanceLayer } from "./provenance-records.ts";
@@ -309,7 +313,7 @@ const servicesLayer = (env: ControlPlaneEnv) => {
   const settings = intakeSettings(env);
   const alarms = alarmPortFromEnv(env);
   const app = appOptionsOf(env);
-  const common = Layer.mergeAll(alarms, ConfigurationSourceLive, GateDecisionSourceLive);
+  const common = Layer.mergeAll(alarms, configurationSourceOf(env), GateDecisionSourceLive);
   if (app !== undefined) {
     const github = appServices(env, app, alarms);
     // The agentic appliers for `pr.propose` and `pr.close` over the GitHub package's applier; it wins the tag.

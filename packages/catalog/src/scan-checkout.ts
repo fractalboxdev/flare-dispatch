@@ -28,6 +28,11 @@ export interface ScanRange {
   readonly commits: readonly string[];
   /** Every path `git diff --no-renames <base> <head>` lists. */
   readonly changed: readonly string[];
+  /**
+   * The changed paths the head commit holds as a regular file, in `changed` order: what a scanner may read. A deleted
+   * path or a symbolic link is no scanner input.
+   */
+  readonly scannable: readonly string[];
 }
 
 /** A checkout ready for the scanners. */
@@ -223,6 +228,9 @@ export const prepareScanCheckout = (
       head,
       commits,
       changed: entries.map((e) => e.path),
+      scannable: entries
+        .filter((e) => e.status !== "D" && REGULAR_FILE.has(e.headMode))
+        .map((e) => e.path),
     };
 
     // Step 3 and FD-GATE-093: each suppression file the range changes takes the base commit's content, or leaves the

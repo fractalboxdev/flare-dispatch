@@ -37,6 +37,19 @@ export type Phase = 0 | 1 | 2 | 3 | 4;
 /** The phase the committed documents serve. */
 export const CURRENT_PHASE: Phase = 0;
 
+/** The phase the record kinds `job.record` and `verdict.record` enter in (specs/profile.md § Intent kinds). */
+export const RECORDS_PHASE: Phase = 2;
+
+/** What the operator overlay adds to the document. */
+export interface ProfileOptions {
+  /** The overlay sets `records.url`, so the document declares `job.record` and `verdict.record` from phase 2. */
+  readonly records?: boolean;
+}
+
+/** The deployment's records reach the document: the overlay sets `records.url` and the phase serves the kinds. */
+const recordsIn = (phase: Phase, options: ProfileOptions): boolean =>
+  options.records === true && phase >= RECORDS_PHASE;
+
 const registrationFor = (deployment: Deployment, phase: Phase): Profile["registration"] =>
   deployment === "development" || phase === 0
     ? { key_stores: ["software"], attestation: "none" }
@@ -46,8 +59,8 @@ const registrationFor = (deployment: Deployment, phase: Phase): Profile["registr
  * Each deployment has its own version, and a phase after 0 adds its own suffix: mameko's loader rejects one version
  * carrying two contents.
  */
-const policyVersionFor = (deployment: Deployment, phase: Phase): string =>
-  `flare-dispatch.v2.0${deployment === "development" ? "-dev" : ""}${phase === 0 ? "" : `-phase${phase}`}`;
+const policyVersionFor = (deployment: Deployment, phase: Phase, records: boolean): string =>
+  `flare-dispatch.v2.0${deployment === "development" ? "-dev" : ""}${phase === 0 ? "" : `-phase${phase}`}${records ? "-records" : ""}`;
 
 /** `cloudflare` in every phase; `aws` for `required` from phase 3; `gha` last from phase 4. */
 const cloudKindsFor = (cls: string, phase: Phase): string[] => [
@@ -323,6 +336,33 @@ const intent_kinds: Profile["intent_kinds"] = {
   },
 };
 
+/**
+ * The record kinds, declared where the overlay sets `records.url`: `job.record` at every lease grant and
+ * `verdict.record` as the ops intent of each terminal execution, both delivered to `records.url` under the delivery key
+ * `records` (FD-GH-093, FD-GH-094, FD-PROF-068).
+ */
+const recordKinds: Profile["intent_kinds"] = {
+  "job.record": {
+    origin: "control-plane",
+    on: "lease-granted",
+    payload: "jobRecordPayload",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    effect_class: "replay-safe",
+    actuator: "verdictRecord",
+  },
+  "verdict.record": {
+    origin: "control-plane",
+    delivery_tier: "effect",
+    applied_for: "any",
+    priority: 2,
+    ops: true,
+    effect_class: "replay-safe",
+    actuator: "verdictRecord",
+  },
+};
+
 const label = (name: string): Predicate => ({ label: name });
 const isClass = (name: string): Predicate => ({ class: name });
 const not = (predicate: Predicate): Predicate => ({ not: predicate });
@@ -417,8 +457,8 @@ export const poolAdmissionCaps: Readonly<Record<string, { readonly admission_cap
 };
 
 /** The profile before the development runtime fields of FD-PROF-065. */
-const baseProfile = (deployment: Deployment, phase: Phase): Profile => ({
-  policy_version: policyVersionFor(deployment, phase),
+const baseProfile = (deployment: Deployment, phase: Phase, options: ProfileOptions): Profile => ({
+  policy_version: policyVersionFor(deployment, phase, recordsIn(phase, options)),
   classes: classesFor(phase),
   /** Per-class caps inside each Container pool's admission cap (FD-PROF-032). */
   // TODO(maintainer): FD-PROF-032 keeps 2 slots for P0 and P1 together; a floor over a group of classes waits on
@@ -483,7 +523,7 @@ const baseProfile = (deployment: Deployment, phase: Phase): Profile => ({
     interactive: "restart",
     batch: "restart",
   },
-  intent_kinds,
+  intent_kinds: recordsIn(phase, options) ? { ...intent_kinds, ...recordKinds } : intent_kinds,
   delivery: {
     limit_key: "installationOf",
     ops_class: "required",
@@ -570,10 +610,14 @@ const withDevelopmentRuntime = (base: Profile, deployment: Deployment): Profile 
 /**
  * The profile for a deployment at a phase. Deployments differ only in the policy version, `registration`,
  * `development_runtime` and each device class's `isolation` (FD-PROF-065); phases differ in the cloud kinds, the
- * placement launcher and constraints, and the attestation of `registration`.
+ * placement launcher and constraints, and the attestation of `registration`. From phase 2, an overlay that sets
+ * `records.url` adds the record kinds under a policy version of its own (FD-GH-093).
  */
-export const buildProfile = (deployment: Deployment, phase: Phase = CURRENT_PHASE): Profile =>
-  withDevelopmentRuntime(baseProfile(deployment, phase), deployment);
+export const buildProfile = (
+  deployment: Deployment,
+  phase: Phase = CURRENT_PHASE,
+  options: ProfileOptions = {},
+): Profile => withDevelopmentRuntime(baseProfile(deployment, phase, options), deployment);
 
 /** The committed production profile at the current phase. */
 export const profile: Profile = buildProfile("production");
@@ -585,16 +629,26 @@ export const acceptanceReasonKinds: readonly string[] = ["provenance"];
 export const profileDocumentFor = (
   deployment: Deployment,
   phase: Phase = CURRENT_PHASE,
+  options: ProfileOptions = {},
 ): ProfileDocument => {
-  const document = buildProfile(deployment, phase);
+  const document = buildProfile(deployment, phase, options);
   return { document, policyVersion: document.policy_version };
 };
 
 export const profileDocument: ProfileDocument = profileDocumentFor("production");
 
-/** The configuration source of a deployment: one document at one policy version. */
-export const configurationSourceLayer = (deployment: Deployment) =>
-  Layer.succeed(ConfigurationSource, { load: Effect.succeed(profileDocumentFor(deployment)) });
+/**
+ * The configuration source of a deployment at a phase: one document at one policy version, with the record kinds where
+ * the overlay sets `records.url` (FD-GH-093).
+ */
+export const configurationSourceLayer = (
+  deployment: Deployment,
+  phase: Phase = CURRENT_PHASE,
+  options: ProfileOptions = {},
+) =>
+  Layer.succeed(ConfigurationSource, {
+    load: Effect.succeed(profileDocumentFor(deployment, phase, options)),
+  });
 
 /** FlareDispatch's configuration source: the committed production profile. */
 export const ConfigurationSourceLive = configurationSourceLayer("production");

@@ -1,15 +1,17 @@
 // The minute tick's `advisory-refresh` step (specs/operability.md FD-OPS-100 to FD-OPS-102): the operability
 // package's refresh over the Worker's `fetch`, `crypto.DigestStream` and the `CACHE` bucket, for the ecosystems the
 // overlay's `scan.advisoryEcosystems` names. The step runs on every tick and stores an ecosystem's archive only when
-// no snapshot of it is recorded on the current UTC day.
+// no snapshot of it is recorded on the current UTC day. The tick's `advisory-snapshot-stale` check watches the same
+// ecosystems against `scan.advisoryMaxAgeHours` (FD-OPS-103).
 import { ConfigInvalid } from "@fractalboxdev/flare-dispatch-api/config";
 import {
   refreshAdvisorySnapshots,
   type AdvisoryRefreshPorts,
+  type AdvisoryWatch,
   type TickStep,
 } from "@fractalboxdev/flare-dispatch-ops";
 import { Effect, Schema } from "effect";
-import { advisoryEcosystemsOf, type ControlPlaneEnv } from "./config.ts";
+import { advisoryEcosystemsOf, advisoryMaxAgeHoursOf, type ControlPlaneEnv } from "./config.ts";
 
 /** `scan.advisoryEcosystems` names ecosystems and the deploy binds no `CACHE` bucket to store their archives in. */
 export class AdvisoryStoreUnbound extends Schema.TaggedError<AdvisoryStoreUnbound>()(
@@ -115,3 +117,18 @@ export const advisoryRefreshStep = (
     );
   }),
 });
+
+/**
+ * What the tick's `advisory-snapshot-stale` check watches: `ADVISORY_ECOSYSTEMS` and `ADVISORY_MAX_AGE_HOURS`. A
+ * malformed var fails the check with `ConfigInvalid`, so the tick reports it rather than watching a guessed list.
+ */
+export const advisoryWatchOf = (
+  env: Pick<ControlPlaneEnv, "ADVISORY_ECOSYSTEMS" | "ADVISORY_MAX_AGE_HOURS">,
+): Effect.Effect<AdvisoryWatch, ConfigInvalid> =>
+  Effect.gen(function* () {
+    const ecosystems = advisoryEcosystemsOf(env);
+    if (ecosystems instanceof ConfigInvalid) return yield* ecosystems;
+    const maxAgeHours = advisoryMaxAgeHoursOf(env);
+    if (maxAgeHours instanceof ConfigInvalid) return yield* maxAgeHours;
+    return { ecosystems, maxAgeHours };
+  });

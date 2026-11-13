@@ -138,6 +138,7 @@ export const runScenario = async (seed: number): Promise<Observation> => {
             output: new Uint8Array(),
           };
         }),
+      runArgv: () => Effect.die("worker-deploy runs no argv command"),
       readFile: (path) => Effect.fail(new WorkspaceReadFailed({ path, detail: "absent" })),
       writeFile: (path) => Effect.fail(new WorkspaceWriteFailed({ path, detail: "read-only" })),
     });
