@@ -160,9 +160,9 @@ describe("fd deploy and the dispatcher's identity gate", () => {
         ).toContain(answer);
     }
 
-    // Each request above reaches the Worker as a path Access bypasses at the edge would, so the refusal is the
-    // Worker's own on every route, the gated ones under a bypassed path included.
-    expect(GATED.filter((r) => bypassed(r.path)).length).toBeGreaterThan(0);
+    // Each request above reaches the Worker with no Access in front of it, so the refusal is the Worker's own on every
+    // route. Access bypasses none of the gated routes at the edge either (FD-OPS-088).
+    expect(GATED.filter((r) => bypassed(r.path)).map((r) => r.path)).toEqual([]);
   });
 
   it("[FD-IFC-023] fd deploy fails its post-deploy probe and pages when the link key equals the webhook secret, the OIDC key or the provenance key, and passes with every key distinct", async () => {

@@ -71,6 +71,7 @@ const envOf = async (over: Record<string, unknown> = {}) =>
     DEPLOYMENT: "production",
     PLANE_ID: "plane",
     GITHUB_APP_ID: "123",
+    GITHUB_APP_SLUG: "flare-dispatch-test",
     GITHUB_APP_PRIVATE_KEY: KEY,
     GITHUB_FIXTURE_REPO: FIXTURE,
     MONITOR: { idFromName: (n: string) => n, get: () => ({ start: async () => {} }) },

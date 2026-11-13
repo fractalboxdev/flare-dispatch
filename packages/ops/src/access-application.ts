@@ -38,9 +38,15 @@ export const ACCESS_BYPASS: readonly BypassPath[] = [
     surface: "model-gateway",
     identity: "per-lease token, or capacity-lease proof",
   },
+  // The statement lookups only: the private log's checkpoint and proofs under `/v1/provenance/log/` are Access routes.
   {
-    path: "/v1/provenance/*",
-    surface: "provenance",
+    path: "/v1/provenance/executions/*",
+    surface: "provenance executions",
+    identity: "none for public repositories, Access JWT otherwise",
+  },
+  {
+    path: "/v1/provenance/subjects/*",
+    surface: "provenance subjects",
     identity: "none for public repositories, Access JWT otherwise",
   },
 ];

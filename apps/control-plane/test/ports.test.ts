@@ -26,13 +26,13 @@ const env = (extra: Partial<ControlPlaneEnv>) =>
 
 describe("the composition's application ports", () => {
   it("[FD-ARCH-039] MAMEKO-HOST-046 a deploy with the GitHub App supplies every port the phase 0 profile uses", () => {
-    const withApp = env({ GITHUB_APP_ID: "1", GITHUB_APP_PRIVATE_KEY: "key" });
+    const withApp = env({ GITHUB_APP_ID: "1", GITHUB_APP_SLUG: "flare-dispatch-test", GITHUB_APP_PRIVATE_KEY: "key" });
     expect(missingPorts(buildProfile("production"), suppliedPorts(withApp))).toEqual([]);
     expect(missingPorts(buildProfile("development"), suppliedPorts(withApp))).toEqual([]);
   });
 
   it("[FD-ARCH-039] the unused credential minter is not advertised by an App-configured deploy", () => {
-    expect(suppliedPorts(env({ GITHUB_APP_ID: "1", GITHUB_APP_PRIVATE_KEY: "key" }))).not.toContain(
+    expect(suppliedPorts(env({ GITHUB_APP_ID: "1", GITHUB_APP_SLUG: "flare-dispatch-test", GITHUB_APP_PRIVATE_KEY: "key" }))).not.toContain(
       "credential-minter",
     );
     expect(suppliedPorts(env({}))).not.toContain("credential-minter");
@@ -53,7 +53,7 @@ const PRESIGN = {
   R2_PRESIGN_SECRET_ACCESS_KEY: "presign-secret",
 };
 
-const APP = { GITHUB_APP_ID: "1", GITHUB_APP_PRIVATE_KEY: "key" };
+const APP = { GITHUB_APP_ID: "1", GITHUB_APP_SLUG: "flare-dispatch-test", GITHUB_APP_PRIVATE_KEY: "key" };
 
 describe("the deploy check and the Worker read one condition per port", () => {
   it("[FD-ARCH-039] blanking any binding the ops package names drops the port exactly where the Worker builds no live Layer", () => {
@@ -95,7 +95,7 @@ describe("the object-store presigner", () => {
       );
     // The App's key is no presign token.
     expect(
-      suppliedPorts(env({ GITHUB_APP_ID: "1", GITHUB_APP_PRIVATE_KEY: "key" })),
+      suppliedPorts(env({ GITHUB_APP_ID: "1", GITHUB_APP_SLUG: "flare-dispatch-test", GITHUB_APP_PRIVATE_KEY: "key" })),
     ).not.toContain("object-store-presigner");
   });
 

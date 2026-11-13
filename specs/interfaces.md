@@ -37,7 +37,8 @@ Every surface passes exactly one identity check before any route logic runs.
 | `/v1/compile-cache/*` | Dispatcher | `sccache` in a job | Compile-cache token ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-057) | 0 |
 | `POST /v1/model/completions` | Dispatcher | An executor's egress proxy, a local scheduler's host proxy | The execution's per-lease token with its epoch, or a capacity-lease proof of possession ([MAMEKO-MDL-040](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/model-gateway.md), [MAMEKO-MDL-041](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/model-gateway.md), [MAMEKO-MDL-043](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/model-gateway.md)) | 0 |
 | `/.well-known/*`, `/health` | Dispatcher | Anyone | None | 0 |
-| `/v1/provenance/*` | Dispatcher | Verifiers | None for public repositories, Access JWT otherwise | 4 |
+| `/v1/provenance/executions/*`, `/v1/provenance/subjects/*` | Dispatcher | Verifiers | None for public repositories, Access JWT otherwise | 4 |
+| `/v1/provenance/log/*` | Dispatcher | Verifiers of the private log | Access JWT | 4 |
 | `/mcp` | Dispatcher | Coding agents | Access JWT | 2 |
 | Local MCP endpoint and submit port | Local scheduler | Developers and agents on a device or the tailnet | Socket peer uid, or Tailscale WhoIs ([local-scheduler.md](local-scheduler.md)) | 1–2 |
 
@@ -394,8 +395,8 @@ A `containment` identity tightens controls and does not release them. The order 
 
 - **FD-IFC-051** · phase 0 · `V-UNIT` — The dispatcher must serve `/.well-known/openid-configuration` and `/.well-known/jwks.json` with `Cache-Control: max-age=3600`, and must answer 503 `not_configured` while no OIDC key is set.
 - **FD-IFC-052** · phase 0 · `V-UNIT` — The dispatcher must not include a private key member (`d`) in any JWKS it serves.
-- **FD-IFC-053** · phase 4 · `V-UNIT` — Where a repository's GitHub visibility is `public`, the dispatcher must serve its `/v1/provenance/*` routes without identity.
-- **FD-IFC-054** · phase 4 · `V-UNIT` — Where a repository's GitHub visibility is other than `public`, the dispatcher must require an Access JWT on its `/v1/provenance/*` routes.
+- **FD-IFC-053** · phase 4 · `V-UNIT` — Where a repository's GitHub visibility is `public`, the dispatcher must serve its statement lookups, `/v1/provenance/executions/*` and `/v1/provenance/subjects/*`, without identity.
+- **FD-IFC-054** · phase 4 · `V-UNIT` — Where a repository's GitHub visibility is other than `public`, the dispatcher must require an Access JWT on its statement lookups.
 
 ### Dispatch action
 

@@ -51,6 +51,7 @@ export const appDeploy = async (): Promise<AppDeploy> => {
   const env = Object.assign(
     envOf(db, {
       GITHUB_APP_ID: "4242",
+      GITHUB_APP_SLUG: "flare-dispatch-test",
       GITHUB_APP_PRIVATE_KEY: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
     }),
     { EXECUTION: execution },

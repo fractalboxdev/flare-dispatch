@@ -81,6 +81,7 @@ beforeAll(async () => {
       WEBHOOK_SECRET,
       // The App's id without its key: check runs of this App are ours, and no GitHub call is made.
       GITHUB_APP_ID: String(APP_ID),
+      GITHUB_APP_SLUG: "flare-dispatch-test",
       FD_DEV_REPOSITORY: JSON.stringify(DEV_REPOSITORY),
     },
   });

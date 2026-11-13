@@ -322,7 +322,8 @@ describe("Access configuration", () => {
       "artifact",
       "compile-cache",
       "model-gateway",
-      "provenance",
+      "provenance executions",
+      "provenance subjects",
     ]);
     for (const path of [
       "/v1/webhooks/github",
@@ -335,7 +336,8 @@ describe("Access configuration", () => {
       "/v1/artifacts/a1",
       "/v1/compile-cache/obj/abc",
       "/v1/model/completions",
-      "/v1/provenance/statements/s1",
+      "/v1/provenance/executions/e1",
+      "/v1/provenance/subjects/sha256:abc",
     ])
       expect(bypassed(path)).toBe(true);
     for (const path of [
@@ -346,6 +348,8 @@ describe("Access configuration", () => {
       "/v1/spend",
       "/v1/github/install/new",
       "/mcp",
+      "/v1/provenance/log/checkpoint",
+      "/v1/provenance/log/proof/inclusion",
     ])
       expect(bypassed(path)).toBe(false);
   });
