@@ -26,7 +26,7 @@ import { d1Executions } from "../live/executions.ts";
 import { oidcKeyFromSecret } from "../live/oidc-key.ts";
 import { d1DeviceRegistry } from "../live/registry.ts";
 import { runApiMigrations } from "../live/tables.ts";
-import { Cancellation, FailureSummaries, Intake, Operations } from "../ports.ts";
+import { Cancellation, DeliveryKeys, FailureSummaries, Intake, Operations } from "../ports.ts";
 import { mount, toFetchHandler } from "../router.ts";
 
 export { EpochAnchor } from "@fractalboxdev/mameko-host-cloudflare";
@@ -162,6 +162,7 @@ export default {
         apply: () => Effect.fail(unbacked),
         health: Effect.fail(unbacked),
       }),
+      Layer.succeed(DeliveryKeys)({ list: Effect.fail(unbacked) }),
     );
     const services = await Effect.runPromise(Layer.build(layers).pipe(Effect.scoped));
     return handler.fetch(request, Context.add(services, ApiConfig, config) as never);

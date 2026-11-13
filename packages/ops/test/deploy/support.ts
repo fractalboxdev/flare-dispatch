@@ -4,7 +4,9 @@
 // Cloudflare account keeps each deployed Worker's settings, versions and Container applications and its Access
 // applications between runs, so a suite deploys, changes the account out of band and deploys again. Access sits in
 // front of the dispatcher's hostname as the account's applications configure it. AWS STS, AWS Budgets, IAM and AWS
-// Organizations answer for one AWS account, and only requests whose SigV4 signature verifies. The runner repository
+// Organizations answer for one AWS account, and only requests whose SigV4 signature verifies. The account owns the
+// presign token the placeholder overlay names, with Object Read & Write on its cache and artifact buckets, and answers
+// its policies, never its value, as `GET /accounts/{account_id}/tokens/{token_id}` does. The runner repository
 // `acme/runner` serves its workflow files to a contents-scoped token of the App's installation there.
 import type { AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
 import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
@@ -19,6 +21,7 @@ import {
   onHostname,
   pathMatches,
   MERGE_GATE_CHECKS,
+  OBJECT_READ_WRITE,
   parseJsonc,
   placeholderOverlay,
   renderTemplate,
@@ -59,6 +62,50 @@ export const COMPOSITION_SECRETS: readonly (readonly [string, string])[] = [
   ["R2_PRESIGN_ACCESS_KEY_ID", "presign-key-id"],
   ["R2_PRESIGN_SECRET_ACCESS_KEY", "presign-secret"],
 ];
+/** The presign token the placeholder overlay names, and the cache and artifact buckets it renders. */
+export const PRESIGN_TOKEN_ID = placeholderOverlay.presign!.tokenId;
+export const PRESIGN_BUCKETS = [
+  placeholderOverlay.r2["CACHE"]!,
+  placeholderOverlay.r2["ARTIFACTS"]!,
+] as const;
+
+/** One API token policy as the Cloudflare API lists it: its permission groups by id and name, its resources. */
+export const tokenPolicy = (
+  groups: readonly string[],
+  resources: Readonly<Record<string, unknown>>,
+  effect = "allow",
+): Record<string, unknown> => ({
+  id: `policy-${Object.keys(resources).join(",")}`,
+  effect,
+  permission_groups: groups.map((name, i) => ({ id: `permission-group-${i}`, name })),
+  resources,
+});
+
+/** The resource key of one bucket of the placeholder account, as an R2 API token's policy names it. */
+export const bucketKey = (bucket: string, account: string = ACCOUNT) =>
+  `com.cloudflare.edge.r2.bucket.${account}_default_${bucket}`;
+
+/** An API token as the Cloudflare API lists it, active by default. */
+export const apiToken = (
+  policies: readonly Record<string, unknown>[],
+  status = "active",
+): Record<string, unknown> => ({
+  id: PRESIGN_TOKEN_ID,
+  name: "flare-dispatch presign",
+  status,
+  issued_on: "2026-11-01T00:00:00Z",
+  modified_on: "2026-11-01T00:00:00Z",
+  policies,
+});
+
+/** The presign token FD-CACHE-091 requires: Object Read & Write on exactly the cache and artifact buckets. */
+export const SCOPED_PRESIGN_TOKEN = apiToken([
+  tokenPolicy(
+    OBJECT_READ_WRITE,
+    Object.fromEntries(PRESIGN_BUCKETS.map((b) => [bucketKey(b), "*"])),
+  ),
+]);
+
 const PEM = generateKeyPairSync("rsa", { modulusLength: 2048 })
   .privateKey.export({ type: "pkcs1", format: "pem" })
   .toString();
@@ -110,6 +157,10 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
   const files = new Map<string, string>();
   const runs: (readonly string[])[] = [];
   const alarms: Record<string, unknown>[] = [];
+  /** The account's API tokens by id, each as the API lists it: the presign token, scoped as FD-CACHE-091 requires. */
+  const tokens = new Map<string, Record<string, unknown>>([
+    [PRESIGN_TOKEN_ID, SCOPED_PRESIGN_TOKEN],
+  ]);
   /** The account's Access applications by id, each as the API lists it. */
   const access = new Map<string, Record<string, unknown>>();
   let accessIds = 0;
@@ -121,6 +172,8 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     accessFails: boolean;
     /** Every Access call answers 403, as for a token with no Access permission. */
     accessReadFails: boolean;
+    /** Every API token read answers 403, as for a deploy token without Account API Tokens:Read. */
+    tokensReadFails: boolean;
     /** The GitHub App's registration as `GET /app` answers it; the committed manifest by default. */
     app: AppPermissions;
     /** The status checks the default branch's ruleset requires; the merge gate and `check:ci` by default. */
@@ -149,6 +202,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     wranglerFails: false,
     accessFails: false,
     accessReadFails: false,
+    tokensReadFails: false,
     app: APP_PERMISSIONS,
     required: [...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"],
     runnerWorkflows: {},
@@ -345,6 +399,20 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     const accessAnswer = accessApi(method, url, path, body);
     if (accessAnswer !== null) return accessAnswer;
     if (method !== "GET") return new Response(null, { status: 405 });
+    const tokenId = /^\/tokens\/([^/]+)$/.exec(path)?.[1];
+    if (tokenId !== undefined) {
+      if (state.tokensReadFails)
+        return Response.json(
+          {
+            success: false,
+            result: null,
+            errors: [{ code: 9109, message: "Unauthorized to access requested resource" }],
+          },
+          { status: 403 },
+        );
+      const token = tokens.get(decodeURIComponent(tokenId));
+      return token === undefined ? new Response(null, { status: 404 }) : ok(token);
+    }
     if (path === "/containers/applications")
       return ok([...scripts.values()].flatMap((s) => s.containers));
     if (path === "/workers/domains") {
@@ -612,6 +680,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     calls,
     scripts,
     objects,
+    tokens,
     access,
     files,
     runs,
@@ -620,6 +689,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     runner,
     fetcher,
     snapshot,
+    deleteSecret: (script: string, name: string) => void secrets.get(script)?.delete(name),
     putSecret: (script: string, name: string, value: string) => {
       const m = secrets.get(script) ?? new Map<string, string>();
       m.set(name, value);

@@ -6,7 +6,12 @@ import { HttpApiBuilder } from "effect/http-api";
 import { FlareDispatchApi } from "../declaration.ts";
 import { apiError } from "../errors.ts";
 import { CurrentIdentity } from "../identity.ts";
-import { Operations, type OperationTarget, type OperatorOperation } from "../ports.ts";
+import {
+  DeliveryKeys,
+  Operations,
+  type OperationTarget,
+  type OperatorOperation,
+} from "../ports.ts";
 import { RequestId } from "../request-id.ts";
 
 const targetOf = (
@@ -72,6 +77,12 @@ export const OpsHandlers = HttpApiBuilder.group(FlareDispatchApi, "ops", (handle
     )
     .handle("resumeKey", ({ payload }) =>
       operate({ _tag: "resume", installation: payload.installation }, payload.reason),
+    )
+    .handle("deliveryKeys", () =>
+      Effect.gen(function* () {
+        const installations = yield* (yield* DeliveryKeys).list;
+        return { installations };
+      }),
     )
     .handle("health", () => Effect.flatMap(Operations, (ops) => ops.health)),
 );

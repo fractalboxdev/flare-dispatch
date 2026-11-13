@@ -1,7 +1,8 @@
 // The live `DeployTarget`: the Cloudflare API for the deployed Workers, their schedules, domains and Container
 // applications and the record of the last deploy in the artifacts bucket; `wrangler` for D1 migrations and Worker
 // deploys; the GitHub API with the App JWT for the App's registration and the default branch's ruleset; the Workers'
-// own hostnames for the post-deploy probes; the Cloudflare Access applications of the account; AWS STS, AWS Budgets, IAM
+// own hostnames for the post-deploy probes; the Cloudflare Access applications of the account; the account API token
+// the object-store presigner signs with, by its policies (FD-CACHE-091); AWS STS, AWS Budgets, IAM
 // and AWS Organizations, signed with SigV4, for the AWS account's Budgets actions and the policies they apply; and the
 // overlay's alert sink for `deploy-probe-failed`.
 import { signRequest, type AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
@@ -20,6 +21,7 @@ import {
 } from "../deploy.ts";
 import {
   POLICY_ACTION_TYPES,
+  type ApiToken,
   type AppPermissions,
   type AwsActionPolicy,
   type AwsBudget,
@@ -647,8 +649,39 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
       return Buffer.from(file.content, "base64").toString("utf8");
     });
 
+  /** An account API token by id, its permission groups by name; its value is never part of the answer. */
+  const apiToken = (tokenId: string) =>
+    Effect.gen(function* () {
+      const token = (yield* c.cloudflare.json(
+        "GET",
+        `${account}/tokens/${encodeURIComponent(tokenId)}`,
+      )) as {
+        id?: unknown;
+        status?: unknown;
+        policies?: unknown;
+      } | null;
+      if (token === null) return null;
+      return {
+        id: typeof token.id === "string" ? token.id : tokenId,
+        status: typeof token.status === "string" ? token.status : "",
+        policies: arr<{ effect?: unknown; permission_groups?: unknown; resources?: unknown }>(
+          token.policies,
+        ).map((p) => ({
+          effect: typeof p.effect === "string" ? p.effect : "",
+          permissionGroups: arr<{ id?: unknown; name?: unknown }>(p.permission_groups).map((g) =>
+            typeof g.name === "string" ? g.name : String(g.id),
+          ),
+          resources:
+            typeof p.resources === "object" && p.resources !== null && !Array.isArray(p.resources)
+              ? (p.resources as Record<string, unknown>)
+              : {},
+        })),
+      } satisfies ApiToken;
+    });
+
   return Layer.succeed(DeployTarget, {
     deployedSettings,
+    apiToken,
     runnerWorkflow,
     awsBudgets,
     accessApplications,

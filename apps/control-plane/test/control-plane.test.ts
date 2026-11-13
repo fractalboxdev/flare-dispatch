@@ -229,6 +229,18 @@ describe("the minute tick", () => {
   });
 });
 
+describe("the delivery keys", () => {
+  it("[FD-IFC-094] a deploy with no GitHub App key answers 503 unavailable rather than an empty list", async () => {
+    const r = await development.dispatchFetch("http://x/v1/ops/delivery-keys", {
+      headers: await headersFor(OPERATOR),
+    });
+    expect(r.status).toBe(503);
+    const body = (await r.json()) as Record<string, unknown>;
+    expect(body["error"]).toBe("unavailable");
+    expect(body).not.toHaveProperty("installations");
+  });
+});
+
 describe("the operability routes", () => {
   const ROUTES = [
     "/v1/ops/health",

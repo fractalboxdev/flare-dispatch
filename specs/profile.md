@@ -55,7 +55,7 @@ No class declares `device_eligible` or `deadline_offset`, so every class may run
 
 ### Class resolution
 
-`resolveClass` is the class-resolution binding. Its declared inputs are `protection-snapshot`, the target branch's ruleset and branch-protection required set, and `policy-rules`, the repository's policy rules; its default class is `batch`. A policy rule sets a class, the repository's confidentiality mode, or both, and a rule that sets only a confidentiality mode takes no part in class resolution. `resolveClass` applies seven steps in order.
+`resolveClass` is the class-resolution binding. Its declared inputs are `protection-snapshot`, the target branch's ruleset and branch-protection required set, and `policy-rules`, the repository's policy rules; its default class is `batch`. A policy rule sets a class, the repository's confidentiality mode, or both, and a rule that sets only a confidentiality mode takes no part in class resolution. `resolveClass` applies seven steps in order, and attaches the label `security-scan` to a run `security-gate` or `security-rescan` whatever class it resolves.
 
 | Step | Rule |
 | --- | --- |
@@ -65,7 +65,7 @@ No class declares `device_eligible` or `deadline_offset`, so every class may run
 | 4 | The run default `limits.qosClass`, capped at `limits.qosCeiling`; a run that declares no `limits.qosClass` resolves to `batch` with the `local-only` constraint |
 | 5 | A child takes the lower of its parent's class and its own result |
 | 6 | The dispatch `class` input lowers freely, and raises only as a policy rule allows for the caller's OIDC identity scoped to (repository, workflow ref) on a protected branch |
-| 7 | A dispatch from an identity in `dispatch.scoped` resolves no higher than that entry's `classCeiling` |
+| 7 | A dispatch from an identity in `dispatch.scoped` resolves no higher than that entry's `classCeiling`, the request's `classCeiling` input, whatever steps 1 to 6 resolved |
 
 ```mermaid
 flowchart TB
@@ -149,7 +149,7 @@ The generic constraints of [admission-qos.md](https://github.com/fractalboxdev/m
 | --- | --- |
 | `cloud_pinned` | Class `release`, except a request with the label `release-matrix` |
 | `cloud_pinned_kinds` | `cloudflare` |
-| `cloud_only` | Trigger `tag-push` |
+| `cloud_only` | Trigger `tag-push`; from phase 2 also the label `security-scan`, which `resolveClass` attaches to the runs `security-gate` and `security-rescan` |
 | `local_only` | A run that declares no class |
 | `launcher_kinds` | None before phase 4; `gha`, the GitHub Actions launcher, from phase 4 |
 
@@ -213,7 +213,7 @@ No kind is `reconcile-only` and no kind is `gated`. `check.conclude` is the one 
 | `notify.slack` | `both` | — | 2 | `any` | — | `replay-safe` | `notifySlack` | — | FD-GH-078, FD-GH-079 |
 | `notice.publish` | `both` | — | 2 | `any` | — | `replay-safe` | `notice` | — | FD-GH-078 |
 
-`delivery` keys the applier rate limit by GitHub App installation through the `installationOf` binding, gives ops intents the class `required`, and names the undelivered-outcome alarm `undelivered-verdict`. `gate_policy` lists no key and caps a decision's expiry at 86400 s.
+`delivery` keys the applier rate limit through the `installationOf` binding: by the key `records` for `job.record` and `verdict.record`, which deliver to no installation, and by GitHub App installation for every other kind. It gives ops intents the class `required` and names the undelivered-outcome alarm `undelivered-verdict`. `gate_policy` lists no key and caps a decision's expiry at 86400 s.
 
 ### Approval floor, egress profiles and signing purposes
 
@@ -284,9 +284,10 @@ mameko's [profiles.md](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc
 | `idempotency-key` recipe | No `digest`; `on_mismatch` defaults to `duplicate` | `digest` over the dispatch body; `on_mismatch: conflict` |
 | `aws` in `required`'s cloud kinds | From phase 2 | From phase 3 (FD-PROF-064) |
 | The `gha` launcher kind and `gha` in every class's cloud kinds | From phase 3 | From phase 4 (FD-PROF-064) |
+| `cloud_only` | Trigger `tag-push` | From phase 2: trigger `tag-push` or label `security-scan` (FD-PROF-066) |
 | Constraint `deployment-secret-grant` | None | From phase 4: removes `gha` from a run whose egress profiles hold a grant that attaches a deployment secret ([isolation-egress.md](isolation-egress.md) FD-ISO-022) |
 
-FlareDispatch's phase n document is compared with the reference profile's form for phase n ([MAMEKO-PROF-023](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/profiles.md)), so `registration.attestation` agrees in every phase and only the last three rows above differ by phase.
+FlareDispatch's phase n document is compared with the reference profile's form for phase n ([MAMEKO-PROF-023](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/profiles.md)), so `registration.attestation` agrees in every phase and only the last four rows above differ by phase.
 
 ## Requirements
 

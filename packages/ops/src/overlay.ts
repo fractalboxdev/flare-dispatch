@@ -63,6 +63,11 @@ export const OverlayValues = Schema.Struct({
   d1: Ids,
   kv: opt(Ids),
   r2: Ids,
+  /**
+   * The id of the account R2 API token the object-store presigner signs with, which is the Access Key ID the Worker
+   * secret `R2_PRESIGN_ACCESS_KEY_ID` holds; the drift check reads its policies (FD-CACHE-091).
+   */
+  presign: opt(Schema.Struct({ tokenId: NonEmpty })),
   hostnames: Ids,
   access: Schema.Struct({ teamDomain: NonEmpty, aud: NonEmpty }),
   operators: Schema.Array(NonEmpty).check(Schema.isMinLength(1)),
@@ -261,6 +266,7 @@ export const placeholderOverlay: OverlayValues = {
   d1: { DB: "00000000-0000-0000-0000-000000000000" },
   kv: { CONFIG: "00000000000000000000000000000000" },
   r2: { CACHE: "flare-dispatch-cache", ARTIFACTS: "flare-dispatch-artifacts" },
+  presign: { tokenId: "00000000000000000000000000000000" },
   hostnames: { dispatcher: "dispatch.example.com", docs: "docs.example.com" },
   access: { teamDomain: "example.cloudflareaccess.com", aud: "placeholder-aud" },
   operators: ["operator@example.com"],

@@ -35,6 +35,7 @@ const deployedVars = async (overlay: OverlayValues): Promise<Record<string, unkn
     lastRecord: () => Effect.succeed(null),
     appRegistration: Effect.succeed(APP_PERMISSIONS),
     requiredChecks: Effect.succeed([...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
+    apiToken: () => Effect.succeed(null),
     awsBudgets: Effect.fail(
       new TargetFailed({ operation: "aws budgets", message: "the account has no AWS budgets" }),
     ),

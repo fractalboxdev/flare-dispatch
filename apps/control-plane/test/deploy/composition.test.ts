@@ -8,6 +8,7 @@ import {
   DeployTarget,
   deployedCompositionFindings,
   MERGE_GATE_CHECKS,
+  objectReadWritePolicy,
   parseJsonc,
   placeholderOverlay,
   renderedEnv,
@@ -54,6 +55,18 @@ const account = (secrets: readonly string[] | null) => {
     lastRecord: () => Effect.succeed(null),
     appRegistration: Effect.succeed(APP_PERMISSIONS),
     requiredChecks: Effect.succeed([...MERGE_GATE_CHECKS, "flare-dispatch/check:ci"]),
+    // The presign token the overlay names: Object Read & Write on the cache and artifact buckets (FD-CACHE-091).
+    apiToken: (id) =>
+      Effect.succeed({
+        id,
+        status: "active",
+        policies: [
+          objectReadWritePolicy(placeholderOverlay.accountId, [
+            placeholderOverlay.r2["CACHE"]!,
+            placeholderOverlay.r2["ARTIFACTS"]!,
+          ]),
+        ],
+      }),
     awsBudgets: Effect.fail(
       new TargetFailed({ operation: "aws budgets", message: "the account has no AWS budgets" }),
     ),

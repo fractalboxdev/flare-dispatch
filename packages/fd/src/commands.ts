@@ -311,6 +311,19 @@ const op = <A, I>(
 
 const inSeconds = (s: number) => Date.now() + s * 1000;
 
+/** Every installation's delivery key, one id per line: the `installation` each `pause-key` takes. */
+const deliveryKeys = Command.make("delivery-keys", { json }, (f) =>
+  reporting(f.json)(
+    Effect.gen(function* () {
+      const client = yield* session;
+      const keys = yield* call(client.ops.deliveryKeys());
+      yield* emit(f.json, keys, keys.installations.join("\n"));
+    }),
+  ),
+).pipe(
+  Command.withDescription("List every installation's delivery key: GET /v1/ops/delivery-keys"),
+);
+
 export const ops = Command.make("ops").pipe(
   Command.withDescription("Operator operations: /v1/ops/*"),
   Command.withSubcommands([
@@ -374,6 +387,7 @@ export const ops = Command.make("ops").pipe(
       (c, f: { installation: string; reason: string }) =>
         c.ops.resumeKey({ payload: { installation: f.installation, reason: f.reason } }),
     ),
+    deliveryKeys,
   ] as never),
 );
 

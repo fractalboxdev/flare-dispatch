@@ -7,6 +7,7 @@ import {
   CURRENT_PHASE,
   developmentRuntimeFields,
   DEVICE_CLASSES,
+  eligibleKinds,
   isolationOf,
   loadProfile,
   profile,
@@ -14,6 +15,7 @@ import {
   profileLoader,
   projectForReference,
   referenceProfile,
+  resolveClass,
   spendConfigWith,
   spendDefaults,
   spendSettings,
@@ -224,7 +226,9 @@ describe("placement isolation", () => {
   it("[FD-PROF-065] a development device class admits isolation none only for trusted, non-confidential, grant-free work", () => {
     const dev = buildProfile("development");
     expect(isolationOf(dev, { class: "batch", ...trusted })).toBe("none");
-    expect(isolationOf(dev, { class: "batch", ...trusted, untrustedInput: true })).toBe("container");
+    expect(isolationOf(dev, { class: "batch", ...trusted, untrustedInput: true })).toBe(
+      "container",
+    );
     expect(isolationOf(dev, { class: "batch", ...trusted, confidentiality: "unclassified" })).toBe(
       "container",
     );
@@ -235,6 +239,44 @@ describe("placement isolation", () => {
   it("[FD-PROF-065] production places every class at vm", () => {
     for (const c of profile.classes)
       expect(isolationOf(profile, { class: c.name, ...trusted })).toBe("vm");
+  });
+});
+
+describe("cloud-only placement of a security scan run", () => {
+  const scan = (phase: Phase) =>
+    eligibleKinds(buildProfile("production", phase), {
+      class: "interactive",
+      labels: resolveClass(
+        {
+          run: "security-rescan",
+          repository: "acme/app",
+          sha: "abc123",
+          trigger: { kind: "cron" },
+          qosClass: "interactive",
+        },
+        {},
+      ).labels,
+    });
+
+  it("[FD-PROF-066] from phase 2 cloud-only holds for a security-gate or security-rescan run and keeps it off devices", () => {
+    for (const phase of [2, 3, 4] as const) {
+      expect(scan(phase).constraints).toContain("cloud-only");
+      expect(scan(phase).kinds).not.toContain("device");
+      expect(scan(phase).kinds).toContain("cloudflare");
+    }
+    for (const phase of [0, 1] as const) expect(scan(phase).kinds).toContain("device");
+    const unlabelled = eligibleKinds(buildProfile("production", 2), {
+      class: "interactive",
+      labels: [],
+    });
+    expect(unlabelled.kinds).toContain("device");
+    expect(
+      eligibleKinds(buildProfile("production", 2), {
+        class: "interactive",
+        labels: [],
+        trigger: "tag-push",
+      }).kinds,
+    ).not.toContain("device");
   });
 });
 

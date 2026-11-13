@@ -220,6 +220,16 @@ describe("commands and routes", () => {
     });
   });
 
+  it("ops delivery-keys prints every installation's delivery key", async () => {
+    h.doubles.deliveryKeys = { list: Effect.succeed(["11", "21"]) };
+    const store = await signedIn(h, OPERATOR);
+    const listed = await runFd(h, "ops", ["delivery-keys", "--json"], { store });
+    expect(listed.exit).toBe(0);
+    expect(JSON.parse(listed.stdout[0]!)).toEqual({ installations: ["11", "21"] });
+    const text = await runFd(h, "ops", ["delivery-keys"], { store });
+    expect(text.stdout.join("\n")).toBe("11\n21");
+  });
+
   it("[FD-IFC-070]: deploy and doctor hand the overlay to the operability service and exit by its report", async () => {
     const seen: string[] = [];
     const operability = Layer.succeed(Operability)({
