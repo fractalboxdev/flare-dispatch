@@ -240,4 +240,28 @@ describe("template invariants", () => {
       ),
     ).toEqual(["cron docs.triggers.crons"]);
   });
+
+  it("[FD-OPS-094] holds the scan bundle's pin, envelope file and signing keys and the advisory settings, refusing a digest that is not a SHA-256 and an undeclared scan key", () => {
+    const jwk = { kty: "EC", crv: "P-256", x: "x", y: "y", kid: "bundle-2026" };
+    const scan = {
+      bundleDigest: "a".repeat(64),
+      bundleFile: "deploy/scan-bundle.dsse.json",
+      bundleKeys: [
+        { publicKey: jwk, notBefore: "2026-11-01T00:00:00Z", notAfter: "2027-11-01T00:00:00Z" },
+      ],
+      advisoryEcosystems: ["npm", "PyPI"],
+      advisoryMaxAgeHours: 24,
+    };
+    expect(Effect.runSync(decodeOverlay(overlay({ scan }))).scan).toEqual(scan);
+    expect(rejected(overlay({ scan: { bundleDigest: `sha256:${"a".repeat(64)}` } }))).toEqual([
+      "scan.bundleDigest",
+    ]);
+    expect(rejected(overlay({ scan: { bundleDigest: "A".repeat(64) } }))).toEqual([
+      "scan.bundleDigest",
+    ]);
+    expect(rejected(overlay({ scan: { bundleSignature: "x" } }))).toEqual(["scan.bundleSignature"]);
+    expect(
+      rejected(overlay({ scan: { bundleKeys: [{ publicKey: { ...jwk, kty: "RSA" } }] } })),
+    ).toEqual(["scan.bundleKeys.0.publicKey.kty"]);
+  });
 });

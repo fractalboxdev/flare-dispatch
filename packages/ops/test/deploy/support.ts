@@ -7,7 +7,8 @@
 // Organizations answer for one AWS account, and only requests whose SigV4 signature verifies. The account owns the
 // presign token the placeholder overlay names, with Object Read & Write on its cache and artifact buckets, and answers
 // its policies, never its value, as `GET /accounts/{account_id}/tokens/{token_id}` does. The runner repository
-// `acme/runner` serves its workflow files to a contents-scoped token of the App's installation there.
+// `acme/runner` serves its workflow files to a contents-scoped token of the App's installation there. The deploy host's
+// local files, such as a scan bundle envelope, are a map by absolute path, and each read of one is a recorded call.
 import type { AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
 import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -155,6 +156,8 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
   const secrets = new Map<string, Map<string, string>>([[SCRIPT, new Map(COMPOSITION_SECRETS)]]);
   const objects = new Map<string, string>();
   const files = new Map<string, string>();
+  /** The deploy host's local files by absolute path, beside the repository's: the scan bundle envelope. */
+  const localFiles = new Map<string, Uint8Array>();
   const runs: (readonly string[])[] = [];
   const alarms: Record<string, unknown>[] = [];
   /** The account's API tokens by id, each as the API lists it: the presign token, scoped as FD-CACHE-091 requires. */
@@ -683,6 +686,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     tokens,
     access,
     files,
+    localFiles,
     runs,
     alarms,
     state,
@@ -720,6 +724,10 @@ export const targetOn =
       fetch: w.fetcher,
       writeFile: (path, text) => void w.files.set(path, text),
       removeFile: (path) => void w.files.delete(path),
+      readFile: (path) => {
+        w.calls.push(`read ${path}`);
+        return w.localFiles.get(path) ?? null;
+      },
     });
     if (canary === "live") return live;
     const service = Effect.runSync(

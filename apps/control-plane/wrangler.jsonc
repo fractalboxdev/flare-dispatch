@@ -37,6 +37,9 @@
     // The overlay's policy rules per repository, which the fd deploy drift stage synced: class rules and each
     // repository's confidentiality mode (FD-PROF-025).
     "POLICY_RULES": "{{policy.rules}}",
+    // The overlay's `attestation_max_age` in days, 10 where it sets none: the result-acceptance check rejects a
+    // statement from a device whose last attestation is older (FD-PROV-016).
+    "ATTESTATION_MAX_AGE_DAYS": "{{provenance.attestationMaxAgeDays}}",
     // The object-store presigner signs on `<account_id>.r2.cloudflarestorage.com`, never the custom domain, under
     // the `CACHE` bucket's name. Its R2 API token, scoped to the cache and artifact buckets with Object Read & Write
     // and used for nothing else, is the Worker secrets `R2_PRESIGN_ACCESS_KEY_ID` and `R2_PRESIGN_SECRET_ACCESS_KEY`

@@ -164,6 +164,8 @@ export const composedPorts = (env: object): readonly string[] => [
   "local-registration",
   "writeback-gate",
   "reuse-policy",
+  // `resultAcceptanceLayer`: the cache package's check over the D1 statement records.
+  "result-acceptance-check",
 ];
 
 /**

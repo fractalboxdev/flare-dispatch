@@ -73,7 +73,8 @@ export const freshLeaseNonce = (): string =>
 /**
  * The nonce each execution lease carries, one row per (`execution_id`, epoch) (FD-PROV-010). `invalidated_at` is set
  * when the epoch's lease is reclaimed or a later epoch's lease is granted (FD-PROV-011); an invalidated nonce binds no
- * statement.
+ * statement. `consumed_nonces` holds each nonce, a lease's or a registration's, that an accepted statement consumed,
+ * one row per nonce (FD-PROV-021).
  */
 export const LEASE_NONCE_SCHEMA = [
   `create table if not exists lease_nonces (
@@ -83,6 +84,11 @@ export const LEASE_NONCE_SCHEMA = [
     issued_at integer not null,
     invalidated_at integer,
     primary key (execution_id, epoch))`,
+  `create table if not exists consumed_nonces (
+    nonce text primary key,
+    execution_id text not null,
+    epoch integer not null,
+    consumed_at integer not null)`,
 ];
 
 const migrated = new WeakMap<D1Like, Promise<unknown>>();
@@ -198,4 +204,39 @@ export const issuedLeaseNonce = (
         .all(),
     );
     return (results[0] as { readonly nonce: string } | undefined)?.nonce ?? null;
+  });
+
+/** Whether an accepted statement consumed the nonce (FD-PROV-021). */
+export const nonceConsumed = (db: D1Like, nonce: string): Effect.Effect<boolean> =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() => migrateLeaseNonces(db));
+    const { results } = yield* Effect.promise(() =>
+      db.prepare("select 1 as consumed from consumed_nonces where nonce = ?").bind(nonce).all(),
+    );
+    return results.length > 0;
+  });
+
+/**
+ * Records the nonce consumed by the statement accepted for the execution at `epoch` (FD-PROV-021). The insert is the
+ * consumption's compare-and-set: it answers false when another accepted statement consumed the nonce first.
+ */
+export const consumeNonce = (
+  db: D1Like,
+  nonce: string,
+  executionId: string,
+  epoch: number,
+  now: number,
+): Effect.Effect<boolean> =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() => migrateLeaseNonces(db));
+    const { results } = yield* Effect.promise(() =>
+      db
+        .prepare(
+          `insert into consumed_nonces (nonce, execution_id, epoch, consumed_at) values (?, ?, ?, ?)
+           on conflict (nonce) do nothing returning nonce`,
+        )
+        .bind(nonce, executionId, epoch, now)
+        .all(),
+    );
+    return results.length === 1;
   });

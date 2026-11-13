@@ -11,6 +11,8 @@ import { utf8 } from "../crypto.ts";
 import {
   ACCEPTANCE_REASONS,
   DEFAULT_ATTESTATION_MAX_AGE_MS,
+  METERING_UNAVAILABLE,
+  MeteringUnavailable,
   PROVENANCE_QUARANTINE_ALARM,
   resultAcceptanceCheckLayer,
   StatementRecords,
@@ -109,7 +111,12 @@ interface World {
   epoch: number;
   nonce: string | null;
   consumed: boolean;
+  /** Each nonce consumption recorded, as (nonce, execution, epoch). */
+  consumptions: Array<[string, string, number]>;
+  /** Another accepted statement consumes the nonce between check 9 and the consumption. */
+  claimLost: boolean;
   models: string[];
+  meteringFails: boolean;
   alarmFails: boolean;
 }
 
@@ -126,7 +133,16 @@ const harness = (world: World) => {
     currentEpoch: () => Effect.succeed(world.epoch),
     issuedNonce: () => Effect.succeed(world.nonce),
     nonceConsumed: () => Effect.succeed(world.consumed),
-    meteredModels: () => Effect.succeed(world.models),
+    consumeNonce: (nonce, executionId, epoch) =>
+      Effect.sync(() => {
+        if (world.claimLost) return false;
+        world.consumptions.push([nonce, executionId, epoch]);
+        return true;
+      }),
+    meteredModels: (executionId, epoch) =>
+      world.meteringFails
+        ? Effect.fail(new MeteringUnavailable({ executionId, epoch, detail: "no records" }))
+        : Effect.succeed(world.models),
   });
   const executors = Layer.succeed(LeaseStore, {
     register: () => Effect.void,
@@ -190,7 +206,10 @@ const world = async () => {
     epoch: 3,
     nonce: NONCE,
     consumed: false,
+    consumptions: [],
+    claimLost: false,
     models: ["claude-x"],
+    meteringFails: false,
     alarmFails: false,
   };
   return { device, other, state };
@@ -374,6 +393,42 @@ describe("result-acceptance check", () => {
       expect(h.flags, c.expected).toEqual([]);
       expect(h.alarms, c.expected).toEqual([]);
     }
+  });
+
+  it("[FD-PROV-021] an accepted statement consumes its nonce, and a rejected one consumes none", async () => {
+    const w = await world();
+    const h = harness(w.state);
+    expect(await h.check(submission(), await signed(w.device.private))).toEqual({ _tag: "accepted" });
+    expect(w.state.consumptions).toEqual([[NONCE, EXECUTION, 3]]);
+    const r = await world();
+    r.state.models = ["claude-y"];
+    expect(await harness(r.state).check(submission(), await signed(r.device.private))).toEqual(
+      rejected("model-mismatch"),
+    );
+    expect(r.state.consumptions).toEqual([]);
+  });
+
+  it("[FD-PROV-021] a statement whose nonce another accepted statement consumes after check 9 is rejected nonce-reused", async () => {
+    const w = await world();
+    w.state.claimLost = true;
+    const h = harness(w.state);
+    expect(await h.check(submission(), await signed(w.device.private))).toEqual(
+      rejected("nonce-reused"),
+    );
+    expect(h.flags).toEqual([]);
+  });
+
+  it("unreadable metering records reject the result, fail closed, with no quarantine and no consumption", async () => {
+    const w = await world();
+    w.state.meteringFails = true;
+    const h = harness(w.state);
+    expect(await h.check(submission(), await signed(w.device.private))).toEqual({
+      _tag: "rejected",
+      reasonKind: METERING_UNAVAILABLE,
+    });
+    expect(w.state.consumptions).toEqual([]);
+    expect(h.flags).toEqual([]);
+    expect(h.alarms).toEqual([]);
   });
 
   it("[FD-PROV-027] a page alarm the port cannot deliver leaves the quarantine and the rejection in place", async () => {

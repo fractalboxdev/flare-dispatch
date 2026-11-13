@@ -10,6 +10,9 @@ export type CacheTier = "protected-cloud" | "protected-device" | "pull-request" 
 /** The readable namespace that covers every `cas/<sha256>` entry; a reader requests a digest it already holds. */
 export const CONTENT_NAMESPACE = "cas";
 
+/** The object key of a content-addressed entry: `cas/<sha256>`, its lowercase hex SHA-256. */
+export const contentObjectKey = (sha256: string): string => `${CONTENT_NAMESPACE}/${sha256}`;
+
 /** What started the execution, as far as cache writes are concerned. */
 export type CacheTrigger =
   | { readonly _tag: "PullRequest"; readonly number: number }
