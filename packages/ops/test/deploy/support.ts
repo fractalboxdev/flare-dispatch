@@ -341,8 +341,10 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
   /** What `wrangler deploy` leaves in the account for one rendered configuration. */
   const deploy = (config: WorkerConfig): string | null => {
     const name = config["name"] as string;
+    // A service resolves to a deployed script, or to the script this deploy writes: a Worker may bind its own named
+    // entrypoint.
     for (const s of arr(config["services"]))
-      if (!scripts.has(s["service"] as string))
+      if (s["service"] !== name && !scripts.has(s["service"] as string))
         return `could not resolve service ${String(s["service"])}`;
     const v = version(++state.deploys);
     const vars = Object.entries((config["vars"] ?? {}) as Record<string, unknown>).map(

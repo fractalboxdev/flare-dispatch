@@ -90,6 +90,15 @@
     { "binding": "CACHE", "bucket_name": "{{r2.CACHE}}" },
     { "binding": "ARTIFACTS", "bucket_name": "{{r2.ARTIFACTS}}" },
   ],
+  // The `ExecutionEngine` object calls this Worker's own `MamekoDrain` entrypoint when an execution settles, so its
+  // outcome rows go out then rather than at the next tick (MAMEKO-HOST-057). The service is this Worker's name.
+  "services": [
+    {
+      "binding": "MAMEKO_DRAIN",
+      "service": "flare-dispatch-control-plane",
+      "entrypoint": "MamekoDrain",
+    },
+  ],
   "durable_objects": {
     "bindings": [
       { "name": "CHANNEL", "class_name": "ExecutorChannel" },

@@ -32,6 +32,7 @@ export {
   ReleasePool,
 } from "./deferred-objects.ts";
 export { InstallationQuota } from "./installation-quota.ts";
+export { MamekoDrain } from "./drain.ts";
 
 let migrated: Promise<unknown> | undefined;
 
