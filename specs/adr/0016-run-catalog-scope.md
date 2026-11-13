@@ -1,6 +1,6 @@
 # ADR-0016: Run catalog scope
 
-Status: Accepted · 2026-10-24
+Status: Accepted · 2026-10-24 · Superseded in part by [ADR-0019](0019-security-gate-scan-bundle.md), once accepted: the gate recipe list, and dispatch of `security-gate`
 
 ## Context
 
