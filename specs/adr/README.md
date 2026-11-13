@@ -24,6 +24,7 @@ mameko's records decide the scheduling mechanism FlareDispatch composes. A Flare
 | [0016](0016-run-catalog-scope.md) | Accepted | Gate and agentic recipes in the tree; consumer gates as repo manifests |
 | [0017](0017-verification-strategy.md) | Superseded in part by mameko [ADR-0015](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/adr/0015-verification-strategy.md); the CI harness section stays | Conformance suites, deterministic simulation and a replay harness as merge gates |
 | [0018](0018-formal-models.md) | Superseded in part by mameko [ADR-0016](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/adr/0016-formal-models.md); the Tamarin model of provenance stays | Lean 4 models of the spend, placement, outbox, staged-write and fencing kernels, linked by differential testing; Tamarin for provenance |
+| [0019](0019-security-gate-scan-bundle.md) | Proposed | Security gate, scan bundle, verdict records and scoped service identities |
 
 FlareDispatch also builds on these mameko records, which have no FlareDispatch counterpart:
 

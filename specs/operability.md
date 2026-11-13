@@ -36,6 +36,11 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 | `access.teamDomain`, `access.aud` | Cloudflare Access team domain and application AUD |
 | `operators` | Access identities allowed on operator routes |
 | `dispatchers` | Access identities allowed to dispatch through `fd` and `/mcp` ([interfaces.md](interfaces.md) FD-IFC-027) |
+| `dispatch.scoped` | Entries `{ identity, runs, repositories, classCeiling }` for automated callers of read-only scan runs ([interfaces.md](interfaces.md) FD-IFC-089 to FD-IFC-093) |
+| `containment` | Access identities allowed the tightening operator routes ([interfaces.md](interfaces.md) FD-IFC-095) |
+| `scan.bundleDigest`, `scan.bundleFile`, `scan.bundleKeys` | The pinned scan bundle's SHA-256, the path of its envelope beside the overlay, and each public signing key with its UTC RFC 3339 `notBefore` (inclusive) and `notAfter` (exclusive) deploy-verification window ([runs/gate.md](runs/gate.md) § Security gate) |
+| `scan.advisoryEcosystems`, `scan.advisoryMaxAgeHours` | The OSV ecosystems the `advisory-refresh` ops run stores; the snapshot age a scan accepts, default 48 |
+| `records.url` | The HTTPS URL that receives job and verdict records ([github-output.md](github-output.md) § Job and verdict records) |
 | `github.appId`, `github.fixtureRepo` | GitHub App id; the repository the synthetic webhook canary pushes to |
 | `intake.webhookEvents` | The webhook events intake admits ([intake.md](intake.md) FD-INT-027) |
 | `dispatch.oidcAudience` | The Actions OIDC audience of a dispatch ([interfaces.md](interfaces.md) FD-IFC-024) |
@@ -224,6 +229,8 @@ FlareDispatch's alarm port records each alarm for the dashboard and sends it to 
 | `webhook-silent` | notify | An installation with an enrolled repository has had no verified delivery for `alerts.webhookSilentHours` | R1 |
 | `executions-lost` | notify | The settle sweep ends one or more executions ([MAMEKO-OPS-029](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md)) | R8 |
 | `operator-control` | notify | The control state is not `run`, or a quarantine, force-admit or top-up is active ([MAMEKO-OPS-037](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md)) | R9 |
+| `advisory-snapshot-stale` | page | An advisory snapshot in `scan.advisoryEcosystems` is older than 24 h | R17 |
+| `record-undelivered` | page | A `job.record` or `verdict.record` row reaches `refused` or `expired` ([github-output.md](github-output.md) FD-GH-102) | R18 |
 | `delivery-key-paused` | notify | A delivery key stays paused for more than 10 min ([MAMEKO-OPS-049](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md)) | R15 |
 
 Other files and mameko define their own alarms (spend, admission, delivery); every alarm travels the same alarm port.
@@ -258,14 +265,17 @@ FlareDispatch surfaces no `resolve`, because no FlareDispatch intent kind is `re
 | R6 Placement stalled | `placement-stalled` | Open the fleet view; `fd ops drain <executor>` for an executor that heartbeats and claims nothing | [MAMEKO-OPS-021](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md) |
 | R7 Cron silent | `cron-silent` | Compare the live cron trigger with the rendered configuration's single minute tick; deploy again | [MAMEKO-OPS-010](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md), [intake.md](intake.md) FD-INT-050 |
 | R8 Lost executions | `executions-lost` | Read the swept executions in the executions view; the settle sweep has already concluded them | [MAMEKO-OPS-029](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md) |
-| R9 Operator control active | `operator-control` | Confirm the control is intended, or `fd ops halt run` | [MAMEKO-OPS-037](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md) |
+| R9 Operator control active | `operator-control` | While the containment hold is set, follow R19; otherwise confirm the control is intended, or `fd ops halt run` | [MAMEKO-OPS-037](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md) |
 | R10 Device maintenance | Planned OS update or move | `fd ops drain <executor>`; wait for in-flight executions; release after the work | FD-OPS-077 |
 | R11 Device key compromise | Lost or compromised device | `fd ops revoke <executor>`, then `fd ops quarantine <executor>` | [MAMEKO-OPS-040](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md) to [MAMEKO-OPS-045](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md) |
 | R12 Runaway cloud spend | Spend alarms | `fd ops halt halt-cloud` | FD-OPS-077 |
 | R13 Control-plane outage | Every check pending | Run the GitHub Actions CI workflow on the pull request; apply a temporary ruleset change that accepts its check; revert the ruleset when the control plane serves again | FD-OPS-027, FD-OPS-029 |
 | R14 Secret rotation | Scheduled or after exposure | `wrangler secret put` for each Worker that holds the secret, then `fd doctor` | FD-OPS-024 |
-| R15 Delivery key paused | `delivery-key-paused` | Confirm the pause is intended, or `fd ops resume-key <installation>` | FD-OPS-077, [MAMEKO-OPS-046](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md) |
+| R15 Delivery key paused | `delivery-key-paused` | While the containment hold is set, follow R19 and resume nothing; otherwise confirm the pause is intended, or `fd ops resume-key <installation>` | FD-OPS-077, [MAMEKO-OPS-046](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md) |
 | R16 AWS budget check failed | `drift` or a failed deploy naming `aws.budgetAction`, or an `aws-sts`, `aws-budgets`, `aws-iam` or `aws-organizations` read | Where a read failed, set the repository variable `FD_AWS_ROLE_ARN` to an AWS role that trusts GitHub's OIDC provider for this repository and grants `sts:GetCallerIdentity`, `budgets:ViewBudget`, `budgets:DescribeBudgetActionsForAccount`, `iam:GetPolicy`, `iam:GetPolicyVersion` and, for an SCP action, `organizations:DescribePolicy`, `organizations:DescribeOrganization`, `organizations:ListParents` and `organizations:ListRoots`. For an IAM action, set `aws.launcherRoleArn` to the actual ECS launcher's role in the authenticated account and target that role; a same-named user or group does not qualify. An SCP must be a `SERVICE_CONTROL_POLICY`, enabled on the account's organization root, and affect a member account through that account or a proven organization ancestor; SCPs do not affect the management account. Use an active budget whose complete `TimePeriod` is readable and whose legacy filters and modern `FilterExpression` cover all ECS spend. An unread billing view scope, failed or reversed action does not qualify. Otherwise add the Budgets action the listed reasons say is missing; then `fd doctor` | [executors.md](executors.md) FD-EXEC-083                                                                                                                                                                                                                                 |
+| R17 Advisory snapshot stale | `advisory-snapshot-stale` | Read the `advisory-refresh` run's failure; confirm the OSV archive answers; re-run the tick | FD-OPS-100 to FD-OPS-102 |
+| R18 Record undelivered | `record-undelivered` | Confirm `records.url` answers and the signing key matches; compare the execution with the receiver's records | [github-output.md](github-output.md) FD-GH-102 |
+| R19 Containment | A security incident | A `containment` identity: read `GET /v1/ops/delivery-keys`; `pause-key` each key; `halt halt-all`; read the keys again and `pause-key` each new one; `GET /v1/executions?class=release`; `cancel` each non-terminal execution; `quarantine` each affected executor. An `operators` identity ends it: `halt run`, then `resume-key` each key | [interfaces.md](interfaces.md) FD-IFC-094 to FD-IFC-101, [intake.md](intake.md) FD-INT-071 |
 
 ## Requirements
 
@@ -279,7 +289,7 @@ FlareDispatch surfaces no `resolve`, because no FlareDispatch intent kind is `re
 - **FD-OPS-006** · phase 0 · `V-UNIT` — The renderer must be a pure function of the template and the overlay, so the same inputs render byte-identical configuration.
 - **FD-OPS-007** · phase 0 · `V-DEPLOY` — Every deploy path (the deploy workflow, `fd deploy` on a workstation and the published deploy action) must render configuration through the one renderer.
 - **FD-OPS-008** · phase 0 · `V-DEPLOY` — The deploy workflow must read the operator overlay from one repository secret, and if the secret is absent, then the workflow must fail before its first deploy step.
-- **FD-OPS-009** · phase 0 · `V-DEPLOY` `V-UNIT` — When `fd deploy` runs, it must run overlay decode, render, drift check, D1 migrations, Worker deploys and post-deploy probes in that order, and stop at the first stage that fails.
+- **FD-OPS-009** · phase 0 · `V-DEPLOY` `V-UNIT` — When `fd deploy` runs, it must run overlay decode, render, drift check, scan bundle write, D1 migrations, Worker deploys and post-deploy probes in that order, and stop at the first stage that fails.
 - **FD-OPS-010** · phase 0 · `V-DEPLOY` — `fd deploy` must deploy a Worker only after it has deployed every Worker that the first Worker binds as a service.
 - **FD-OPS-011** · phase 0 · `V-DEPLOY` — The deploy workflow must run at most one deploy per account at a time, and must not cancel a deploy that has started.
 - **FD-OPS-012** · phase 0 · `V-DEPLOY` `V-UNIT` — Every template must set `keep_vars` to `false`.
@@ -348,13 +358,35 @@ FlareDispatch surfaces no `resolve`, because no FlareDispatch intent kind is `re
 ### Operator controls
 
 - **FD-OPS-077** · phase 0 · `V-UNIT` — The control plane must surface each operator operation of the operator routes table as its route and as an `fd ops` command that calls that route, and must surface no other operator operation ([MAMEKO-OPS-030](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md), [MAMEKO-OPS-046](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md)).
-- **FD-OPS-078** · phase 0 · `V-UNIT` — The operator routes must accept a request only from an Access identity listed in the overlay's `operators`, and must answer `403` to any other identity.
+- **FD-OPS-078** · phase 0 · `V-UNIT` — The operator routes must accept a request only from an Access identity listed in the overlay's `operators` or, on a route [interfaces.md](interfaces.md) FD-IFC-095 names, its `containment`, and must answer `403` to any other identity.
 - **FD-OPS-083** · phase 0 · `V-UNIT` — A lasting budget change must go through the operator overlay and a deploy, because the overlay is FlareDispatch's configuration source and no operator operation changes it ([MAMEKO-OPS-036](https://github.com/fractalboxdev/mameko/blob/3adc308b3bfc505fad227e5f7fd8c5bb048bf20e/specs/operability.md)).
 
 ### Access configuration and webhook silence
 
 - **FD-OPS-088** · phase 0 · `V-DEPLOY` `V-E2E-LOCAL` — The committed Access configuration must bypass Access on every path whose surface in [interfaces.md](interfaces.md) names an identity other than the Access JWT alone (webhook, dispatch, executor connect, `/health`, `/.well-known/*`, log, artifact, compile-cache, model-gateway and `/v1/provenance/*` paths), and the dispatcher must run each such surface's identity check itself.
 - **FD-OPS-089** · phase 0 · `V-UNIT` `V-LIVE` — If an installation with at least one repository whose manifest enrolls a recipe has no verified webhook delivery ([intake.md](intake.md) FD-INT-031) for `alerts.webhookSilentHours`, then the control plane must raise the notify alarm `webhook-silent` naming the account login.
+
+### Scoped identities
+
+- **FD-OPS-090** · phase 2 · `V-DEPLOY` `V-UNIT` — If a `dispatch.scoped` entry's identity is also in `dispatchers`, `operators` or `containment`, then the drift check must fail, naming the identity.
+- **FD-OPS-091** · phase 2 · `V-DEPLOY` `V-UNIT` — If a `dispatch.scoped` entry names a run that is not a read-only scan run, then the drift check must fail, naming the run.
+- **FD-OPS-092** · phase 2 · `V-DEPLOY` `V-UNIT` — If a `dispatch.scoped` entry's `classCeiling` is neither `interactive` nor `batch`, then the drift check must fail, naming the identity.
+- **FD-OPS-093** · phase 2 · `V-DEPLOY` `V-UNIT` — If a `containment` identity is also in `operators` or `dispatchers`, then the drift check must fail, naming the identity.
+
+### Scan bundle and advisory snapshot
+
+The scan-bundle verifier samples the deploy host's current time once when verification starts and applies every key's validity window to that verification time. A missing, malformed or reversed window authorizes no deploy. The DSSE envelope supplies no trusted signing time: the verifier accepts no historical or signer-declared timestamp in place of its current-time check. A key retained in history after expiry, or removed from `scan.bundleKeys`, cannot authorize a new deploy, including a redeploy of a previously signed envelope. A failed verification leaves the already-running Worker's previous pin unchanged; runs continue to verify that pinned envelope's digest under FD-GATE-100.
+
+- **FD-OPS-094** · phase 2 · `V-DEPLOY` `V-UNIT` — Where the overlay sets `scan.bundleDigest`, before any deploy step changes Cloudflare state, the drift check must verify the envelope at `scan.bundleFile`.
+- **FD-OPS-095** · phase 2 · `V-DEPLOY` `V-UNIT` — If no DSSE signature of the envelope verifies under a key in `scan.bundleKeys` whose valid `notBefore`/`notAfter` window contains the deploy-verification time, then the drift check must fail, so that an expired or removed key cannot authorize a new deploy and the running Worker keeps enforcing the previous pin.
+- **FD-OPS-096** · phase 2 · `V-DEPLOY` `V-UNIT` — If the envelope's SHA-256 differs from `scan.bundleDigest`, then the drift check must fail.
+- **FD-OPS-097** · phase 2 · `V-DEPLOY` `V-UNIT` — If the payload fails the scan bundle schema, then the drift check must fail, naming the first failing path.
+- **FD-OPS-098** · phase 2 · `V-DEPLOY` `V-UNIT` — If a scanner version in the rendered image falls outside `scanners.<name>.versions`, then the drift check must fail, naming the scanner.
+- **FD-OPS-099** · phase 2 · `V-DEPLOY` — When the drift check passes, `fd deploy` must write the verified envelope to `cas/<scan.bundleDigest>` in the deploying account's R2 before any Worker deploy.
+- **FD-OPS-100** · phase 2 · `V-UNIT` `V-LIVE` — Once per UTC day, the control plane must run the ops run `advisory-refresh`, which streams `https://osv-vulnerabilities.storage.googleapis.com/<ecosystem>/all.zip` for each `scan.advisoryEcosystems` entry into `cas/<sha256>`.
+- **FD-OPS-101** · phase 2 · `V-UNIT` — When `advisory-refresh` has stored every byte the response's `Content-Length` names, the control plane must record the object's digest and `Last-Modified` time as that ecosystem's advisory snapshot.
+- **FD-OPS-102** · phase 2 · `V-UNIT` `V-SIM` — If `advisory-refresh` fails for an ecosystem, then the control plane must keep that ecosystem's recorded snapshot unchanged.
+- **FD-OPS-103** · phase 2 · `V-UNIT` — While an ecosystem in `scan.advisoryEcosystems` has a recorded snapshot older than 24 h, or none, the control plane must raise the page alarm `advisory-snapshot-stale`.
 
 ## Open items
 

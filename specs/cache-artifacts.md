@@ -84,7 +84,7 @@ The profile's `cache_namespaces` binding gives each execution, at every lease gr
 | `protected/<repo>/device` | `protected-device` | An execution of a protected trigger on executor kind `device` | Executions on a device |
 | `pr/<repo>/<number>` | `pull-request` | Executions triggered by pull request `<number>` | Executions of pull request `<number>` |
 | `exec/<repo>/<execution_id>` | `execution` | One rehearsal, or one execution on executor kind `gha` | That execution only |
-| `cas/<sha256>` | `content` | Any execution | Any execution that already holds the expected digest from a trusted input |
+| `cas/<sha256>` | `content` | Any execution; `fd deploy` for a scan bundle; the `advisory-refresh` ops run for an advisory snapshot | Any execution that already holds the expected digest from a trusted input |
 
 A **protected trigger** ([README.md](README.md) § Glossary) decides cache writes only; `release` eligibility follows its own trigger list ([profile.md](profile.md) § Class resolution, step 1). A `merge_group` event and a `gh-readonly-queue/*` push carry code from several pull requests, so their executions read protected tiers and write nothing.
 
