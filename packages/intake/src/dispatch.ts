@@ -231,10 +231,13 @@ export const admitDispatch = (d: AuthenticatedDispatch) =>
           `a dispatch of the read-only scan run ${run.name} carries an Idempotency-Key`,
         ),
       );
-    const repo = d.repository;
     const decoded = yield* decodeOr(run.input, "invalid_inputs")(d.inputs ?? {});
     yield* checkSignals(d.signals, d.inputs);
 
+    // The repository as GitHub spells it, whatever letter case the caller sent: the confidentiality and policy-rule
+    // lookups and the commit dedup key read this spelling, so a dispatch and a webhook of one commit share one key
+    // (FD-INT-009) and the caller's case never selects a repository's mode.
+    const repo = yield* github.fullName(d.repository);
     // The App's own installation for the repository decides (FD-INT-042).
     const installation = yield* github.installation(repo);
     const defaultBranch = yield* github.defaultBranch(repo);

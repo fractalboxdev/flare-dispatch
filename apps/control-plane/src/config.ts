@@ -86,12 +86,12 @@ export interface ControlPlaneEnv extends CacheEnv {
   readonly POLICY_RULES?: unknown;
   readonly DEPLOYMENT?: string;
   readonly PLANE_ID: string;
-  /** The GitHub App's id and private key (a Worker secret); without both, nothing is applied to GitHub. */
+  /** The GitHub App's id, slug and private key (a Worker secret); without all three, nothing is applied to GitHub. */
   readonly GITHUB_APP_ID?: string;
   readonly GITHUB_APP_PRIVATE_KEY?: string;
   /** `github.fixtureRepo`: the repository the synthetic webhook canary pushes to (FD-OPS-038). */
   readonly GITHUB_FIXTURE_REPO?: string;
-  /** The App's slug, whose bot the App commits as. */
+  /** `github.appSlug`: the App's slug, whose bot `<slug>[bot]` the App commits and comments as. */
   readonly GITHUB_APP_SLUG?: string;
   /** The webhook secret (a Worker secret); unset refuses every webhook (FD-INT-022). */
   readonly WEBHOOK_SECRET?: string;

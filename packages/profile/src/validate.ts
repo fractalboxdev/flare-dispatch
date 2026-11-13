@@ -394,8 +394,9 @@ export type PolicyRules = typeof PolicyRules.Type;
  * `acceptsFailingRequiredCheck: true`: such a repository's required checks run only on a device, and fail while none
  * is eligible (FD-PROF-025).
  */
-export const validatePolicyRules = (rules: PolicyRules): readonly Rejection[] =>
-  Object.entries(rules).flatMap(([repository, list]) => {
+export const validatePolicyRules = (rules: PolicyRules): readonly Rejection[] => [
+  ...caseCollisions(rules),
+  ...Object.entries(rules).flatMap(([repository, list]) => {
     const firstMode = list.findIndex((r) => r.confidentiality !== undefined);
     return list.flatMap((rule, i): Rejection[] => {
       const path = `${repository}[${i}]`;
@@ -431,7 +432,40 @@ export const validatePolicyRules = (rules: PolicyRules): readonly Rejection[] =>
         ),
       ];
     });
+  }),
+];
+
+/**
+ * GitHub names a repository in any letter case, so two keys that differ only in case name one repository; neither
+ * key's rules would be the repository's alone, so policy sync rejects the second.
+ */
+const caseCollisions = (rules: PolicyRules): readonly Rejection[] => {
+  const first = new Map<string, string>();
+  return Object.keys(rules).flatMap((repository): Rejection[] => {
+    const folded = repository.toLowerCase();
+    const earlier = first.get(folded);
+    if (earlier === undefined) {
+      first.set(folded, repository);
+      return [];
+    }
+    return [
+      {
+        item: "policy-rules",
+        path: repository,
+        reason: `${earlier} already names this repository; repository names ignore letter case`,
+      },
+    ];
   });
+};
+
+/** A repository's policy rules, its key matched in any letter case as GitHub matches a name; none where no key names it. */
+export const repositoryRules = (rules: PolicyRules, repo: string): readonly PolicyRule[] => {
+  const exact = rules[repo];
+  if (exact !== undefined) return exact;
+  const folded = repo.toLowerCase();
+  const key = Object.keys(rules).find((r) => r.toLowerCase() === folded);
+  return key === undefined ? [] : rules[key]!;
+};
 
 const decodeRules = Schema.decodeUnknownExit(PolicyRules, { onExcessProperty: "error" });
 

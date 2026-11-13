@@ -247,6 +247,7 @@ const sideServices = () => {
   const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const app: Parameters<typeof appServices>[1] = {
     appId: "4242",
+    slug: "flare-dispatch",
     privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
     fetch: (input, init) => fetch(input, init),
     baseUrl: sideBase,
@@ -691,6 +692,7 @@ describe("the source-read token helper", () => {
       env,
       {
         appId: "4242",
+        slug: "flare-dispatch",
         privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
         fetch: (input, init) => fetch(input, init),
         baseUrl: mintBase,
@@ -853,6 +855,7 @@ describe("the check-run applier of a confidential-compute repository", () => {
       env,
       {
         appId: "4242",
+        slug: "flare-dispatch",
         privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
         fetch: (input, init) => fetch(input, init),
         baseUrl: base,

@@ -12,6 +12,7 @@ import {
   profile,
   PROTECTION_TTL_MS,
   ProtectionSnapshotCache,
+  repositoryRules,
   resolveClass,
   resolveClassDetailed,
   SECURITY_SCAN,
@@ -494,6 +495,24 @@ describe("policy sync", () => {
       }),
     ).toEqual(["acme/app[0].match"]);
     expect(rejectionsOf({ "acme/app": [{ match: {}, confidentiality: "secret" }] })).toEqual([""]);
+  });
+
+  it("[FD-PROF-025] rejects two keys that name one repository in different letter case, and a lookup matches a key in any case", () => {
+    const secret = {
+      match: {},
+      confidentiality: "confidential-compute",
+      acceptsFailingRequiredCheck: true,
+    } as const;
+    expect(
+      rejectionsOf({
+        "acme/app": [secret],
+        "Acme/App": [{ match: {}, confidentiality: "non-confidential" }],
+      }),
+    ).toEqual(["Acme/App"]);
+    const rules = { "acme/app": [secret] };
+    for (const name of ["acme/app", "Acme/App", "ACME/APP"])
+      expect(repositoryRules(rules, name)).toEqual([secret]);
+    expect(repositoryRules(rules, "acme/other")).toEqual([]);
   });
 
   it("[FD-PROF-025] rejects a rule that sets neither a class nor a confidentiality mode", () => {

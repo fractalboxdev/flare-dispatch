@@ -121,8 +121,12 @@ export const compositionFindings = (
     .filter((p) => !supplied.includes(p))
     .map((p) => fail("composition", p, `phase ${phase} requires a Layer for ${p}`));
 
-/** The bindings the App's appliers sign with: the App id var and the App key secret. */
-export const APP_BINDINGS = ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"] as const;
+/**
+ * The bindings the App's appliers act with: the App id and slug vars and the App key secret. The slug names the App's
+ * bot, `<slug>[bot]`, the author intake matches a release pull request against (FD-INT-066) and the identity every App
+ * commit and comment carries; GitHub App slugs are globally unique, so no default names another deployment's App.
+ */
+export const APP_BINDINGS = ["GITHUB_APP_ID", "GITHUB_APP_SLUG", "GITHUB_APP_PRIVATE_KEY"] as const;
 
 /** The bindings the object-store presigner signs with: two vars and the presign token's two secrets (FD-CACHE-091). */
 export const PRESIGNER_BINDINGS = [

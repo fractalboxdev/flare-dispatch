@@ -70,6 +70,11 @@ export class GithubRead extends Context.Service<
       ref: string,
     ) => Effect.Effect<RepoFile | null, GithubReadError>;
     readonly defaultBranch: (repo: string) => Effect.Effect<string, GithubReadError>;
+    /**
+     * The repository's `<owner>/<repo>` as GitHub spells it. GitHub resolves a repository name in any letter case, so
+     * this is the one spelling every repository-keyed lookup and key reads.
+     */
+    readonly fullName: (repo: string) => Effect.Effect<string, GithubReadError>;
     /** The repository's visibility as GitHub reports it: `public`, `private` or `internal`. */
     readonly visibility: (repo: string) => Effect.Effect<string, GithubReadError>;
     /** The commit SHA at the head of `branch`. */
@@ -122,6 +127,7 @@ const ContentFile = Schema.Struct({
 });
 const Repository = Schema.Struct({ default_branch: Schema.String });
 const RepositoryVisibility = Schema.Struct({ visibility: Schema.String });
+const RepositoryName = Schema.Struct({ full_name: Schema.String });
 const Branch = Schema.Struct({ commit: Schema.Struct({ sha: Schema.String }) });
 const BranchRules = Schema.Array(
   Schema.Struct({
@@ -242,6 +248,11 @@ export const githubReadLayer = (options: GithubClientOptions) =>
           Effect.map(
             Effect.flatMap(get(repo, `/repos/${repo}`), decode(Repository)),
             (r) => r.default_branch,
+          ),
+        fullName: (repo) =>
+          Effect.map(
+            Effect.flatMap(get(repo, `/repos/${repo}`), decode(RepositoryName)),
+            (r) => r.full_name,
           ),
         visibility: (repo) =>
           Effect.map(

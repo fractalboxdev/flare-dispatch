@@ -34,7 +34,7 @@ import {
   actuatorRegistry,
   ObjectStorePresigner,
 } from "@fractalboxdev/mameko-ports";
-import { GateDecisionSourceLive } from "@fractalboxdev/flare-dispatch-profile";
+import { GateDecisionSourceLive, repositoryRules } from "@fractalboxdev/flare-dispatch-profile";
 import type { ExecutionPayload } from "@fractalboxdev/mameko-coordinator";
 import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
 import { d1Sql } from "@fractalboxdev/mameko-host-cloudflare/d1";
@@ -59,7 +59,13 @@ import {
   writebackRecords,
   writeCredentialIn,
 } from "./agentic.ts";
-import { appLoginOf, appOptionsOf, appServices, readsWithoutApp } from "./github.ts";
+import {
+  appLoginOf,
+  appOptionsOf,
+  appServices,
+  botLoginOf,
+  readsWithoutApp,
+} from "./github.ts";
 
 /**
  * The rendered `{{intake.webhookEvents}}`: `null` or unset admits every supported event, and a list admits only its
@@ -79,10 +85,13 @@ export const webhookEventsOf = (value: unknown): readonly string[] | undefined =
   }
 };
 
-/** Each repository's synced policy rules, the `policy-rules` input of class resolution (FD-PROF-025). */
+/**
+ * Each repository's synced policy rules, the `policy-rules` input of class resolution (FD-PROF-025), its name matched
+ * in any letter case.
+ */
 const policyRulesFor = (env: ControlPlaneEnv) => {
   const rules = policyRulesOf(env);
-  return (repo: string) => rules[repo] ?? [];
+  return (repo: string) => repositoryRules(rules, repo);
 };
 
 /** Intake's configuration from the bindings; every repository may run every run its manifest lists. */
@@ -318,7 +327,7 @@ const servicesLayer = (env: ControlPlaneEnv) => {
     const github = appServices(env, app, alarms);
     // The agentic appliers for `pr.propose` and `pr.close` over the GitHub package's applier; it wins the tag.
     const support = Layer.mergeAll(gitData, writebackRecords(env)).pipe(Layer.provideMerge(github));
-    const applier = writebackApplier(appLoginOf(env)).pipe(Layer.provideMerge(support));
+    const applier = writebackApplier(botLoginOf(app)).pipe(Layer.provideMerge(support));
     // The local registration port submits through intake, so it sits over intake's services.
     const services = localPorts(env).pipe(
       Layer.provideMerge(

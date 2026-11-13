@@ -33,6 +33,9 @@
     // and `[]` for an empty list, which admits none (FD-INT-027).
     "WEBHOOK_EVENTS": "{{intake.webhookEvents}}",
     "GITHUB_APP_ID": "{{github.appId}}",
+    // The App's slug: its bot `<slug>[bot]` authors the release pull requests intake approves (FD-INT-066) and every
+    // App commit and comment. Without it the control plane applies nothing to GitHub.
+    "GITHUB_APP_SLUG": "{{github.appSlug}}",
     // The repository the 15-minute synthetic webhook canary pushes to; with the App's key, the tick also runs the
     // installation and delivery probes (FD-OPS-038, FD-OPS-041, FD-OPS-044).
     "GITHUB_FIXTURE_REPO": "{{github.fixtureRepo}}",
