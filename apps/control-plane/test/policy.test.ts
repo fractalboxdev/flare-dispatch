@@ -36,6 +36,27 @@ describe("the POLICY_RULES var", () => {
     expect(intakeSettings(envWith(undefined)).confidentiality("acme/secret")).toBe("unclassified");
   });
 
+  it("[FD-PROF-025] a repository named in another letter case reads its own rules and mode, never unclassified", () => {
+    const settings = intakeSettings(envWith(rules));
+    for (const name of ["Acme/Secret", "ACME/SECRET"]) {
+      expect(settings.confidentiality(name)).toBe("confidential-compute");
+      expect(confidentialCompute(envWith(rules), name)).toBe(true);
+    }
+    expect(settings.policyRules?.("Acme/Model")).toEqual(rules["acme/model"]);
+    const dev = {
+      DEPLOYMENT: "development",
+      FD_DEV_REPOSITORY: JSON.stringify({
+        repository: "Acme/App",
+        installation: 1,
+        default_branch: "main",
+        head: "a".repeat(40),
+        files: {},
+        confidentiality: "confidential-model",
+      }),
+    } as unknown as ControlPlaneEnv;
+    expect(intakeSettings(dev).confidentiality("acme/app")).toBe("confidential-model");
+  });
+
   it("[FD-PROF-025] a var that sets confidential-compute without acceptsFailingRequiredCheck: true is refused, not read as unclassified", () => {
     const refused = envWith({
       "acme/secret": [{ match: {}, confidentiality: "confidential-compute" }],

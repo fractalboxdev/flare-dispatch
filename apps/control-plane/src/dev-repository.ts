@@ -1,7 +1,11 @@
 // The repository a `development` deployment with no GitHub App reads: one commit of one repository, as the local
 // command that starts the deployment captured it (`pnpm ci:local` writes it from the checkout). Only the facts it holds
 // answer; every other read fails, so no caller decides on a read that never happened.
-import { confidentialityOf, type ConfidentialityMode } from "@fractalboxdev/flare-dispatch-profile";
+import {
+  confidentialityOf,
+  repositoryRules,
+  type ConfidentialityMode,
+} from "@fractalboxdev/flare-dispatch-profile";
 import { Schema } from "effect";
 import { deployment, type ControlPlaneEnv } from "./config.ts";
 import { policyRulesOf } from "./policy.ts";
@@ -52,7 +56,8 @@ export type ConfidentialityEnv = Pick<
 /**
  * A repository's confidentiality mode, the one source intake's admission, a lease's cache fields, the log route and
  * the check-run applier read: the mode the repository's synced policy rules set (FD-PROF-025), else the mode a
- * development deployment's captured repository carries, else `unclassified`.
+ * development deployment's captured repository carries, else `unclassified`. A repository name matches in any letter
+ * case, as GitHub matches it, so the case a caller types never selects a weaker mode.
  */
 export const repositoryConfidentiality = (
   env: ConfidentialityEnv,
@@ -60,8 +65,10 @@ export const repositoryConfidentiality = (
   const rules = policyRulesOf(env);
   const dev = devRepositoryOf(env);
   return (repo) =>
-    confidentialityOf(rules[repo] ?? []) ??
-    (dev !== undefined && dev.repository === repo ? dev.confidentiality : undefined) ??
+    confidentialityOf(repositoryRules(rules, repo)) ??
+    (dev !== undefined && dev.repository.toLowerCase() === repo.toLowerCase()
+      ? dev.confidentiality
+      : undefined) ??
     "unclassified";
 };
 

@@ -198,16 +198,22 @@ export const fakeReads = (
   installations: Record<string, number> = {},
 ): FakeReads => ({ repos, installations, calls: [], failures: new Map(), delays: new Map() });
 
-/** `GithubRead` over the fake's tables; a repository without an installation fails `GithubUncredentialed`. */
+/**
+ * `GithubRead` over the fake's tables; a repository without an installation fails `GithubUncredentialed`. As GitHub
+ * does, every read resolves a repository name in any letter case.
+ */
 export const fakeReadLayer = (state: FakeReads) => {
+  const spelled = (repo: string) =>
+    Object.keys(state.repos).find((r) => r.toLowerCase() === repo.toLowerCase()) ?? repo;
   const read = <A>(name: string, repo: string, f: (r: FakeRepo) => A) =>
     Effect.suspend((): Effect.Effect<A, GithubReadError> => {
       state.calls.push(`${name} ${repo}`);
       const answer = Effect.suspend((): Effect.Effect<A, GithubReadError> => {
         const failure = state.failures.get(`${name} ${repo}`);
         if (failure !== undefined) return Effect.fail(failure);
-        const r = state.repos[repo];
-        if (state.installations[repo] === undefined || r === undefined)
+        const key = spelled(repo);
+        const r = state.repos[key];
+        if (state.installations[key] === undefined || r === undefined)
           return Effect.fail(new GithubUncredentialed({ repo }));
         return Effect.succeed(f(r));
       });
@@ -215,13 +221,14 @@ export const fakeReadLayer = (state: FakeReads) => {
       return delay === undefined ? answer : Effect.andThen(Effect.sleep(delay), answer);
     });
   return Layer.succeed(GithubRead, {
-    installation: (repo) => read("installation", repo, () => state.installations[repo]!),
+    installation: (repo) => read("installation", repo, () => state.installations[spelled(repo)]!),
     file: (repo, path, ref) =>
       read("file", repo, (r) => {
         const text = r.files[`${ref}:${path}`];
         return text === undefined ? null : { size: new TextEncoder().encode(text).length, text };
       }),
     defaultBranch: (repo) => read("defaultBranch", repo, (r) => r.defaultBranch),
+    fullName: (repo) => read("fullName", repo, () => spelled(repo)),
     visibility: (repo) => read("visibility", repo, (r) => r.visibility),
     branchHead: (repo, branch) =>
       Effect.flatMap(

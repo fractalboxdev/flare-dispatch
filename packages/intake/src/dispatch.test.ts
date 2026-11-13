@@ -12,6 +12,7 @@ import {
   HEAD,
   manifest,
   pullRequestPayload,
+  pushPayload,
   REPO,
   refusal,
   repoWithManifest,
@@ -232,6 +233,36 @@ describe("dispatch to admission", () => {
     const first = await admit(h, authenticated({ sha: HEAD }));
     const second = await admit(h, authenticated({ sha: HEAD }));
     expect(second).toEqual({ ...first, duplicate: true });
+  });
+
+  it("[FD-INT-009] a dispatch naming the repository in another letter case shares the webhook's commit key and reads the repository's own mode", async () => {
+    const asked: string[] = [];
+    const h = await harness({
+      settings: {
+        confidentiality: (repo) => {
+          asked.push(repo);
+          return repo === REPO ? "confidential-model" : "unclassified";
+        },
+      },
+    });
+    await h.run(
+      handleIntake(
+        await signedWebhook("push", pushPayload("refs/heads/main", BASE)),
+        "webhooks/github",
+      ),
+    );
+    expect(h.executions()).toHaveLength(1);
+    const dispatched = await admit(h, authenticated({ repository: "Acme/App", sha: BASE }));
+    expect(dispatched).toMatchObject({ executionId: h.executions()[0]!.id, duplicate: true });
+    const fresh = await admit(h, authenticated({ repository: "ACME/APP", sha: HEAD }));
+    expect(fresh.duplicate).toBe(false);
+    expect(h.records().map((r) => r.repo)).toEqual([REPO, REPO]);
+    expect(h.rows("select canonical from dedup_keys").map((r) => r.canonical)).toEqual([
+      `check:ci:${REPO}:${BASE}`,
+      `check:ci:${REPO}:${HEAD}`,
+    ]);
+    expect(asked.length).toBeGreaterThan(0);
+    expect(new Set(asked)).toEqual(new Set([REPO]));
   });
 
   it("[FD-INT-041] a dispatch with no ref and no commit pins the default branch head", async () => {

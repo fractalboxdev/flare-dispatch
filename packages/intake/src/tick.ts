@@ -15,6 +15,7 @@ import { cronMatches, parseCron } from "./cron.ts";
 import type { WebhookEvent, WebhookFields } from "./event.ts";
 import { submission } from "./submit.ts";
 import {
+  entriesFor,
   nothing,
   readManifest,
   submitEach,
@@ -238,7 +239,6 @@ const sweep = (unit: TickUnit & { readonly _tag: "sweep" }) =>
 /** One installation's scheduled runs for the tick's minute, each pinned to its branch's head (FD-INT-052). */
 const schedules = (unit: TickUnit & { readonly _tag: "schedules" }) =>
   Effect.gen(function* () {
-    const config = yield* IntakeConfig;
     const github = yield* GithubRead;
     const spent = budget();
     spent.spend(1, 0);
@@ -259,11 +259,10 @@ const schedules = (unit: TickUnit & { readonly _tag: "schedules" }) =>
       const manifest = yield* readManifest(repo, yield* github.branchHead(repo, defaultBranch));
       if (Option.isNone(manifest)) continue;
       // `matched` counts the repository's schedules that match the minute, in manifest order; a continuation skips
-      // the ones its predecessors submitted.
+      // the ones its predecessors submitted. Only an entry that lists the `cron` trigger runs on its schedules
+      // (FD-INT-015).
       let matched = 0;
-      for (const entry of manifest.value.runs) {
-        const run = config.catalog(entry.recipe);
-        if (run === undefined || !config.allows(repo, run.name)) continue;
+      for (const { entry, run } of yield* entriesFor(manifest.value, "cron", repo)) {
         for (const s of entry.schedules ?? []) {
           const cron = parseCron(s.cron);
           if (cron === null || !cronMatches(cron, unit.scheduledAt)) continue;

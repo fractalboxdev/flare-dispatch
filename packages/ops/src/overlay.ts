@@ -97,7 +97,8 @@ export const OverlayValues = Schema.Struct({
   dispatchers: opt(Schema.Array(NonEmpty)),
   /** The Access identities the tightening operator routes admit (specs/interfaces.md FD-IFC-095). */
   containment: opt(Schema.Array(NonEmpty)),
-  github: Schema.Struct({ appId: NonEmpty, fixtureRepo: NonEmpty }),
+  /** The GitHub App's id and slug, and the repository the synthetic webhook canary pushes to (FD-OPS-038). */
+  github: Schema.Struct({ appId: NonEmpty, appSlug: NonEmpty, fixtureRepo: NonEmpty }),
   intake: opt(Schema.Struct({ webhookEvents: opt(Schema.Array(NonEmpty)) })),
   dispatch: opt(
     Schema.Struct({
@@ -378,7 +379,7 @@ export const placeholderOverlay: OverlayValues = {
   hostnames: { dispatcher: "dispatch.example.com", docs: "docs.example.com" },
   access: { teamDomain: "example.cloudflareaccess.com", aud: "placeholder-aud" },
   operators: ["operator@example.com"],
-  github: { appId: "0", fixtureRepo: "example/canary" },
+  github: { appId: "0", appSlug: "flare-dispatch", fixtureRepo: "example/canary" },
   executors: { planeId: "flare-dispatch" },
   alerts: { sink: "https://alerts.example.com/hook" },
   models: {
