@@ -1,6 +1,7 @@
 // The v2 control plane Worker: mameko's coordinator on host-cloudflare, FlareDispatch's profile, the dashboard pages
 // and `packages/api`'s router, which serves the declared `/v1/` routes. It shares no code with the v1 dispatcher.
 import { runApiMigrations } from "@fractalboxdev/flare-dispatch-api";
+import { moveLegacyArtifactsTable } from "@fractalboxdev/flare-dispatch-cache";
 import { migrateChildConclusions } from "@fractalboxdev/flare-dispatch-github";
 import { migrateIntake } from "@fractalboxdev/flare-dispatch-intake";
 import { opsFetch, scheduledHandler } from "@fractalboxdev/flare-dispatch-ops";
@@ -38,6 +39,8 @@ let migrated: Promise<unknown> | undefined;
 
 const migrate = (env: ControlPlaneEnv) =>
   (migrated ??= (async () => {
+    // The artifact store's table moves to `fd_artifacts` before mameko's migration 33 creates its own `artifacts`.
+    await moveLegacyArtifactsTable(env.DB as unknown as D1Database);
     await runD1Migrations(env.DB);
     await Effect.runPromise(migrateChildConclusions(env.DB));
     await runApiMigrations(env.DB);

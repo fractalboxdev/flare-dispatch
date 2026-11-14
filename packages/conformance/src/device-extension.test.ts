@@ -1,5 +1,5 @@
 // FlareDispatch's device extension process as mameko's device executor reaches it: started with its end of a
-// socketpair as file descriptor 3 (MAMEKO-EXEC-149), greeted through mameko's `answerHello`, and driven only with
+// socketpair as file descriptor 3 (MAMEKO-EXEC-152), greeted through mameko's `answerHello`, and driven only with
 // messages of mameko's extension schema, each reply decoded by that schema. L1 lives on a temporary directory the
 // suite reads back, so the one-directory-per-namespace layout is checked on disk.
 import { type ChildProcess, spawn } from "node:child_process";
@@ -99,7 +99,7 @@ const start = async (
       );
       const take = (line: string) => {
         clearTimeout(timer);
-        // Every line the extension writes is one message of mameko's extension schema (MAMEKO-EXEC-149).
+        // Every line the extension writes is one message of mameko's extension schema (MAMEKO-EXEC-152).
         ok(decodeMessage(JSON.parse(line)));
       };
       const line = ready.shift();
@@ -219,7 +219,7 @@ describe("device extension over mameko's extension interface", { timeout: 60_000
     );
   });
 
-  // mameko starts one extension per plane (MAMEKO-EXEC-125) and its `cache.get` names no execution, so the extension
+  // mameko starts one extension per plane (MAMEKO-EXEC-128) and its `cache.get` names no execution, so the extension
   // scopes reads to the leases handed to its plane, not to one execution. This suite pins that per-plane half only.
   it("[FD-EXEC-007] cache.get answers null for a namespace no lease handed to this plane's extension names as readable, though its directory holds the entry", async () => {
     const ext = await start([

@@ -11,7 +11,7 @@ import { MiB } from "./ledger.ts";
 import { SubjectRetentionFailed, type SubjectRetention } from "./provenance/append.ts";
 
 export const ARTIFACT_SCHEMA = [
-  `create table if not exists artifacts (
+  `create table if not exists fd_artifacts (
     artifact_id text primary key,
     execution_id text not null,
     epoch integer not null,
@@ -29,8 +29,8 @@ export const ARTIFACT_SCHEMA = [
     expires_at integer not null,
     unique (execution_id, epoch, name)
   )`,
-  "create index if not exists artifacts_execution on artifacts (execution_id, artifact_id)",
-  "create index if not exists artifacts_expiry on artifacts (expires_at)",
+  "create index if not exists fd_artifacts_execution on fd_artifacts (execution_id, artifact_id)",
+  "create index if not exists fd_artifacts_expiry on fd_artifacts (expires_at)",
   `create table if not exists artifact_uploads (
     execution_id text not null,
     epoch integer not null,
@@ -43,6 +43,30 @@ export const ARTIFACT_SCHEMA = [
     primary key (execution_id, epoch, name)
   )`,
 ] as const;
+
+/**
+ * Moves an `artifacts` table of this store's shape, from a deploy that predates the `fd_artifacts` name, out of the way
+ * of mameko's own `artifacts` table, which its migration 33 creates under that name. The table is renamed to
+ * `fd_artifacts` with its rows, and its two indexes are dropped, since mameko creates an `artifacts_execution` index
+ * too; `ARTIFACT_SCHEMA` recreates them under their `fd_` names. It runs before mameko's migrations. A database with no
+ * such table, or with mameko's, is left as it is.
+ */
+export const moveLegacyArtifactsTable = async (
+  db: Pick<D1Database, "prepare">,
+): Promise<boolean> => {
+  const { results } = await db
+    .prepare("select name from pragma_table_info('artifacts')")
+    .all<{ name: string }>();
+  const columns = new Set(results.map((r) => r.name));
+  if (!columns.has("artifact_id") || !columns.has("expires_at")) return false;
+  for (const sql of [
+    "drop index if exists artifacts_execution",
+    "drop index if exists artifacts_expiry",
+    "alter table artifacts rename to fd_artifacts",
+  ])
+    await db.prepare(sql).run();
+  return true;
+};
 
 export class ArtifactDb extends Context.Service<ArtifactDb, D1Database>()(
   "@fractalboxdev/flare-dispatch-cache/ArtifactDb",
@@ -75,7 +99,11 @@ export const artifactPath = (executionId: string, epoch: number, name: string) =
   `artifacts/${executionId}/${epoch}/${name}`;
 
 /** Browse-expansion bounds (FD-CACHE-073). */
-export const BROWSE_BOUNDS = { maxEntryBytes: 32 * MiB, maxTotalBytes: 256 * MiB, maxEntries: 4000 };
+export const BROWSE_BOUNDS = {
+  maxEntryBytes: 32 * MiB,
+  maxTotalBytes: 256 * MiB,
+  maxEntries: 4000,
+};
 
 export const checkBrowseExpansion = (
   entries: readonly { readonly path: string; readonly size: number }[],
@@ -85,13 +113,18 @@ export const checkBrowseExpansion = (
       return yield* Effect.fail(new ArtifactTooLarge({ reason: `${entries.length} entries` }));
     let total = 0;
     for (const e of entries) {
-      if (!validArtifactName(e.path)) return yield* Effect.fail(new InvalidArtifactName({ name: e.path }));
+      if (!validArtifactName(e.path))
+        return yield* Effect.fail(new InvalidArtifactName({ name: e.path }));
       if (e.size > BROWSE_BOUNDS.maxEntryBytes)
-        return yield* Effect.fail(new ArtifactTooLarge({ reason: `entry ${e.path} is ${e.size} bytes` }));
+        return yield* Effect.fail(
+          new ArtifactTooLarge({ reason: `entry ${e.path} is ${e.size} bytes` }),
+        );
       total += e.size;
     }
     if (total > BROWSE_BOUNDS.maxTotalBytes)
-      return yield* Effect.fail(new ArtifactTooLarge({ reason: `expansion totals ${total} bytes` }));
+      return yield* Effect.fail(
+        new ArtifactTooLarge({ reason: `expansion totals ${total} bytes` }),
+      );
   });
 
 /** The parts of a multipart upload: one size of at least `minPartBytes` for every part but the last. */
@@ -136,7 +169,10 @@ const sum = (rows: readonly { readonly bytes: number | null }[]) => Number(rows[
  * (FD-CACHE-073). A body of at most 16 MiB gets one `PUT` URL; a larger one a multipart upload the control plane
  * creates with `createMultipartUpload`, presigned as one UploadPart URL per part (FD-CACHE-072).
  */
-export const beginArtifactUpload = (frame: BeginArtifact, bounds: ByteBounds = DEFAULT_BYTE_BOUNDS) =>
+export const beginArtifactUpload = (
+  frame: BeginArtifact,
+  bounds: ByteBounds = DEFAULT_BYTE_BOUNDS,
+) =>
   Effect.gen(function* () {
     const lease = yield* (yield* CacheLeases).current(frame.execution_id);
     const db = yield* ArtifactDb;
@@ -145,27 +181,36 @@ export const beginArtifactUpload = (frame: BeginArtifact, bounds: ByteBounds = D
     const now = (yield* CacheClock).now();
     if (lease === null || lease.epoch !== frame.epoch) return { status: "stale" } as BeginAnswer;
     if (lease.status === "terminal")
-      return yield* Effect.fail(new ArtifactRefused({ status: 403, reason: "execution is terminal" }));
+      return yield* Effect.fail(
+        new ArtifactRefused({ status: 403, reason: "execution is terminal" }),
+      );
     if (lease.confidential === true)
       return yield* Effect.fail(
-        new ArtifactRefused({ status: 403, reason: "confidential-compute keeps artifacts on the device" }),
+        new ArtifactRefused({
+          status: 403,
+          reason: "confidential-compute keeps artifacts on the device",
+        }),
       );
     if (!validArtifactName(frame.name))
       return yield* Effect.fail(new InvalidArtifactName({ name: frame.name }));
     if (!Number.isSafeInteger(frame.size) || frame.size < 0 || !/^[0-9a-f]{64}$/.test(frame.sha256))
-      return yield* Effect.fail(new ArtifactRefused({ status: 400, reason: "size or sha256 malformed" }));
+      return yield* Effect.fail(
+        new ArtifactRefused({ status: 400, reason: "size or sha256 malformed" }),
+      );
     const browse = frame.browse ?? [];
     yield* checkBrowseExpansion(browse);
     const browseBytes = browse.reduce((s, e) => s + e.size, 0);
     const committed = yield* Effect.promise(() =>
       db
-        .prepare("select sum(size) as bytes from artifacts where execution_id = ?")
+        .prepare("select sum(size) as bytes from fd_artifacts where execution_id = ?")
         .bind(frame.execution_id)
         .all<{ bytes: number | null }>(),
     );
     const pending = yield* Effect.promise(() =>
       db
-        .prepare("select sum(size) as bytes from artifact_uploads where execution_id = ? and name != ?")
+        .prepare(
+          "select sum(size) as bytes from artifact_uploads where execution_id = ? and name != ?",
+        )
         .bind(frame.execution_id, frame.name)
         .all<{ bytes: number | null }>(),
     );
@@ -181,8 +226,19 @@ export const beginArtifactUpload = (frame: BeginArtifact, bounds: ByteBounds = D
     const urls: Extract<BeginAnswer, { status: "ok" }>["urls"][number][] = [];
     let uploadId: string | null = null;
     if (frame.size <= bounds.singlePutMaxBytes) {
-      const signed = yield* signer.presign({ key: path, method: "PUT", length: frame.size, expiresAt });
-      urls.push({ part_number: null, path: null, url: signed.url, length: frame.size, expires_at: signed.expiresAt });
+      const signed = yield* signer.presign({
+        key: path,
+        method: "PUT",
+        length: frame.size,
+        expiresAt,
+      });
+      urls.push({
+        part_number: null,
+        path: null,
+        url: signed.url,
+        length: frame.size,
+        expires_at: signed.expiresAt,
+      });
     } else {
       const upload = yield* Effect.promise(() =>
         bucket.createMultipartUpload(path, { httpMetadata: { contentType: frame.content_type } }),
@@ -212,7 +268,13 @@ export const beginArtifactUpload = (frame: BeginArtifact, bounds: ByteBounds = D
         length: entry.size,
         expiresAt,
       });
-      urls.push({ part_number: null, path: entry.path, url: signed.url, length: entry.size, expires_at: signed.expiresAt });
+      urls.push({
+        part_number: null,
+        path: entry.path,
+        url: signed.url,
+        length: entry.size,
+        expires_at: signed.expiresAt,
+      });
     }
     yield* Effect.promise(() =>
       db
@@ -222,8 +284,16 @@ export const beginArtifactUpload = (frame: BeginArtifact, bounds: ByteBounds = D
            on conflict (execution_id, epoch, name) do update set size = excluded.size, sha256 = excluded.sha256,
              content_type = excluded.content_type, upload_id = excluded.upload_id, browse = excluded.browse`,
         )
-        .bind(frame.execution_id, frame.epoch, frame.name, frame.size + browseBytes, frame.sha256,
-          frame.content_type, uploadId, browse.length > 0 ? 1 : 0)
+        .bind(
+          frame.execution_id,
+          frame.epoch,
+          frame.name,
+          frame.size + browseBytes,
+          frame.sha256,
+          frame.content_type,
+          uploadId,
+          browse.length > 0 ? 1 : 0,
+        )
         .run(),
     );
     return { status: "ok", upload_id: uploadId, urls } as BeginAnswer;
@@ -262,44 +332,76 @@ export const commitArtifact = (
     if (lease === null || lease.epoch !== frame.epoch) return { status: "stale" } as ArtifactAck;
     const existing = yield* Effect.promise(() =>
       db
-        .prepare("select artifact_id from artifacts where execution_id = ? and epoch = ? and name = ?")
+        .prepare(
+          "select artifact_id from fd_artifacts where execution_id = ? and epoch = ? and name = ?",
+        )
         .bind(frame.execution_id, frame.epoch, frame.name)
         .first<{ artifact_id: string }>(),
     );
-    if (existing !== null) return { status: "duplicate", artifact_id: existing.artifact_id } as ArtifactAck;
+    if (existing !== null)
+      return { status: "duplicate", artifact_id: existing.artifact_id } as ArtifactAck;
     const upload = yield* Effect.promise(() =>
       db
         .prepare("select * from artifact_uploads where execution_id = ? and epoch = ? and name = ?")
         .bind(frame.execution_id, frame.epoch, frame.name)
-        .first<{ size: number; sha256: string; content_type: string; upload_id: string | null; browse: number }>(),
+        .first<{
+          size: number;
+          sha256: string;
+          content_type: string;
+          upload_id: string | null;
+          browse: number;
+        }>(),
     );
     if (upload === null)
-      return yield* Effect.fail(new ArtifactRefused({ status: 409, reason: "no upload was started" }));
+      return yield* Effect.fail(
+        new ArtifactRefused({ status: 409, reason: "no upload was started" }),
+      );
     const path = artifactPath(frame.execution_id, frame.epoch, frame.name);
     if (upload.upload_id !== null) {
       const parts = (frame.parts ?? []).map((p) => ({ partNumber: p.part_number, etag: p.etag }));
       yield* Effect.tryPromise(() =>
         bucket.resumeMultipartUpload(path, upload.upload_id!).complete(parts),
       ).pipe(
-        Effect.mapError(() => new ArtifactRefused({ status: 409, reason: "multipart completion failed" })),
+        Effect.mapError(
+          () => new ArtifactRefused({ status: 409, reason: "multipart completion failed" }),
+        ),
       );
     }
     const stored = yield* Effect.promise(() => bucket.head(path));
     if (stored === null)
-      return yield* Effect.fail(new ArtifactRefused({ status: 409, reason: "artifact body is not uploaded" }));
+      return yield* Effect.fail(
+        new ArtifactRefused({ status: 409, reason: "artifact body is not uploaded" }),
+      );
     const artifactId = newArtifactId();
-    const keep = Math.max(retention.retentionMs ?? DEFAULT_ARTIFACT_RETENTION_MS, retention.extendedMs ?? 0);
+    const keep = Math.max(
+      retention.retentionMs ?? DEFAULT_ARTIFACT_RETENTION_MS,
+      retention.extendedMs ?? 0,
+    );
     yield* Effect.promise(() =>
       db.batch([
         db
           .prepare(
-            `insert into artifacts (artifact_id, execution_id, epoch, name, size, sha256, content_type,
+            `insert into fd_artifacts (artifact_id, execution_id, epoch, name, size, sha256, content_type,
                producer_executor_id, producer_executor_kind, repo, private, r2_path, browse, created_at, expires_at)
              values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
           )
-          .bind(artifactId, frame.execution_id, frame.epoch, frame.name, stored.size, upload.sha256,
-            upload.content_type, lease.executorId, lease.executorKind, repository.repo.toLowerCase(),
-            repository.private ? 1 : 0, path, upload.browse, now, now + keep),
+          .bind(
+            artifactId,
+            frame.execution_id,
+            frame.epoch,
+            frame.name,
+            stored.size,
+            upload.sha256,
+            upload.content_type,
+            lease.executorId,
+            lease.executorKind,
+            repository.repo.toLowerCase(),
+            repository.private ? 1 : 0,
+            path,
+            upload.browse,
+            now,
+            now + keep,
+          ),
         db
           .prepare("delete from artifact_uploads where execution_id = ? and epoch = ? and name = ?")
           .bind(frame.execution_id, frame.epoch, frame.name),
@@ -337,11 +439,16 @@ export const retainStatementSubjects = async (
   const first = statement.epoch === null ? 3 : 4;
   const result = await db
     .prepare(
-      `update artifacts set expires_at = ?1
+      `update fd_artifacts set expires_at = ?1
        where execution_id = ?2 and expires_at < ?1${statement.epoch === null ? "" : " and epoch = ?3"}
          and name in (${names.map((_, i) => `?${i + first}`).join(", ")})`,
     )
-    .bind(keepUntil, statement.executionId, ...(statement.epoch === null ? [] : [statement.epoch]), ...names)
+    .bind(
+      keepUntil,
+      statement.executionId,
+      ...(statement.epoch === null ? [] : [statement.epoch]),
+      ...names,
+    )
     .run();
   return result.meta.changes;
 };
@@ -364,26 +471,45 @@ export const artifactSubjectRetention = (
  * producing executor and holds no R2 path.
  */
 export const recordDeviceArtifact = (
-  frame: { readonly execution_id: string; readonly epoch: number; readonly name: string; readonly size: number;
-    readonly sha256: string; readonly content_type: string },
+  frame: {
+    readonly execution_id: string;
+    readonly epoch: number;
+    readonly name: string;
+    readonly size: number;
+    readonly sha256: string;
+    readonly content_type: string;
+  },
   producer: { readonly executorId: string; readonly executorKind: ExecutorKind },
   repository: { readonly repo: string; readonly private: boolean },
 ) =>
   Effect.gen(function* () {
     const db = yield* ArtifactDb;
     const now = (yield* CacheClock).now();
-    if (!validArtifactName(frame.name)) return yield* Effect.fail(new InvalidArtifactName({ name: frame.name }));
+    if (!validArtifactName(frame.name))
+      return yield* Effect.fail(new InvalidArtifactName({ name: frame.name }));
     const artifactId = newArtifactId();
     yield* Effect.promise(() =>
       db
         .prepare(
-          `insert into artifacts (artifact_id, execution_id, epoch, name, size, sha256, content_type,
+          `insert into fd_artifacts (artifact_id, execution_id, epoch, name, size, sha256, content_type,
              producer_executor_id, producer_executor_kind, repo, private, r2_path, browse, created_at, expires_at)
            values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, null, 0, ?12, ?13)`,
         )
-        .bind(artifactId, frame.execution_id, frame.epoch, frame.name, frame.size, frame.sha256,
-          frame.content_type, producer.executorId, producer.executorKind, repository.repo.toLowerCase(),
-          repository.private ? 1 : 0, now, now + DEFAULT_ARTIFACT_RETENTION_MS)
+        .bind(
+          artifactId,
+          frame.execution_id,
+          frame.epoch,
+          frame.name,
+          frame.size,
+          frame.sha256,
+          frame.content_type,
+          producer.executorId,
+          producer.executorKind,
+          repository.repo.toLowerCase(),
+          repository.private ? 1 : 0,
+          now,
+          now + DEFAULT_ARTIFACT_RETENTION_MS,
+        )
         .run(),
     );
     return artifactId;
@@ -433,7 +559,7 @@ export const findArtifact = async (
 ): Promise<ArtifactRow | null> => {
   if (!ARTIFACT_ID.test(artifactId)) return null;
   const row = await deps.db
-    .prepare("select * from artifacts where artifact_id = ?")
+    .prepare("select * from fd_artifacts where artifact_id = ?")
     .bind(artifactId)
     .first<ArtifactRow>();
   return row === null || row.expires_at <= deps.now() ? null : row;
@@ -450,16 +576,26 @@ export const serveArtifact = async (
   deps: ArtifactServeDeps,
 ): Promise<ArtifactRead> => {
   if (row.r2_path === null)
-    return { _tag: "OnExecutor", artifactId: row.artifact_id, executorId: row.producer_executor_id };
-  if (browsePath !== undefined && (row.browse !== 1 || !validArtifactName(browsePath))) return { _tag: "Missing" };
-  const object = await deps.bucket.get(browsePath === undefined ? row.r2_path : `${row.r2_path}.browse/${browsePath}`);
+    return {
+      _tag: "OnExecutor",
+      artifactId: row.artifact_id,
+      executorId: row.producer_executor_id,
+    };
+  if (browsePath !== undefined && (row.browse !== 1 || !validArtifactName(browsePath)))
+    return { _tag: "Missing" };
+  const object = await deps.bucket.get(
+    browsePath === undefined ? row.r2_path : `${row.r2_path}.browse/${browsePath}`,
+  );
   if (object === null) return { _tag: "Missing" };
   const terminal = await deps.terminal(row.execution_id);
   return {
     _tag: "Served",
     response: new Response(request.method === "HEAD" ? null : object.body, {
       headers: {
-        "content-type": browsePath === undefined ? row.content_type : (object.httpMetadata?.contentType ?? "application/octet-stream"),
+        "content-type":
+          browsePath === undefined
+            ? row.content_type
+            : (object.httpMetadata?.contentType ?? "application/octet-stream"),
         "content-length": String(object.size),
         "x-content-type-options": "nosniff",
         "content-security-policy": "sandbox",
@@ -508,12 +644,15 @@ export const artifactPage = async (
   page: { readonly limit: number; readonly cursor: string },
   mayRead: ArtifactReader,
 ): Promise<{ readonly artifacts: readonly ArtifactEntry[]; readonly cursor: string | null }> => {
-  const limit = Math.min(ARTIFACT_PAGE_SIZE, Math.max(1, Math.floor(page.limit) || ARTIFACT_PAGE_SIZE));
+  const limit = Math.min(
+    ARTIFACT_PAGE_SIZE,
+    Math.max(1, Math.floor(page.limit) || ARTIFACT_PAGE_SIZE),
+  );
   const cursor = page.cursor;
   const { results } = await deps.db
     .prepare(
       `select artifact_id, execution_id, name, size, sha256, content_type, epoch, producer_executor_id,
-         producer_executor_kind, repo, private, expires_at from artifacts where execution_id = ? and artifact_id > ? and expires_at > ?
+         producer_executor_kind, repo, private, expires_at from fd_artifacts where execution_id = ? and artifact_id > ? and expires_at > ?
        order by artifact_id limit ?`,
     )
     .bind(executionId, cursor, deps.now(), limit + 1)
@@ -528,7 +667,10 @@ export const artifactPage = async (
       sha256: row.sha256,
       content_type: row.content_type,
       epoch: row.epoch,
-      producer: { executor_id: row.producer_executor_id, executor_kind: row.producer_executor_kind },
+      producer: {
+        executor_id: row.producer_executor_id,
+        executor_kind: row.producer_executor_kind,
+      },
       expires_at: row.expires_at,
     });
   }
@@ -549,7 +691,9 @@ export const sweepArtifacts = async (
   let deleted = 0;
   for (let batch = 0; batch < maxBatches; batch++) {
     const { results } = await db
-      .prepare("select artifact_id, r2_path, browse from artifacts where expires_at <= ? limit 100")
+      .prepare(
+        "select artifact_id, r2_path, browse from fd_artifacts where expires_at <= ? limit 100",
+      )
       .bind(nowMs)
       .all<{ artifact_id: string; r2_path: string | null; browse: number }>();
     if (results.length === 0) break;
@@ -559,7 +703,11 @@ export const sweepArtifacts = async (
       if (row.browse === 1) {
         let cursor: string | undefined;
         do {
-          const page = await bucket.list({ prefix: `${row.r2_path}.browse/`, limit: 1000, ...(cursor ? { cursor } : {}) });
+          const page = await bucket.list({
+            prefix: `${row.r2_path}.browse/`,
+            limit: 1000,
+            ...(cursor ? { cursor } : {}),
+          });
           keys.push(...page.objects.map((o) => o.key));
           cursor = page.truncated ? page.cursor : undefined;
         } while (cursor !== undefined);
@@ -567,7 +715,9 @@ export const sweepArtifacts = async (
       for (let i = 0; i < keys.length; i += 1000) await bucket.delete(keys.slice(i, i + 1000));
     }
     await db.batch(
-      results.map((r) => db.prepare("delete from artifacts where artifact_id = ?").bind(r.artifact_id)),
+      results.map((r) =>
+        db.prepare("delete from fd_artifacts where artifact_id = ?").bind(r.artifact_id),
+      ),
     );
     deleted += results.length;
   }

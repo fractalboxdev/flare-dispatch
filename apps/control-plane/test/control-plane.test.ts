@@ -493,7 +493,7 @@ describe("the cache, artifact and log routes", () => {
     const artifact = (id: string, executionId: string, repo: string, isPrivate: boolean) =>
       db
         .prepare(
-          `insert into artifacts (artifact_id, execution_id, epoch, name, size, sha256, content_type,
+          `insert into fd_artifacts (artifact_id, execution_id, epoch, name, size, sha256, content_type,
              producer_executor_id, producer_executor_kind, repo, private, r2_path, browse, created_at, expires_at)
            values (?, ?, 1, 'report.txt', 11, ?, 'text/plain', 'mac-logs', 'device', ?, ?, ?, 1, ?, ?)`,
         )

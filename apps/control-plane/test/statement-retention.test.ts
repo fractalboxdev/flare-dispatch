@@ -57,7 +57,7 @@ describe("the statement retention the overlay sets", () => {
       const created = Date.now();
       await db
         .prepare(
-          `insert into artifacts (artifact_id, execution_id, epoch, name, size, sha256, content_type,
+          `insert into fd_artifacts (artifact_id, execution_id, epoch, name, size, sha256, content_type,
              producer_executor_id, producer_executor_kind, repo, private, r2_path, browse, created_at, expires_at)
            values ('A1', ?1, 1, 'dist/app.tgz', 5, ?2, 'application/gzip', 'cf-1', 'cloudflare', 'acme/widgets', 1,
              'artifacts/x/1/dist/app.tgz', 0, ?3, ?4)`,
@@ -76,7 +76,7 @@ describe("the statement retention the overlay sets", () => {
         ).pipe(Effect.provide(logAppendLayer(env))),
       );
       const row = await db
-        .prepare("select expires_at from artifacts where artifact_id = 'A1'")
+        .prepare("select expires_at from fd_artifacts where artifact_id = 'A1'")
         .first<{ expires_at: number }>();
       return (row!.expires_at - integratedTime) / DAY;
     };

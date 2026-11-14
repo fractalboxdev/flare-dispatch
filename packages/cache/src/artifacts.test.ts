@@ -61,7 +61,7 @@ beforeAll(async () => {
 afterAll(async () => mf?.mf.dispose());
 beforeEach(async () => {
   await emptyBucket(bucket);
-  await db.prepare("delete from artifacts").run();
+  await db.prepare("delete from fd_artifacts").run();
   await db.prepare("delete from artifact_uploads").run();
 });
 
@@ -99,7 +99,7 @@ describe("artifacts", () => {
     expect(ack).toMatchObject({ status: "accepted" });
     const id = (ack as { artifact_id: string }).artifact_id;
     expect(id).toMatch(/^[0-9a-f]{32}$/);
-    const row = await db.prepare("select * from artifacts where artifact_id = ?").bind(id).first();
+    const row = await db.prepare("select * from fd_artifacts where artifact_id = ?").bind(id).first();
     expect(row).toMatchObject({
       execution_id: EXEC,
       epoch: 2,
@@ -128,7 +128,7 @@ describe("artifacts", () => {
     await bucket.put(artifactPath(EXEC, 2, "report.html"), "<p/>!");
     expect(value(await commit(w, { epoch: 1 }))).toEqual({ status: "stale" });
     expect(value(await begin(w, { epoch: 3 }))).toEqual({ status: "stale" });
-    expect((await db.prepare("select count(*) as n from artifacts").first<{ n: number }>())?.n).toBe(0);
+    expect((await db.prepare("select count(*) as n from fd_artifacts").first<{ n: number }>())?.n).toBe(0);
   });
 
   it("[FD-CACHE-072] a body of at most 16 MiB gets one PUT; a larger one a multipart upload completed with the part ETags", async () => {
@@ -188,7 +188,7 @@ describe("artifacts", () => {
     const w = world();
     for (let i = 0; i < 120; i++)
       await db
-        .prepare(`insert into artifacts values (?1, ?2, 2, ?3, 1, ?4, 'text/plain', 'cf-1', 'cloudflare', 'acme/widgets', 0, ?5, 1, 0, ?6)`)
+        .prepare(`insert into fd_artifacts values (?1, ?2, 2, ?3, 1, ?4, 'text/plain', 'cf-1', 'cloudflare', 'acme/widgets', 0, ?5, 1, 0, ?6)`)
         .bind(i.toString(16).padStart(32, "0"), EXEC, `f${i}`, SHA, artifactPath(EXEC, 2, `f${i}`), w.now + 1000)
         .run();
     await bucket.put(`${artifactPath(EXEC, 2, "f0")}.browse/index.html`, "x");
@@ -288,7 +288,7 @@ describe("artifacts", () => {
       return (value(await commit(w, { name })) as { artifact_id: string }).artifact_id;
     };
     const expiresAt = async (id: string) =>
-      (await db.prepare("select expires_at from artifacts where artifact_id = ?").bind(id).first<{ expires_at: number }>())!
+      (await db.prepare("select expires_at from fd_artifacts where artifact_id = ?").bind(id).first<{ expires_at: number }>())!
         .expires_at;
 
     it("[FD-PROV-075] logging a statement keeps each artifact it names until its integrated time plus 400 days, and the sweep spares it", async () => {
@@ -369,7 +369,7 @@ describe("artifacts", () => {
     const id = value(
       await run(w, recordDeviceArtifact({ execution_id: EXEC, epoch: 2, name: "r.txt", size: 3, sha256: SHA, content_type: "text/plain" }, { executorId: "dev-1", executorKind: "device" }, { repo: "acme/widgets", private: false }).pipe(provide(w))),
     );
-    const row = await db.prepare("select r2_path, producer_executor_id from artifacts where artifact_id = ?").bind(id).first();
+    const row = await db.prepare("select r2_path, producer_executor_id from fd_artifacts where artifact_id = ?").bind(id).first();
     expect(row).toEqual({ r2_path: null, producer_executor_id: "dev-1" });
     expect(await read(w, id)).toEqual({ _tag: "OnExecutor", artifactId: id, executorId: "dev-1" });
   });

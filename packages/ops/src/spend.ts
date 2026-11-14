@@ -1,5 +1,5 @@
 // The spend view `GET /v1/spend` reads and the requester attribution of a reserve debit (specs/spend.md FD-SPD-057,
-// FD-SPD-060). The spend view itself is mameko's (MAMEKO-SPD-058); `SpendView` is the coordinator operation the
+// FD-SPD-060). The spend view itself is mameko's (MAMEKO-SPD-060); `SpendView` is the coordinator operation the
 // operability group's `spend` handler calls.
 import type { SpendViewBody } from "@fractalboxdev/flare-dispatch-api/declaration";
 import type { SpendConfig } from "@fractalboxdev/flare-dispatch-profile";
@@ -7,10 +7,10 @@ import { Context, Effect, Schema } from "effect";
 import { decodeStrict } from "./decode.ts";
 import { spendConfigFrom, SpendValues } from "./overlay.ts";
 
-/** The spend view of MAMEKO-SPD-058, in micro-USD: the declaration's response schema of `GET /v1/spend`. */
+/** The spend view of MAMEKO-SPD-060, in micro-USD: the declaration's response schema of `GET /v1/spend`. */
 export { SpendViewBody } from "@fractalboxdev/flare-dispatch-api/declaration";
 
-/** The runtime adapter's store could not be read for the view (MAMEKO-SPD-059). */
+/** The runtime adapter's store could not be read for the view (MAMEKO-SPD-061). */
 export class SpendUnreadable extends Schema.TaggedError<SpendUnreadable>()("SpendUnreadable", {
   reason: Schema.String,
 }) {}
@@ -24,7 +24,7 @@ export class SpendView extends Context.Service<
 /** The UTC month `YYYY-MM` of `now`. */
 export const utcMonth = (now: number): string => new Date(now).toISOString().slice(0, 7);
 
-/** The team and member that requested an execution, which a reserve debit records (FD-SPD-060, MAMEKO-SPD-061). */
+/** The team and member that requested an execution, which a reserve debit records (FD-SPD-060, MAMEKO-SPD-063). */
 export interface RequesterAttribution {
   readonly team: string | null;
   readonly member: string | null;
