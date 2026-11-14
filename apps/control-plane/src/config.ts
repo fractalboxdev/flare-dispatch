@@ -325,7 +325,7 @@ export const spendConfigOf = (env: ControlPlaneEnv): Effect.Effect<SpendConfig, 
 /**
  * One channel per device executor. No catalogue run requires `LocalContent` yet. A class whose terminal outcome is
  * `deferred` starts no workflow at admission, so the channel starts one at the winning claim (MAMEKO-ARCH-037). A claim
- * keyed by a name outside the catalogue answers `unknown-key` (MAMEKO-PROTO-031). Executor batches may carry only
+ * keyed by a name outside the catalogue answers `unknown-key` (MAMEKO-PROTO-032). Executor batches may carry only
  * kinds whose origin is `run`; the control plane's generated payloads never come from an executor.
  */
 export const channelConfig = (profile: Profile): ExecutorChannelEnv["MAMEKO_CHANNEL_CONFIG"] => ({

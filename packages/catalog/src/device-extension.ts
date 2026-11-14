@@ -1,5 +1,5 @@
 // The device extension: the plane's process beside the device executor, speaking the extension line protocol on file
-// descriptor 3 (MAMEKO-EXEC-152). It holds `LocalContent` in memory, per scope, for the executor's lifetime.
+// descriptor 3 (MAMEKO-EXEC-154). It holds `LocalContent` in memory, per scope, for the executor's lifetime.
 import { createHash } from "node:crypto";
 import net from "node:net";
 

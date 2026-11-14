@@ -71,7 +71,7 @@ export class LocalStore extends Context.Service<
       at: number,
       since: number,
     ) => Effect.Effect<{ readonly count: number; readonly oldest: number }, LocalStoreFailed>;
-    /** The intent keys mameko's outbox holds as rows of the execution (MAMEKO-PROTO-090). */
+    /** The intent keys mameko's outbox holds as rows of the execution (MAMEKO-PROTO-091). */
     readonly heldIntents: (
       executionId: string,
     ) => Effect.Effect<ReadonlySet<string>, LocalStoreFailed>;

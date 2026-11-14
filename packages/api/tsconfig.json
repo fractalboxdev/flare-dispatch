@@ -3,7 +3,9 @@
   "compilerOptions": {
     // mameko exports its TypeScript sources with `.ts` import specifiers.
     "allowImportingTsExtensions": true,
-    "types": ["@cloudflare/workers-types", "node"]
+    "types": ["@cloudflare/workers-types", "node"],
+    // mameko's egress package exports a Workers entry under the `workerd` condition, which wrangler bundles.
+    "customConditions": ["workerd"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "../../vendor/mameko/packages/egress/src/wasm.d.ts"]
 }

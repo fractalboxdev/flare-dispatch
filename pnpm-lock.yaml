@@ -977,12 +977,18 @@ importers:
 
   vendor/mameko/packages/host-cloudflare:
     dependencies:
+      '@cloudflare/containers':
+        specifier: 0.3.7
+        version: 0.3.7
       '@effect/sql-d1':
         specifier: 4.0.6
         version: 4.0.6(effect@4.0.6)
       '@fractalboxdev/mameko-coordinator':
         specifier: workspace:*
         version: link:../coordinator
+      '@fractalboxdev/mameko-egress':
+        specifier: workspace:*
+        version: link:../egress
       '@fractalboxdev/mameko-engine':
         specifier: workspace:*
         version: link:../engine

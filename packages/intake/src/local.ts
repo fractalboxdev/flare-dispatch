@@ -1,7 +1,7 @@
 // The local submit: a device's `local.register` under a capacity lease, which the control plane's local registration
 // port passes here, becomes one admission request of trigger kind `local` with the `local-only` placement
 // constraint, under which the control plane posts no GitHub check and admits no cloud spend (FD-INT-061). mameko
-// checks the capacity lease before the port is called (MAMEKO-PROTO-089).
+// checks the capacity lease before the port is called (MAMEKO-PROTO-090).
 import { Effect, Schema } from "effect";
 import { IntakeConfig, type Admission, type ClassResolver } from "./config.ts";
 import type { HeldCheckReporter } from "./ports.ts";

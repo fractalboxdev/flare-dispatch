@@ -2,7 +2,7 @@
 // The device executor passes the lease, the outcome, each command's exit status and the digests it computed after the
 // job sandbox exited; the builder answers an unsigned DSSE envelope whose payload is an in-toto Statement v1, and the
 // device executor signs `dssePae(payloadType, payload)` through the key helper under the `statement` signing purpose
-// (MAMEKO-EXEC-131).
+// (MAMEKO-EXEC-133).
 import {
   CodeSigningHash,
   digestSet,

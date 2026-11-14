@@ -9,7 +9,7 @@ const notImplemented = (component: string, waitsOn: string) =>
     { status: 501 },
   );
 
-/** One per Container pool: mameko's pool controller (MAMEKO-HOST-052), which host-cloudflare does not export yet. */
+/** One per Container pool: mameko's pool controller (MAMEKO-HOST-058), which host-cloudflare does not export yet. */
 export class PoolController extends DurableObject {
   override async fetch(): Promise<Response> {
     return notImplemented("PoolController", "host-cloudflare's pool controller class");

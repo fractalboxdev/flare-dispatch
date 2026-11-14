@@ -56,7 +56,7 @@ export const requestLeaseFields = (
   execution: { readonly scope_id: string; readonly deadline_at: number },
 ) => ({
   // The run-definition digest the runner checks the lease's run against; a run the catalogue lacks names a digest no
-  // run has, so a runner refuses it (MAMEKO-EXEC-153).
+  // run has, so a runner refuses it (MAMEKO-EXEC-155).
   run_digest:
     entry === null
       ? NO_RUN_DIGEST
