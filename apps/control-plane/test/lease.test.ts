@@ -24,16 +24,16 @@ const entry = (run: string): CatalogEntry => {
 const DIGEST = `sha256:${"a".repeat(64)}`;
 
 describe("a lease's image digest", () => {
-  it("MAMEKO-EXEC-040 names no image for a host execution on a device", () => {
+  it("MAMEKO-EXEC-041 names no image for a host execution on a device", () => {
     expect(Effect.runSync(imageDigestOf(entry("check"), "device", undefined))).toBe(NO_IMAGE);
   });
 
-  it("MAMEKO-EXEC-040 names the gate image by digest for a cloud lease", () => {
+  it("MAMEKO-EXEC-041 names the gate image by digest for a cloud lease", () => {
     expect(Effect.runSync(imageDigestOf(entry("check"), "cloudflare", DIGEST))).toBe(DIGEST);
     expect(Effect.runSync(imageDigestOf(entry("worker-deploy"), "device", DIGEST))).toBe(DIGEST);
   });
 
-  it("MAMEKO-EXEC-040 fails a lease that needs the gate image on a deploy that pins none", () => {
+  it("MAMEKO-EXEC-041 fails a lease that needs the gate image on a deploy that pins none", () => {
     const exit = Effect.runSyncExit(imageDigestOf(entry("worker-deploy"), "cloudflare", "latest"));
     expect(Exit.isFailure(exit)).toBe(true);
   });

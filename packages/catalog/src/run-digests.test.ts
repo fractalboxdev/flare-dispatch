@@ -1,5 +1,5 @@
 // The committed run-definition digests (`run-digests.json`) are each catalogue run's, so a lease's `run_digest` names
-// the run the device runner holds and the runner accepts it (MAMEKO-EXEC-144).
+// the run the device runner holds and the runner accepts it (MAMEKO-EXEC-147).
 import { readFileSync } from "node:fs";
 import { runDefinitionDigest } from "@fractalboxdev/mameko-run";
 import { describe, expect, it } from "vitest";

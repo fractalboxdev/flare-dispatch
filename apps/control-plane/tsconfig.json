@@ -2,7 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "allowImportingTsExtensions": true,
-    "types": ["@cloudflare/workers-types", "node"]
+    "types": ["@cloudflare/workers-types", "node"],
+    // mameko's egress package exports a Workers entry under the `workerd` condition, which wrangler bundles.
+    "customConditions": ["workerd"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }

@@ -1,5 +1,5 @@
 // FlareDispatch's writeback gate: what a registered local execution may write to GitHub (specs/local-scheduler.md
-// § Writeback from local work, MAMEKO-PROTO-090).
+// § Writeback from local work, MAMEKO-PROTO-091).
 import { WritebackGate } from "@fractalboxdev/mameko-ports";
 import { Clock, Context, Effect, Exit, Layer, Schema } from "effect";
 import {
