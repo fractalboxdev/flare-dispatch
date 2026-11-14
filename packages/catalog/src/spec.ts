@@ -110,7 +110,7 @@ const gate = (
   ...fields,
 });
 
-/** Where an execution of a run may run. `control` is the control pool: no container (MAMEKO-EXEC-054). */
+/** Where an execution of a run may run. `control` is the control pool: no container (MAMEKO-EXEC-055). */
 export type ExecutorKind = "device" | "cloud" | "control";
 
 /** What the control plane reads of a run: `defineRun`'s fields and the declarations beside them (FD-RUN-062). */

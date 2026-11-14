@@ -1,5 +1,5 @@
 // The device extension process: `fd-device-extension <plane id> <L1 directory>`, started by mameko's device executor
-// with its end of a socketpair as file descriptor 3 (MAMEKO-EXEC-154). L1 is the cache package's, on the directory
+// with its end of a socketpair as file descriptor 3 (MAMEKO-EXEC-155). L1 is the cache package's, on the directory
 // named; L2 is `absentL2` until the extension holds a presigned-URL transport under its lease. Where the JSON file
 // `FD_PEER_CACHE` names enables peer cache, the extension serves its L1 entries to the devices of its member on the
 // address the file names and fetches a miss from the peers it lists (FD-CACHE-014).

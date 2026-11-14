@@ -140,7 +140,7 @@ const lease = (read: string[], write: string | null) => ({
 });
 
 describe("device extension", () => {
-  it("MAMEKO-EXEC-154 says hello naming the plane, the version and its operations, with the statement operation", () => {
+  it("MAMEKO-EXEC-155 says hello naming the plane, the version and its operations, with the statement operation", () => {
     const h = hello("plane-1");
     expect(answerHello(h, { planeId: "plane-1", accepted: { min: 1, max: 1 } }).type).toBe(
       "extension.welcome",
@@ -347,7 +347,7 @@ describe("device extension", () => {
     });
   });
 
-  it("MAMEKO-EXEC-154 the process answers over file descriptor 3", async () => {
+  it("MAMEKO-EXEC-155 the process answers over file descriptor 3", async () => {
     const [ours, theirs] = await socketPair();
     const main = fileURLToPath(new URL("./extension-main.ts", import.meta.url).href);
     const child = spawn(

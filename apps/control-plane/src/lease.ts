@@ -22,7 +22,7 @@ export class GateImageUnpinned extends Schema.TaggedError<GateImageUnpinned>()(
 ) {}
 
 /**
- * The image a lease names (MAMEKO-EXEC-040): none for a host execution on a device, else the gate image by digest
+ * The image a lease names (MAMEKO-EXEC-041): none for a host execution on a device, else the gate image by digest
  * (`infra/v2/Dockerfile.gate`), which the deploy holds as `GATE_IMAGE_DIGEST`. Without it such a lease fails.
  */
 export const imageDigestOf = (
@@ -56,7 +56,7 @@ export const requestLeaseFields = (
   execution: { readonly scope_id: string; readonly deadline_at: number },
 ) => ({
   // The run-definition digest the runner checks the lease's run against; a run the catalogue lacks names a digest no
-  // run has, so a runner refuses it (MAMEKO-EXEC-155).
+  // run has, so a runner refuses it (MAMEKO-EXEC-156).
   run_digest:
     entry === null
       ? NO_RUN_DIGEST

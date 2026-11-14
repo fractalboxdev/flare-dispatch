@@ -1,7 +1,7 @@
 # FlareDispatch v2 gate image: the runner child of a cloud lease and the toolchain its gate jobs run.
 #
 # The cloud executor starts `fd-runner` once per lease with the run payload on stdin; the runner answers one result
-# line on stdout (MAMEKO-EXEC-141). A lease names this image by digest (MAMEKO-EXEC-040), so every input below is
+# line on stdout (MAMEKO-EXEC-142). A lease names this image by digest (MAMEKO-EXEC-041), so every input below is
 # pinned and `sandbox-image` refuses an unpinned one (FD-GATE-078).
 #
 # Build context: the repository root, including the `vendor/mameko` submodule. `.dockerignore` keeps node_modules

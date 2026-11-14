@@ -9,7 +9,7 @@ Status: Proposed · 2026-11-08
 - A scanner reads its configuration and suppressions from the checkout, and the pull-request author controls the checkout. Measured on gitleaks 8.30.1, zizmor 1.32.0 and OSV-Scanner 2.7.0 with no extra flags, a pull request that adds a suppression hides its own finding from each scanner: all three exit 0.
 - `dispatchers` and `operators` are flat lists. A member of `dispatchers` may name any run on any repository, and `check` takes commands from dispatch inputs (FD-GATE-001). A member of `operators` holds `force-admit`, `top-up` and `revoke`. An automated caller that needs a narrow authority has no list to join.
 - An organization's security policy changes on its own schedule, and that organization needs its CI to enforce the policy with no runtime dependency on the system that wrote it.
-- mameko's terminal write inserts one kind, the outcome mapping's `surface_kind` ([outbox.md § Lifecycle intents](https://github.com/fractalboxdev/mameko/blob/14ed65e41ee8c57ed7ec20d608a511d97f5e4b78/specs/outbox.md#lifecycle-intents)). A second kind declared `on: terminal` gets no row.
+- mameko's terminal write inserts one kind, the outcome mapping's `surface_kind` ([outbox.md § Lifecycle intents](https://github.com/fractalboxdev/mameko/blob/d12b8175d0a7f6020e5dc4ef1bc086c700fbe346/specs/outbox.md#lifecycle-intents)). A second kind declared `on: terminal` gets no row.
 
 ## Decision
 
@@ -40,7 +40,7 @@ Status: Proposed · 2026-11-08
 | `on: accepted` | In mameko today | Misses every outcome with no accepted result: `halt`, deadline, cancel and a lost execution; lost on criterion 5 |
 | **Scoped lists (chosen)** | Each automated caller holds only its operations | Two more overlay values and more gate checks |
 | Join `dispatchers` and `operators` | No new surface | A scan caller gains command execution, and a containment caller gains `force-admit` and `revoke`; lost on criterion 6 |
-| A `cancel-all` route | One call | `halt-all` already stops every root below rank 0 ([MAMEKO-SPD-057](https://github.com/fractalboxdev/mameko/blob/14ed65e41ee8c57ed7ec20d608a511d97f5e4b78/specs/spend.md)); only `release` remains, and the list and `cancel` routes reach it |
+| A `cancel-all` route | One call | `halt-all` already stops every root below rank 0 ([MAMEKO-SPD-057](https://github.com/fractalboxdev/mameko/blob/d12b8175d0a7f6020e5dc4ef1bc086c700fbe346/specs/spend.md)); only `release` remains, and the list and `cancel` routes reach it |
 
 ### Scanner behaviour
 

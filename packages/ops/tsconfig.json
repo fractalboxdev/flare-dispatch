@@ -7,5 +7,5 @@
     // mameko's egress package exports a Workers entry under the `workerd` condition, which wrangler bundles.
     "customConditions": ["workerd"]
   },
-  "include": ["src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts", "../../vendor/mameko/packages/egress/src/wasm.d.ts"]
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts"]
 }
