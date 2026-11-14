@@ -1,4 +1,4 @@
-// The settle-time drain's wiring (MAMEKO-HOST-063): the committed template binds `MAMEKO_DRAIN` to this Worker's own
+// The settle-time drain's wiring (MAMEKO-HOST-064): the committed template binds `MAMEKO_DRAIN` to this Worker's own
 // `MamekoDrain` entrypoint, which the Worker module exports, and a deploy without the App drains nothing through it.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

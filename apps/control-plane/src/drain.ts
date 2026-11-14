@@ -1,4 +1,4 @@
-// The settle-time drain (MAMEKO-HOST-063): the `ExecutionEngine` object calls this Worker's `MamekoDrain` entrypoint
+// The settle-time drain (MAMEKO-HOST-064): the `ExecutionEngine` object calls this Worker's `MamekoDrain` entrypoint
 // through the `MAMEKO_DRAIN` service binding when an execution settles, so its outcome rows reach GitHub then rather
 // than at the next minute tick. The tick's drain still runs every minute and takes any row this pass leaves.
 import { actuatorBindings, drainOnce } from "@fractalboxdev/mameko-coordinator";
