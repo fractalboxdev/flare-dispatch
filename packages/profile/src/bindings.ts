@@ -139,6 +139,11 @@ export const PolicyRule = Schema.Struct({
   acceptsFailingRequiredCheck: Schema.optional(Schema.Boolean),
   /** The rule lifts the run's `limits.qosCeiling`. */
   liftsCeiling: Schema.optional(Schema.Boolean),
+  /**
+   * On a release rule, one whose `match.run` names a run on the release allowlist: each release of that run gets a
+   * reproduction execution (specs/provenance.md § Reproduction).
+   */
+  reproduce: Schema.optional(Schema.Boolean),
   /** The callers whose `class` input may raise up to `class` (step 6). */
   callers: Schema.optional(
     Schema.Array(
