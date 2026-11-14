@@ -905,7 +905,7 @@ export const awsBudgetUnset: Finding = fail(
 );
 
 /**
- * The AWS Budgets action MAMEKO-EXEC-093 requires where a deploy carries the `aws` kind (FD-EXEC-083): the account
+ * The AWS Budgets action MAMEKO-EXEC-096 requires where a deploy carries the `aws` kind (FD-EXEC-083): the account
  * must carry an action that, with no approval step, applies a policy denying `ecs:RunTask` and `ecs:StartTask` on
  * every resource once actual spend reaches the overlay's `aws.budgetUsd`. Only STANDBY or EXECUTION_SUCCESS actions
  * qualify. The USD cost budget must be active at read completion, reset no more often than monthly, and cover all ECS

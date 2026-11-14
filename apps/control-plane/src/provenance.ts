@@ -318,7 +318,7 @@ export const writeAcceptedCloudStatement = (
     if (record === null)
       return yield* refuse("inputs-missing", "intake recorded no inputs for the execution");
     const artifacts = yield* query<{ readonly name: string }>(
-      `select name from artifacts where execution_id = ? and epoch = ? and r2_path is not null order by name`,
+      `select name from fd_artifacts where execution_id = ? and epoch = ? and r2_path is not null order by name`,
       accepted.executionId,
       accepted.epoch,
     );

@@ -348,7 +348,7 @@ export const FleetEntry = Schema.Struct({
   ),
 });
 
-/** The spend view of MAMEKO-SPD-058, in micro-USD, as `GET /v1/spend` answers it (FD-SPD-057). */
+/** The spend view of MAMEKO-SPD-060, in micro-USD, as `GET /v1/spend` answers it (FD-SPD-057). */
 export const SpendViewBody = Schema.Struct({
   month: Schema.String,
   budget: Schema.Number,

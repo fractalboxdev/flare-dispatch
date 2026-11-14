@@ -1,4 +1,4 @@
-// The spend view `GET /v1/spend` answers (FD-SPD-057): mameko's view of MAMEKO-SPD-058 over the D1 read model, the
+// The spend view `GET /v1/spend` answers (FD-SPD-057): mameko's view of MAMEKO-SPD-060 over the D1 read model, the
 // profile and the spend configuration the operator overlay delivers (specs/profile.md § Spend configuration,
 // FD-PROF-054), in the shape of the operability route's body. A store read that fails is `spend_unreadable` (FD-SPD-058).
 import { SpendUnreadable, SpendView, type SpendViewBody } from "@fractalboxdev/flare-dispatch-ops";
@@ -20,7 +20,7 @@ import { profileOf, spendConfigOf, type ControlPlaneEnv } from "./config.ts";
 
 /**
  * The spend settings the view reads. Every executor this deploy leases is a device, which the burn lanes count at 0
- * (MAMEKO-SPD-048), so the rate card holds no hourly list rate; nothing measures `M` and `r`, so the measured reserve's
+ * (MAMEKO-SPD-050), so the rate card holds no hourly list rate; nothing measures `M` and `r`, so the measured reserve's
  * runway is unknown.
  */
 export const spendSettingsOf = (profile: Profile, spend: SpendConfig): SpendSettings => ({

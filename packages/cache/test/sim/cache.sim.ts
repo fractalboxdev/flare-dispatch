@@ -294,7 +294,7 @@ const sqliteArtifactDb = () => {
       (
         sqlite
           .prepare(
-            "select count(*) as n from artifacts where execution_id = ? and epoch = ? and name = ?",
+            "select count(*) as n from fd_artifacts where execution_id = ? and epoch = ? and name = ?",
           )
           .get(executionId, epoch, name) as { n: number }
       ).n,
