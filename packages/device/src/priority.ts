@@ -1,5 +1,5 @@
 // Each class's job-sandbox CPU priority on a device, from the class catalogue's device-eligible ranks
-// (FD-EXEC-059, MAMEKO-EXEC-067).
+// (FD-EXEC-059, MAMEKO-EXEC-068).
 import type { Profile } from "@fractalboxdev/flare-dispatch-profile";
 
 export type AppleQos = "user-initiated" | "utility" | "background";

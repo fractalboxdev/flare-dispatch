@@ -1,5 +1,5 @@
 // Writes `run-digests.json`: each catalogue run's run-definition digest, the `run_digest` a lease names and the runner
-// checks against the run it holds (MAMEKO-EXEC-147). The control plane reads the file, since the run modules import the
+// checks against the run it holds (MAMEKO-EXEC-148). The control plane reads the file, since the run modules import the
 // runner's process code, which a Worker cannot load. `pnpm --filter @fractalboxdev/flare-dispatch-catalog
 // gen:run-digests` runs it; `run-digests.test.ts` fails when the committed file differs.
 import { writeFileSync } from "node:fs";
