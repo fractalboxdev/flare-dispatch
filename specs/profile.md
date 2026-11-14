@@ -55,7 +55,7 @@ No class declares `device_eligible` or `deadline_offset`, so every class may run
 
 ### Class resolution
 
-`resolveClass` is the class-resolution binding. Its declared inputs are `protection-snapshot`, the target branch's ruleset and branch-protection required set, and `policy-rules`, the repository's policy rules; its default class is `batch`. A policy rule sets a class, the repository's confidentiality mode, or both, and a rule that sets only a confidentiality mode takes no part in class resolution. `resolveClass` applies seven steps in order, and attaches the label `security-scan` to a run `security-gate` or `security-rescan` whatever class it resolves.
+`resolveClass` is the class-resolution binding. Its declared inputs are `protection-snapshot`, the target branch's ruleset and branch-protection required set, and `policy-rules`, the repository's policy rules; its default class is `batch`. A policy rule sets a class, the repository's confidentiality mode, or both, and a rule that sets only a confidentiality mode takes no part in class resolution. A release rule, one whose `match.run` names a run on the release allowlist, may also set `reproduce: true` ([provenance.md](provenance.md) § Reproduction). `resolveClass` applies seven steps in order, and attaches the label `security-scan` to a run `security-gate` or `security-rescan` whatever class it resolves.
 
 | Step | Rule |
 | --- | --- |
