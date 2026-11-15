@@ -78,6 +78,11 @@
     // Worker secret `MODEL_LEASE_SECRET`, distinct from every other key.
     "MODEL_REGISTRY": "{{models.registry}}",
     "MODEL_FALLBACK_PRICE_USD_PER_MTOK": "{{models.fallbackPriceUsdPerMTok}}",
+    // The `bedrock` route's region and the role the control plane assumes for it, empty where the overlay sets none;
+    // the `AssumeRole` call is signed with the Worker secrets `BEDROCK_ACCESS_KEY_ID` and `BEDROCK_SECRET_ACCESS_KEY`
+    // (specs/model-gateway.md FD-MDL-070).
+    "MODEL_BEDROCK_REGION": "{{models.bedrock.region}}",
+    "MODEL_BEDROCK_ROLE_ARN": "{{models.bedrock.roleArn}}",
   },
   // The Workers AI binding: the `workers-ai` route's only credential (specs/model-gateway.md § Registered route kinds).
   "ai": { "binding": "AI" },

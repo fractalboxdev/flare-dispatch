@@ -12,7 +12,11 @@
 //   so a job's model call reaches the route without the token and is answered `unauthenticated`.
 // - A call routes by the repository's confidentiality mode: a scope that is not `non-confidential` reaches no hosted
 //   model (MAMEKO-MDL-008), so the call is `model_route_refused`. A hosted call goes to the first entry of the provider
-//   registry that serves its tier on a route kind this deploy holds: `workers-ai` through the `AI` binding (FD-MDL-020).
+//   registry that serves its tier on a route kind this deploy holds: `workers-ai` through the `AI` binding, and
+//   `bedrock` where the deploy names `models.bedrock.region` and `models.bedrock.roleArn` and holds the Worker secrets
+//   `BEDROCK_ACCESS_KEY_ID` and `BEDROCK_SECRET_ACCESS_KEY` (FD-MDL-020). The `bedrock` route signs each InvokeModel
+//   with SigV4 under the role's credentials from an STS `AssumeRole` signed under those secrets, reused until 5 min
+//   before they expire (FD-MDL-024, FD-MDL-070).
 // - Spend: the gateway reserves the call maximum against the execution's model allowance in `model_calls` before the
 //   upstream request and settles at the provider-reported cost (MAMEKO-MDL-025 to MAMEKO-MDL-028), pricing a
 //   `workers-ai` entry only at its stated rate (FD-MDL-021). The model-call record goes to the Worker log with no
@@ -24,6 +28,8 @@ import {
   type ErrorCode,
 } from "@fractalboxdev/flare-dispatch-api";
 import {
+  bedrockRoute,
+  cachedAssumeRole,
   FD_ROUTE_KINDS,
   sendFdHostedCall,
   Tier,
@@ -65,6 +71,13 @@ export interface ModelGatewayEnv extends ConfidentialityEnv {
   readonly MODEL_REGISTRY?: unknown;
   /** The rendered `{{models.fallbackPriceUsdPerMTok}}`, 75 where the overlay sets none (MAMEKO-MDL-022). */
   readonly MODEL_FALLBACK_PRICE_USD_PER_MTOK?: unknown;
+  /** The rendered `{{models.bedrock.region}}`: the region of the `bedrock` route's STS and Bedrock runtime endpoints. */
+  readonly MODEL_BEDROCK_REGION?: unknown;
+  /** The rendered `{{models.bedrock.roleArn}}`: the role the control plane assumes for the `bedrock` route. */
+  readonly MODEL_BEDROCK_ROLE_ARN?: unknown;
+  /** The Worker secrets the `AssumeRole` call is signed with; neither reaches an executor. */
+  readonly BEDROCK_ACCESS_KEY_ID?: string;
+  readonly BEDROCK_SECRET_ACCESS_KEY?: string;
 }
 
 export const signModelLeaseToken = (secret: string, scope: LeaseTokenScope): Promise<string> =>
@@ -119,11 +132,87 @@ const fallbackPriceOf = (env: Pick<ModelGatewayEnv, "MODEL_FALLBACK_PRICE_USD_PE
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 };
 
-/** The registered route kinds this deploy holds a route for: `workers-ai` with the `AI` binding. */
+/** A var's text, trimmed; none where it is unset, empty or not text. */
+const textOf = (raw: unknown): string | undefined => {
+  const value = varValue(raw) ?? raw;
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+};
+
+/** The role session name the `bedrock` route's `AssumeRole` calls carry, which the role's CloudTrail records show. */
+export const BEDROCK_SESSION_NAME = "flare-dispatch-model-gateway";
+
+/**
+ * The assumed role's credentials by `fetch`, region, role and base key, kept for the isolate's lifetime so a call
+ * reuses them until they near expiry (FD-MDL-070).
+ */
+const assumedRoles = new WeakMap<
+  typeof globalThis.fetch,
+  Map<string, ReturnType<typeof cachedAssumeRole>>
+>();
+
+type HostedRoute = ReturnType<typeof bedrockRoute>;
+
+/** The `bedrock` route where the deploy names its region and role and holds the base secrets; none otherwise. */
+const bedrockOf = (
+  env: Pick<
+    ModelGatewayEnv,
+    | "MODEL_BEDROCK_REGION"
+    | "MODEL_BEDROCK_ROLE_ARN"
+    | "BEDROCK_ACCESS_KEY_ID"
+    | "BEDROCK_SECRET_ACCESS_KEY"
+  >,
+  fetch: typeof globalThis.fetch,
+): HostedRoute | undefined => {
+  const region = textOf(env.MODEL_BEDROCK_REGION);
+  const roleArn = textOf(env.MODEL_BEDROCK_ROLE_ARN);
+  const accessKeyId = env.BEDROCK_ACCESS_KEY_ID;
+  const secretAccessKey = env.BEDROCK_SECRET_ACCESS_KEY;
+  if (
+    region === undefined ||
+    roleArn === undefined ||
+    accessKeyId === undefined ||
+    accessKeyId === "" ||
+    secretAccessKey === undefined ||
+    secretAccessKey === ""
+  )
+    return undefined;
+  const byFetch = assumedRoles.get(fetch) ?? new Map();
+  assumedRoles.set(fetch, byFetch);
+  const key = `${region}\n${roleArn}\n${accessKeyId}`;
+  const credentials =
+    byFetch.get(key) ??
+    cachedAssumeRole({
+      region,
+      roleArn,
+      sessionName: BEDROCK_SESSION_NAME,
+      credentials: { accessKeyId, secretAccessKey },
+      fetch,
+    });
+  byFetch.set(key, credentials);
+  return bedrockRoute({ region, credentials, fetch });
+};
+
+/**
+ * The registered route kinds this deploy holds a route for: `workers-ai` with the `AI` binding, and `bedrock` with its
+ * region, role and base secrets.
+ */
 const routesOf = (
-  env: Pick<ModelGatewayEnv, "AI">,
-): Partial<Record<FdRouteKind, ReturnType<typeof workersAiRoute>>> =>
-  env.AI === undefined ? {} : { "workers-ai": workersAiRoute(env.AI) };
+  env: Pick<
+    ModelGatewayEnv,
+    | "AI"
+    | "MODEL_BEDROCK_REGION"
+    | "MODEL_BEDROCK_ROLE_ARN"
+    | "BEDROCK_ACCESS_KEY_ID"
+    | "BEDROCK_SECRET_ACCESS_KEY"
+  >,
+  fetch: typeof globalThis.fetch,
+): Partial<Record<FdRouteKind, HostedRoute>> => {
+  const bedrock = bedrockOf(env, fetch);
+  return {
+    ...(env.AI === undefined ? {} : { "workers-ai": workersAiRoute(env.AI) }),
+    ...(bedrock === undefined ? {} : { bedrock }),
+  };
+};
 
 const isRouteKind = (kind: string): kind is FdRouteKind =>
   (FD_ROUTE_KINDS as readonly string[]).includes(kind);
@@ -192,6 +281,7 @@ export const modelGatewayFetch = async (
   request: Request,
   env: ModelGatewayEnv,
   now: number = Date.now(),
+  fetch: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<Response | null> => {
   const { pathname } = new URL(request.url);
   if (!pathname.startsWith(MODEL_GATEWAY_PATH)) return null;
@@ -236,7 +326,7 @@ export const modelGatewayFetch = async (
   const route = routeModelCall({ mode, tier: call.tier, location: { kind: "cloud" } });
   if (route._tag !== "Hosted")
     return refuse("model_route_refused", `a ${mode} repository reaches no hosted model`);
-  const routes = routesOf(env);
+  const routes = routesOf(env, fetch);
   const entry = registryOf(env).find(
     (e) =>
       e.serves.includes(call.tier) && isRouteKind(e.routeKind) && routes[e.routeKind] !== undefined,

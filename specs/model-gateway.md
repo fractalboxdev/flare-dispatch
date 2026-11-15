@@ -23,9 +23,9 @@ mameko lets an application register a route kind through the provider registry's
 | Route kind | Reached from | Credential | Price |
 | --- | --- | --- | --- |
 | `workers-ai` | The control plane, through the Workers AI binding, a runtime-specific feature of `host-cloudflare` | The binding | A per-token rate derived from the model's Neurons price |
-| `bedrock` | The control plane, SigV4-signed by the gateway | The role the control plane assumes | The model entry's price, or the fallback rate |
+| `bedrock` | The control plane, SigV4-signed by the gateway | The role in the overlay's `models.bedrock.roleArn`, which the control plane assumes with STS `AssumeRole` in `models.bedrock.region` | The model entry's price, or the fallback rate |
 
-FlareDispatch composes only `host-cloudflare`, so the `workers-ai` route always has its binding.
+FlareDispatch composes only `host-cloudflare`, so the `workers-ai` route always has its binding. The `bedrock` route exists on a deploy whose overlay sets `models.bedrock.region` and `models.bedrock.roleArn` and whose Worker holds the secrets `BEDROCK_ACCESS_KEY_ID` and `BEDROCK_SECRET_ACCESS_KEY`, the IAM credentials the `AssumeRole` call is signed with. The route calls `InvokeModel` on `bedrock-runtime.<region>.amazonaws.com` with the model entry's `upstreamModel` as the model id, signed under the role's temporary credentials; on any other deploy, the gateway skips `bedrock` entries.
 
 ## Requirements
 
@@ -35,6 +35,7 @@ FlareDispatch composes only `host-cloudflare`, so the `workers-ai` route always 
 - **FD-MDL-021** · phase 0 · `V-UNIT` — The model gateway must not price a `workers-ai` model entry at the fallback rate of [MAMEKO-MDL-022](https://github.com/fractalboxdev/mameko/blob/045fe5c576aa79ade726e0a08c30eb6cbf02afd1/specs/model-gateway.md).
 - **FD-MDL-022** · phase 0 · `V-DEPLOY` — If a `workers-ai` model entry states no per-token rate derived from its Neurons price, then the deploy check must fail.
 - **FD-MDL-024** · phase 0 · `V-UNIT` — The `bedrock` route must sign its requests in the control plane, and the control plane must be the only component that reaches `bedrock`.
+- **FD-MDL-070** · phase 0 · `V-UNIT` — The `bedrock` route must sign each `InvokeModel` request with SigV4 under the temporary credentials of an STS `AssumeRole` of `models.bedrock.roleArn` on `sts.<region>.amazonaws.com`, itself signed under `BEDROCK_ACCESS_KEY_ID` and `BEDROCK_SECRET_ACCESS_KEY`, and must reuse those credentials until 5 min before they expire; if the `AssumeRole` call fails, then the model route must answer 503 `unavailable` and send no `InvokeModel` request.
 
 ## Open items
 

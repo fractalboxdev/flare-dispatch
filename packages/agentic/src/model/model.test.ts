@@ -262,15 +262,18 @@ describe("bedrock route", () => {
   it("[FD-MDL-024] no module the executor entry imports reaches the bedrock route or its signer", () => {
     const routes = fileURLToPath(new URL("./routes.ts", import.meta.url));
     const sigv4 = fileURLToPath(new URL("./sigv4.ts", import.meta.url));
+    const sts = fileURLToPath(new URL("./sts.ts", import.meta.url));
     const executor = reachable(fileURLToPath(new URL("../executor.ts", import.meta.url)));
     expect(executor.files.has(routes)).toBe(false);
     expect(executor.files.has(sigv4)).toBe(false);
+    expect(executor.files.has(sts)).toBe(false);
     expect(executor.files.size).toBeGreaterThan(10);
     expect([...executor.packages].filter((p) => p.startsWith(AGENTIC_PACKAGE))).toEqual([]);
     // The control-plane entry reaches both, so the walk follows the imports that would carry them.
     const index = reachable(fileURLToPath(new URL("../index.ts", import.meta.url)));
     expect(index.files.has(routes)).toBe(true);
     expect(index.files.has(sigv4)).toBe(true);
+    expect(index.files.has(sts)).toBe(true);
   });
 });
 
