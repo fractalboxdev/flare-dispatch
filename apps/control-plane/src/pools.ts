@@ -75,6 +75,9 @@ const CLIENT_HEADERS = [
 /** A git smart-HTTP client's methods; a push needs `POST` to `git-receive-pack`, which no repository grant serves. */
 const GIT_METHODS = ["GET", "POST"];
 
+/** The headers a job's GitHub REST client sends beside an HTTPS client's own. */
+const GITHUB_API_HEADERS = [...CLIENT_HEADERS, "x-github-api-version"];
+
 /** The largest model request a job sends through the `model-gateway` grant. */
 const MODEL_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
 
@@ -82,8 +85,9 @@ const MODEL_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
  * The grant catalogue each Container's outbound handler decides over (MAMEKO-ISO-021): `git-remote`, the repository's git
  * host for the checkout of the `setup` phase (FD-GATE-110); `cf-api`, the Cloudflare API under the deploy token the
  * Worker holds (FD-GATE-066); `deploy-claim`, `POST` to the dispatcher's deploy-claim route alone, where
- * `worker-deploy` presents its lease's deploy-claim token (FD-GATE-067); and `model-gateway`, `POST` to the dispatcher's
- * model route alone, which an agentic recipe reaches in its `agent` phase (FD-AGT-010). `cf-api` carries no credential
+ * `worker-deploy` presents its lease's deploy-claim token (FD-GATE-067); `model-gateway`, `POST` to the dispatcher's
+ * model route alone, which an agentic recipe reaches in its `agent` phase (FD-AGT-010); and `github-api-read`, `GET` of
+ * GitHub's repository routes with no credential, which answer a public repository's reads alone. `cf-api` carries no credential
  * on a deploy without that token, so a request under it leaves unauthenticated and the API refuses it. `deploy-claim`
  * attaches no credential. `model-gateway` attaches none either: a grant's credential is one value for every lease, and
  * the per-lease token the model route takes is minted for one lease. A deploy that names no `PUBLIC_ORIGIN` has neither
@@ -101,6 +105,14 @@ export const poolGrants = (
       pathPrefix: "/",
       maxBodyBytes: 1024 * 1024,
       headers: CLIENT_HEADERS,
+    },
+    {
+      name: "github-api-read",
+      host: "api.github.com",
+      methods: ["GET"],
+      pathPrefix: "/repos/",
+      maxBodyBytes: 0,
+      headers: GITHUB_API_HEADERS,
     },
     {
       name: "cf-api",
@@ -138,10 +150,19 @@ export const poolGrants = (
 };
 
 /**
+ * The runs whose `agent` phase reads GitHub's repository routes with no credential: `triage-prs` reads a repository's
+ * open pull requests, their check runs and reviews, and declares `outbound`. `triage-issues` reads issues, untrusted
+ * input beside private data, so a host beyond the model gateway in its `agent` phase would complete the trifecta
+ * (FD-AGT-005); it holds none.
+ */
+const GITHUB_API_READERS: ReadonlySet<string> = new Set(["triage-prs"]);
+
+/**
  * Each catalogue run's grant names per egress phase: the grants its spec declares; for a run that requires
  * `Workspace`, the `setup` profile's `git-remote` base grant (FD-PROF-050), through which the executor checks the
- * lease's source out before the job starts; and for an agentic recipe that calls models, the `agent` profile's
- * `model-gateway` base grant, so its `agent` phase reaches the model route.
+ * lease's source out before the job starts; for an agentic recipe that calls models, the `agent` profile's
+ * `model-gateway` base grant, so its `agent` phase reaches the model route; and for a run of `GITHUB_API_READERS`,
+ * `github-api-read`.
  */
 export const RUN_GRANTS: PoolControllerSettings["runGrants"] = Object.fromEntries(
   Object.values(RUN_CATALOG).map(({ spec, agentic }) => [
@@ -156,6 +177,7 @@ export const RUN_GRANTS: PoolControllerSettings["runGrants"] = Object.fromEntrie
       agent: [
         ...spec.grants.agent,
         ...(agentic?.declaration.needsModel === true ? ["model-gateway"] : []),
+        ...(GITHUB_API_READERS.has(spec.name) ? ["github-api-read"] : []),
       ],
     },
   ]),

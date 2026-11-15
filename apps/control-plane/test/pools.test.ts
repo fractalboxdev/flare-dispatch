@@ -1,6 +1,7 @@
 // The Container pools' declarations, settings, grants and launch keys (specs/architecture.md § Components).
 import { RUN_CATALOG } from "@fractalboxdev/flare-dispatch-catalog";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
+import { decide } from "@fractalboxdev/mameko-egress";
 import { launchGrants } from "@fractalboxdev/mameko-host-cloudflare";
 import { describe, expect, it } from "vitest";
 import type { ControlPlaneEnv } from "../src/config.ts";
@@ -116,8 +117,10 @@ describe("Container pools", () => {
       ]);
       expect(grants.agent[0]?.credential, run).toBeUndefined();
     }
-    // `triage-prs` calls no model, so its agent phase reaches no host.
-    expect(launchGrants(settings, "triage-prs").agent).toEqual([]);
+    // `triage-prs` calls no model, so its agent phase holds no model route.
+    expect(launchGrants(settings, "triage-prs").agent.map((g) => g.name)).toEqual([
+      "github-api-read",
+    ]);
     // A gate run's phases hold no model route.
     for (const run of ["worker-deploy", "security-gate", "sandbox-image"])
       expect(
@@ -141,6 +144,53 @@ describe("Container pools", () => {
     const git = launchGrants(settings, "pr-review").setup[0]!;
     expect(git).toMatchObject({ host: "github.com", methods: ["GET", "POST"], pathPrefix: "/" });
     expect(git.credential).toBeUndefined();
+  });
+
+  it("[FD-AGT-005] github-api-read covers GET of GitHub's repository routes with no credential, in triage-prs' agent phase alone", () => {
+    const settings = poolSettings(env({ PUBLIC_ORIGIN: "https://ci.example.com/" }), profile);
+    const read = launchGrants(settings, "triage-prs").agent.find(
+      (g) => g.name === "github-api-read",
+    );
+    expect(read).toMatchObject({
+      host: "api.github.com",
+      methods: ["GET"],
+      pathPrefix: "/repos/",
+      maxBodyBytes: 0,
+    });
+    expect(read!.credential).toBeUndefined();
+    // The Container's outbound handler decides each request with mameko's egress decision over the phase's grants.
+    const agent = launchGrants(settings, "triage-prs").agent;
+    const request = (method: string, path: string, headers = ["accept", "x-github-api-version"]) =>
+      decide(
+        { scheme: "https", host: "api.github.com", method, path, bodyBytes: 0, headers },
+        agent,
+        "enforce",
+      );
+    for (const path of [
+      "/repos/acme/app/pulls?state=open&per_page=100",
+      `/repos/acme/app/commits/${"a".repeat(40)}/check-runs?per_page=100`,
+      "/repos/acme/app/pulls/7/reviews?per_page=100",
+    ])
+      expect(request("GET", path), path).toEqual({
+        _tag: "Admit",
+        grant: "github-api-read",
+        credential: undefined,
+      });
+    expect(request("POST", "/repos/acme/app/issues")._tag).toBe("Deny");
+    expect(request("GET", "/user")._tag).toBe("Deny");
+    expect(request("GET", "/repos/acme/app/pulls", ["accept", "cookie"])._tag).toBe("Deny");
+    // `triage-issues` reads untrusted issues beside private data, so its agent phase reaches no host beyond the model
+    // route; no other run holds the grant in either phase.
+    for (const run of Object.keys(RUN_CATALOG).filter((r) => r !== "triage-prs")) {
+      const grants = launchGrants(settings, run);
+      expect(
+        [...grants.setup, ...grants.agent].map((g) => g.name),
+        run,
+      ).not.toContain("github-api-read");
+    }
+    expect(launchGrants(settings, "triage-issues").agent.map((g) => g.name)).toEqual([
+      "model-gateway",
+    ]);
   });
 
   it("[FD-ARCH-001] the launch keys are the secret's P-256 private JWK and its public half, and none for any other value", async () => {
