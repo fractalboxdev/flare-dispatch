@@ -530,7 +530,7 @@ describe("the source a run's executions check out", () => {
 describe("a host execution as intake reads it", () => {
   it("MAMEKO-ISO-001 places a production host execution on the cloud alone, and a development one anywhere", () => {
     for (const run of ["check", "oxlint", "gate-job"]) {
-      const production = catalogRuns("production")(run)!.placement({});
+      const production = catalogRuns("production")(run)!.placement!({});
       expect(production.labels).toContain("cloud-only");
       const kinds = eligibleKinds(buildProfile("production"), {
         class: "required",
@@ -539,7 +539,7 @@ describe("a host execution as intake reads it", () => {
       } as Parameters<typeof eligibleKinds>[1]).kinds;
       expect(kinds.length).toBeGreaterThan(0);
       expect(kinds).not.toContain("device");
-      expect(catalogRuns("development")(run)!.placement({}).labels).not.toContain("cloud-only");
+      expect(catalogRuns("development")(run)!.placement!({}).labels).not.toContain("cloud-only");
     }
   });
 });
