@@ -112,7 +112,7 @@ describe("buildStagedWrite", () => {
     const staging = await mkdtemp(join(tmpdir(), "fd-staging-"));
     dirs.push(staging);
     const stored = new Map<string, { bytes: Uint8Array; sha256: string }>();
-    const prefix = "artifacts/x1/2/";
+    const prefix = "artifact/x1/2/";
     const layer = stagedWritesLayer(
       dir,
       base,

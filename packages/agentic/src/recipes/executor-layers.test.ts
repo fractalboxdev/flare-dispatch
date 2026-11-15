@@ -208,7 +208,7 @@ const cloudConfig = (
       return new Response(JSON.stringify({ text }));
     }) as unknown as typeof fetch,
     artifacts: artifactPrefixSink(
-      "artifacts/01HEXEC0000000000000000000/1/",
+      "artifact/01HEXEC0000000000000000000/1/",
       async (key, bytes, sha256) => {
         stored.set(key, { bytes: new Uint8Array(bytes), sha256 });
       },
@@ -305,13 +305,13 @@ describe("the cloud executor's agentic layers", () => {
     );
     expect(result).toEqual({ _tag: "success" });
     const diff = git(dir, "diff", "--no-color", "--no-ext-diff", `${base}...${head}`);
-    const key = "artifacts/01HEXEC0000000000000000000/1/pr-review.diff";
+    const key = "artifact/01HEXEC0000000000000000000/1/pr-review.diff";
     expect([...stored.keys()]).toEqual([key]);
     expect(new TextDecoder().decode(stored.get(key)?.bytes).trim()).toBe(diff);
     expect(stored.get(key)?.sha256).toBe(sha(stored.get(key)?.bytes ?? new Uint8Array()));
     const published = JSON.stringify(intents.intents());
     expect(published).not.toContain("+more");
-    expect(published).not.toContain("artifacts/");
+    expect(published).not.toContain("artifact/");
   });
 
   it("[FD-AGT-064] [FD-AGT-065] [FD-AGT-066] self-heal-pr's repro runs on the checkout its edit loop edited, and only a green repro stages the edit", async () => {
@@ -350,7 +350,7 @@ describe("the cloud executor's agentic layers", () => {
       "mkdir -p src && printf 'fixed\\n' > src/status.txt",
     ]);
     expect(fixed.result).toEqual({ _tag: "success" });
-    const key = `artifacts/01HEXEC0000000000000000000/1/${STAGED_WRITE_MANIFEST}`;
+    const key = `artifact/01HEXEC0000000000000000000/1/${STAGED_WRITE_MANIFEST}`;
     const manifest = JSON.parse(new TextDecoder().decode(fixed.stored.get(key)?.bytes)) as {
       branch: string;
       entries: { path: string }[];
@@ -410,12 +410,12 @@ describe("the cloud executor's agentic layers", () => {
       );
     const keys: string[] = [];
     const ok = artifactsLayer(
-      artifactPrefixSink("artifacts/x1/1/", async (key) => void keys.push(key)),
+      artifactPrefixSink("artifact/x1/1/", async (key) => void keys.push(key)),
     );
     expect((await put(ok, "../escape"))._tag).toBe("Failure");
     expect((await put(ok, "a/./b"))._tag).toBe("Failure");
     expect((await put(ok, "review/diff.txt"))._tag).toBe("Success");
-    expect(keys).toEqual(["artifacts/x1/1/review/diff.txt"]);
+    expect(keys).toEqual(["artifact/x1/1/review/diff.txt"]);
     const down = artifactsLayer({ put: async () => Promise.reject(new Error("R2 down")) });
     expect((await put(down, "pr-review.diff"))._tag).toBe("Failure");
   });
@@ -490,7 +490,7 @@ describe("the cloud executor's agentic layers", () => {
     expect(table).toContain("x-older check: flaky");
     expect(table).not.toContain("x-green");
     expect([...stored.keys()]).toContain(
-      `artifacts/01HEXEC0000000000000000000/1/${STAGED_WRITE_MANIFEST}`,
+      `artifact/01HEXEC0000000000000000000/1/${STAGED_WRITE_MANIFEST}`,
     );
     expect(await readFile(join(dir, reportPath(now)), "utf8")).toContain("Two flaky tests.");
   });

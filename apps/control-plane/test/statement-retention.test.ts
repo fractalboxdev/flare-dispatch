@@ -63,7 +63,7 @@ describe("the statement retention the overlay sets", () => {
           `insert into fd_artifacts (artifact_id, execution_id, epoch, name, size, sha256, content_type,
              producer_executor_id, producer_executor_kind, repo, private, r2_path, browse, created_at, expires_at)
            values ('A1', ?1, 1, 'dist/app.tgz', 5, ?2, 'application/gzip', 'cf-1', 'cloudflare', 'acme/widgets', 1,
-             'artifacts/x/1/dist/app.tgz', 0, ?3, ?4)`,
+             'artifact/x/1/dist/app.tgz', 0, ?3, ?4)`,
         )
         .bind(EXECUTION, "0".repeat(64), created, created + 30 * DAY)
         .run();

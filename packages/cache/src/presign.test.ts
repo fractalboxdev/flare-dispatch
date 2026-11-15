@@ -125,7 +125,7 @@ describe("presign policy", () => {
       `${objectPrefix(protectedCloud(REPO), KEY, EXEC, 2)}a`,
       own("a", 1),
       `${objectPrefix(NS, KEY, "exec-other", 2)}a`,
-      `artifacts/${EXEC}/2/x`,
+      `artifact/${EXEC}/2/x`,
     ])
       expect(failureOf(await presign(w, [put(key, 1)]))).toMatchObject({ status: 403 });
     expect(failureOf(await presign(w, [put(own("a"), null)]))).toMatchObject({ status: 411 });

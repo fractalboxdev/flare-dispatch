@@ -243,7 +243,7 @@ const world = async () => {
 
   /**
    * Uploads and commits each artifact through the cache package's artifact path at the execution's epoch. The digest
-   * each upload declares is the executor's claim; the commit stores the bytes in R2 at `artifacts/<id>/<epoch>/<name>`.
+   * each upload declares is the executor's claim; the commit stores the bytes in R2 at `artifact/<id>/<epoch>/<name>`.
    */
   const commitArtifacts = async (executionId: string, epoch: number, executorId: string) => {
     const lease = {
@@ -282,7 +282,7 @@ const world = async () => {
             content_type: "application/octet-stream",
           });
           yield* Effect.promise(() =>
-            bucket.put(`artifacts/${executionId}/${epoch}/${name}`, bytes),
+            bucket.put(`artifact/${executionId}/${epoch}/${name}`, bytes),
           );
           const ack = yield* commitArtifact(
             { execution_id: executionId, epoch, name },
@@ -516,9 +516,9 @@ describe("the cloud builder's statement of an accepted cloud execution", () => {
       executor_id: "cf-1",
     });
     // R2 loses an artifact the control plane stored: the statement cannot be written, and nothing is logged.
-    const moved = await bucket.get("artifacts/EXEC-RETRY/1/sbom.json");
+    const moved = await bucket.get("artifact/EXEC-RETRY/1/sbom.json");
     const bytes = new Uint8Array(await moved!.arrayBuffer());
-    await bucket.delete("artifacts/EXEC-RETRY/1/sbom.json");
+    await bucket.delete("artifact/EXEC-RETRY/1/sbom.json");
     expect(
       await w.write({
         executionId: "EXEC-RETRY",
@@ -528,7 +528,7 @@ describe("the cloud builder's statement of an accepted cloud execution", () => {
       }),
     ).toMatchObject({ _tag: "CloudStatementFailed", reason: "artifact-missing" });
     expect(await w.intents("EXEC-RETRY")).toEqual([]);
-    await bucket.put("artifacts/EXEC-RETRY/1/sbom.json", bytes);
+    await bucket.put("artifact/EXEC-RETRY/1/sbom.json", bytes);
     await w.onResult(w.frame("EXEC-RETRY", 1, submitted), "cf-1");
     expect(await w.intents("EXEC-RETRY")).toHaveLength(1);
   });

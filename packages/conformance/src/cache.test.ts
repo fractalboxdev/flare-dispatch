@@ -257,7 +257,7 @@ describe("the lease the composed control plane grants", () => {
     expect(grantCarriesNoWorkspace(grant, lease.execution_id, lease.epoch)).toBe(true);
     expect(grant).toMatchObject({
       cache_prefix: `cache/${PR}/`,
-      artifact_prefix: `artifacts/${lease.execution_id}/${lease.epoch}/`,
+      artifact_prefix: `artifact/${lease.execution_id}/${lease.epoch}/`,
       log_prefix: `logs/${lease.execution_id}/${lease.epoch}/`,
     });
     // Every field the control plane adds beside the run's inputs, at any depth.
@@ -277,7 +277,7 @@ describe("the lease the composed control plane grants", () => {
       "cache_prefix",
       "log_prefix",
     ]);
-    for (const [, prefix] of prefixes) expect(String(prefix)).toMatch(/^(cache|artifacts|logs)\//);
+    for (const [, prefix] of prefixes) expect(String(prefix)).toMatch(/^(cache|artifact|logs)\//);
   }, 60_000);
 
   it("[FD-PROF-062] the profile names cacheNamespaces as the cache_namespaces binding, and the claim grants the lease its answer for the claiming executor's kind", async () => {

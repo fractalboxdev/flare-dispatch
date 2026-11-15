@@ -134,7 +134,7 @@ export interface ArtifactSink {
 
 /**
  * A sink that writes each artifact name under the lease's `upload_grant.artifact_prefix`
- * (`artifacts/<execution_id>/<epoch>/`), through the given object write.
+ * (`artifact/<execution_id>/<epoch>/`), through the given object write.
  */
 export const artifactPrefixSink = (
   artifactPrefix: string,

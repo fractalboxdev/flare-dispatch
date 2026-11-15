@@ -72,7 +72,7 @@ const frameOf = (executionId: string, status: string) =>
     artifacts: [],
   });
 
-/** An artifact bucket in memory, keyed as `artifacts/<execution_id>/<epoch>/<name>`. */
+/** An artifact bucket in memory, keyed as `artifact/<execution_id>/<epoch>/<name>`. */
 const memoryBucket = () => {
   const objects = new Map<string, Uint8Array>();
   return {

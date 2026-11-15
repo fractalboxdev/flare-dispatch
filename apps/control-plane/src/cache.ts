@@ -54,7 +54,7 @@ export { cacheSweeps, migrateCache } from "./cache-retention.ts";
 
 /** The bindings this area reads beside the control plane's. */
 export interface CacheEnv {
-  /** The one bucket: `cache/`, `compile-cache/`, `artifacts/` and `logs/` (FD-CACHE-091). */
+  /** The one bucket: `cache/`, `compile-cache/`, `artifact/` and `logs/` (FD-CACHE-091). */
   readonly CACHE?: R2Bucket;
   /** One `CacheLedger` object per repository. */
   readonly CACHE_LEDGER?: DurableObjectNamespace;

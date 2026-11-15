@@ -26,7 +26,7 @@ This file covers cache entries, artifacts and logs from the moment an executor a
 | Extension host proxy | The device extension's proxy that serves the compile-cache protocol to job sandboxes from L1 and reads through to the control plane on a miss; the device executor exposes it to a job as a socket ([MAMEKO-EXEC-134](https://github.com/fractalboxdev/mameko/blob/045fe5c576aa79ade726e0a08c30eb6cbf02afd1/specs/executors.md)). |
 | Compile-cache route | `/v1/compile-cache/<owner>/<name>/<path>` on the dispatcher: the WebDAV endpoint `sccache` uses. It streams compile-cache objects of at most 100 MiB between the caller and R2 without buffering, the one byte path through the dispatcher Worker. |
 | Object-store presigner | FlareDispatch's implementation of mameko's object-store presigner port: it signs every presigned R2 URL the executor channel hands out ([MAMEKO-HOST-051](https://github.com/fractalboxdev/mameko/blob/045fe5c576aa79ade726e0a08c30eb6cbf02afd1/specs/hosts.md)). |
-| Artifact store | R2 objects under `artifacts/` plus one D1 row per artifact. |
+| Artifact store | R2 objects under `artifact/` plus one D1 row per artifact. |
 | Log store | R2 objects under `logs/`, named by step identity and epoch. |
 
 The cache holds caches only: dependency stores, compile-cache objects, prebuilt binaries, browser and toolchain downloads, and model weights. A checkout, a workspace and a job's build-output directory live inside the execution's job sandbox and never leave it. A reclaimed execution restarts from an empty workspace on its new executor; the cache only makes that restart faster.
@@ -199,7 +199,7 @@ sequenceDiagram
 
 ### Artifacts and logs
 
-An artifact is a named output of an execution kept for people and tools to fetch: reports, bundles, release files. It is stored at `artifacts/<execution_id>/<epoch>/<name>` and described by one D1 row: `artifact_id`, `execution_id`, `epoch`, `name`, `size`, `sha256`, `content_type`, producer executor id and kind, `expires_at`. The `artifact_id` is the public handle; the R2 path is never exposed.
+An artifact is a named output of an execution kept for people and tools to fetch: reports, bundles, release files. It is stored at `artifact/<execution_id>/<epoch>/<name>` and described by one D1 row: `artifact_id`, `execution_id`, `epoch`, `name`, `size`, `sha256`, `content_type`, producer executor id and kind, `expires_at`. The `artifact_id` is the public handle; the R2 path is never exposed.
 
 A link to a log or an artifact carries a link token signed under the link key ([interfaces.md](interfaces.md) § Link tokens): a log link's token is bound to one execution id, an artifact link's to one `artifact_id`, each under its own HKDF label. The execution listing writes each artifact's URL with a token for the configured link lifetime. A viewer identity has read access to a private repository's artifact when the operator overlay lists it in `operators` or it dispatched the execution that produced the artifact.
 

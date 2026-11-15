@@ -94,7 +94,7 @@ const fakeGithub = (base: string) => {
 };
 
 /** The lease's `upload_grant.artifact_prefix`, and the object key the control plane reads an artifact name at. */
-const artifactPrefix = (executionId: string, epoch: number) => `artifacts/${executionId}/${epoch}/`;
+const artifactPrefix = (executionId: string, epoch: number) => `artifact/${executionId}/${epoch}/`;
 const artifactPath = (executionId: string, epoch: number, name: string) =>
   `${artifactPrefix(executionId, epoch)}${name}`;
 
