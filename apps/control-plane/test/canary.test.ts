@@ -2,7 +2,7 @@
 // intake's route and mameko's admission, the `control` pool's run catalogue running the leased run with no Container
 // the way host-cloudflare's `ControlPool` runs it, then the terminal write and the drain that conclude its check.
 import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
-import { canaryRun, controlRuns } from "@fractalboxdev/flare-dispatch-catalog/control-runs";
+import { canaryRun } from "@fractalboxdev/flare-dispatch-catalog/control-runs";
 import {
   ActuatorRateLimitLive,
   CheckRunApplierLive,
@@ -34,6 +34,7 @@ import { Effect, Layer, Match, type Context } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { describe, expect, it } from "vitest";
 import { isolateServices } from "../src/composition.ts";
+import { controlPoolRuns } from "../src/control-pool.ts";
 import { executionConfig } from "../src/config.ts";
 import { concludeFactsLayer } from "../src/github.ts";
 import { requestLeaseFields } from "../src/lease.ts";
@@ -206,7 +207,10 @@ describe("the synthetic webhook canary", () => {
       attempt: 0,
       input: lease.inputs,
     };
-    const run = await catalogRun(controlRuns, payload);
+    const run = await catalogRun(
+      controlPoolRuns(d.env, () => isolateServices(d.env)),
+      payload,
+    );
     expect(run?.spec.name).toBe("canary");
     // The control pool's object runs the program with `LocalContent` and `Intents` alone; the engine here holds its
     // journal in memory where the object holds it in its SQLite storage.
@@ -270,7 +274,9 @@ describe("the synthetic webhook canary", () => {
             forcedClass: "required",
           }),
         );
-      }).pipe(Effect.provide(d.services)) as unknown as Effect.Effect<{ readonly executionId: string }>,
+      }).pipe(Effect.provide(d.services)) as unknown as Effect.Effect<{
+        readonly executionId: string;
+      }>,
     );
     expect(
       d.db.sqlite

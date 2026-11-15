@@ -160,7 +160,7 @@ type Answer = AdmitAnswer | { readonly _tag: "Queued"; readonly executionId: str
  * The execution committed queued and its workflow start failed; the admission sweep starts it (MAMEKO-ADM-030), so
  * intake answers it as queued.
  */
-const queuedUnstarted = (e: ExecutionStartFailed) =>
+export const queuedUnstarted = (e: ExecutionStartFailed) =>
   Effect.as(
     Effect.logWarning(
       "execution workflow start failed after admission; the admission sweep starts it",
@@ -209,7 +209,7 @@ export const dataClassesOf = (
     repository: s.repo,
   });
 
-const dataClassRefusal = (
+export const dataClassRefusal = (
   profile: Profile,
   request: DataClassRequest,
   confidentiality: ConfidentialityMode,
@@ -295,7 +295,7 @@ const placementRequest = (
 };
 
 /** The facts and constraint parameters admission's placement binding answers for the request (MAMEKO-ADM-091). */
-const admissionPlacement = (
+export const admissionPlacement = (
   profile: Profile,
   s: Submission,
   className: string,

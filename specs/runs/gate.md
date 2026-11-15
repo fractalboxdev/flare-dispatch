@@ -32,7 +32,7 @@ The class in this table is the recipe's default; `resolveClass` ([profile.md](..
 | --- | --- | --- | --- | --- | --- |
 | `check` | `required` | 4500 s | any eligible executor | `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`), `merge_group`, Actions dispatch | `check` |
 | `oxlint` | `required` | 600 s | any eligible executor | as `check` | `oxlint` |
-| `offload-test` | `required` | 3600 s | any eligible executor | as `check` | `offloadTest` |
+| `offload-test` | `required` | 3600 s | `control` pool, no container; each job any eligible executor | as `check` | `offloadTest` |
 | `security-gate` | `required` | 1800 s | `cloud-only` | `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`), `merge_group`, check re-runs | `securityGate` |
 | `security-rescan` | `batch` | 1800 s | `cloud-only` | Dispatch | `securityGate` |
 | `worker-deploy` | `release` | 1800 s | `cloud-pinned` | `push` to the deploy branch, Actions dispatch | `workerDeploy` |

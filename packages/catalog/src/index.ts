@@ -61,6 +61,24 @@ export {
 } from "./deploy-smoke.ts";
 export * from "./scan-bundle.ts";
 export {
+  childDedupKey,
+  expandMatrix,
+  jobCheckName,
+  runMatrix,
+  type ExpandedJob,
+  type JobState,
+  type MatrixPlan,
+} from "./matrix.ts";
+export {
+  ChildStartFailed,
+  MatrixChildren,
+  type ChildHandle,
+  type ChildRequest,
+  type ChildVerdict,
+  type DiscoveryResult,
+} from "./ports.ts";
+export { CloudLeaseMissing, ExecutionLease, type LeaseLayerFailure } from "./execution-lease.ts";
+export {
   AdvisorySnapshots,
   AdvisorySnapshotUnreadable,
   ScanBundleStore,

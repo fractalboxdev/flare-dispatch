@@ -36,7 +36,7 @@ A run's `triggers` are mameko request decoders: functions from the decoded `Disp
 
 | Capability | Serves | Fails with |
 | --- | --- | --- |
-| `GithubRead` | Reads of the repository and its pull requests under the per-lease token the egress proxy attaches | `GithubReadFailed`, `GithubUncredentialed` |
+| `GithubRead` | Reads of the repository and its pull requests under the per-lease token the egress proxy attaches, or, in the `control` pool, under the App installation token the control plane holds | `GithubReadFailed`, `GithubUncredentialed` |
 
 A failed read is an error, never an empty answer: a caller that took `[]` as "no prior review" or "no open pull request" would decide on a false fact.
 

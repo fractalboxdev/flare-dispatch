@@ -21,7 +21,6 @@ import {
 } from "@fractalboxdev/flare-dispatch-cache/transparency-log";
 import { alarmPortFromEnv } from "@fractalboxdev/flare-dispatch-ops";
 import { FlareDispatchLivenessMonitor } from "@fractalboxdev/flare-dispatch-ops/worker";
-import { controlRuns } from "@fractalboxdev/flare-dispatch-catalog/control-runs";
 import {
   ControlPool as MamekoControlPool,
   ExecutionEngine as MamekoExecutionEngine,
@@ -38,6 +37,7 @@ import { DurableObject } from "cloudflare:workers";
 import { Context, Effect, Match } from "effect";
 import { guardLease } from "./agentic.ts";
 import { isolateServices, presignerLayer } from "./composition.ts";
+import { controlPoolRuns } from "./control-pool.ts";
 import { leaseCache, presignOnFrame } from "./cache.ts";
 import { leaseCacheAt } from "./cache-execution.ts";
 import { leaseCloudValues, withCloudLease } from "./cloud-lease.ts";
@@ -345,9 +345,12 @@ export class PoolController extends MamekoControlPool<PoolEnv> {
     this.hooks = channelHooks(env);
   }
 
-  /** The `control` pool's run catalogue (`control-runs.ts`). */
+  /**
+   * The `control` pool's run catalogue (`control-runs.ts`), with the services the control plane builds inside each
+   * execution (`control-pool.ts`).
+   */
   protected override runs(): readonly CatalogRun[] {
-    return controlRuns;
+    return controlPoolRuns(this.env, () => isolateServices(this.env));
   }
 
   override async webSocketMessage(ws: unknown, message: string | ArrayBuffer): Promise<void> {

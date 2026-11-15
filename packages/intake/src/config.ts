@@ -9,6 +9,7 @@ import {
   type Profile,
 } from "@fractalboxdev/flare-dispatch-profile";
 import {
+  admissionParent,
   admit,
   composedGroupCancel,
   type AdmitAnswer,
@@ -149,6 +150,12 @@ export interface IntakeAdmitInput {
    * the control plane takes as the execution's infrastructure retries (FD-PROF-009, MAMEKO-ADM-083). Absent counts as 0.
    */
   readonly runRetries?: number;
+  /**
+   * The parent execution of a child execution. Admission reads the parent's class, root `enqueued_at`, `deadline_at`
+   * and `untrusted-input` label from its row, clamps the child to them, and records the child under the parent, whose
+   * end cancels it (MAMEKO-ADM-006, MAMEKO-ADM-056, MAMEKO-ADM-097, MAMEKO-RUN-088). Null or absent admits a root.
+   */
+  readonly parentExecutionId?: string | null;
   /**
    * The pool whose executor alone may claim the execution, for a run only that pool serves; null or absent lets any
    * eligible executor claim it (MAMEKO-LEASE-101).
@@ -315,6 +322,18 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
         const runLabels = input.placement.facts.runLabels;
         const limitKey =
           ports.limitKey === undefined ? undefined : yield* ports.limitKey(input.scopeId);
+        // A parent whose row cannot be read admits no child (MAMEKO-ADM-099).
+        const parent =
+          input.parentExecutionId === undefined || input.parentExecutionId === null
+            ? null
+            : yield* admissionParent(input.parentExecutionId).pipe(
+                Effect.provide(d1ExecutionStore(db)),
+                Effect.catchTag("ParentExecutionUnreadable", (e) =>
+                  Effect.fail(
+                    new IntakeUnavailable({ cause: `ParentExecutionUnreadable: ${e.executionId}` }),
+                  ),
+                ),
+              );
         return yield* admit<IntakeAdmitInput>({
           request: input,
           executionId: input.executionId,
@@ -332,7 +351,7 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
             catalogue: profile.classes as never,
             allowedLabels: input.labels,
           },
-          parent: null,
+          parent,
           recipes: [
             {
               name: "intake",

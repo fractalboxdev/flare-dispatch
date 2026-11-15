@@ -1,4 +1,13 @@
 export { catalogRuns, CheckParams, requestDecoderOf } from "./catalog.ts";
+export {
+  admitChild,
+  CHILD_CANCEL_CAUSE,
+  CHILD_POLL_MS,
+  childVerdictOf,
+  matrixChildrenLayer,
+  type AdmittedChild,
+  type MatrixChildrenOptions,
+} from "./children.ts";
 export { catalogEventOf, deliveryOf, type TriggerContext } from "./delivery.ts";
 export {
   Admission,
