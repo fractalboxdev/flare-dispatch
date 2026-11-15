@@ -468,7 +468,12 @@ const baseProfile = (deployment: Deployment, phase: Phase, options: ProfileOptio
     { name: "agent", classes: [cap("batch", 6), cap("interactive", 6), cap("required", 8, 2)] },
     { name: "browser", classes: [cap("batch", 4), cap("interactive", 10), cap("required", 16, 2)] },
     { name: "release", classes: [], reserved_for: "release" },
-    { name: "control", classes: [] },
+    // The `control` pool claims only runs that require no job sandbox (MAMEKO-LEASE-101): the canary at `required`,
+    // `deploy-smoke` at `release`, and the `offload-test` parent at any class it resolves to.
+    {
+      name: "control",
+      classes: [cap("batch", 2), cap("interactive", 4), cap("required", 6, 1), cap("release", 4)],
+    },
   ],
   /** FD-PROF-034. */
   browser_sessions: {

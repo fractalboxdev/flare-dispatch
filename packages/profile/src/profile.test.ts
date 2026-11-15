@@ -143,7 +143,15 @@ describe("load", () => {
         ],
       ],
       ["release", []],
-      ["control", []],
+      [
+        "control",
+        [
+          ["batch", 2, 0],
+          ["interactive", 4, 0],
+          ["required", 6, 1],
+          ["release", 4, 0],
+        ],
+      ],
     ]);
     expect(profile.pools.find((p) => p.name === "release")?.reserved_for).toBe("release");
     expect(profile.browser_sessions.classes.map((c) => [c.class, c.max, c.min])).toEqual([

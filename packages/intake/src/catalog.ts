@@ -43,7 +43,7 @@ import type { Deployment } from "@fractalboxdev/flare-dispatch-profile";
 import { Match, Option, Schema } from "effect";
 import { catalogEventOf, type TriggerContext } from "./delivery.ts";
 import type { DispatchEvent } from "./event.ts";
-import type { EntryView, IntakeRun, RunCatalog } from "./runs.ts";
+import { CONTROL_POOL_NAME, type EntryView, type IntakeRun, type RunCatalog } from "./runs.ts";
 
 /** A `check` entry's parameters: the steps one execution runs in order (FD-GATE-019). */
 export const CheckParams = Schema.Struct({
@@ -271,6 +271,23 @@ const requiredCheckOf = (entry: CatalogEntry): Pick<IntakeRun, "requiredCheck" |
   };
 };
 
+/** A run only the `control` pool serves is pinned to it (MAMEKO-LEASE-101). */
+const poolOf = (entry: CatalogEntry): Pick<IntakeRun, "pool"> =>
+  entry.executors.length === 1 && entry.executors[0] === "control" ? { pool: CONTROL_POOL_NAME } : {};
+
+/**
+ * A host execution under `production` runs only in a cloud Container, so its request carries the `cloud-only` label
+ * and no device takes it (MAMEKO-ISO-001).
+ */
+const hostExecutionPlacement = (
+  deployment: Deployment,
+  entry: CatalogEntry,
+  placement: { readonly constraints: readonly string[]; readonly labels: readonly string[] },
+) =>
+  deployment === "production" && entry.hostExecution
+    ? { ...placement, labels: [...new Set([...placement.labels, "cloud-only"])] }
+    : placement;
+
 /** The deployment's runs; a run the deployment refuses to execute is not in its catalogue. */
 export const catalogRuns =
   (deployment: Deployment): RunCatalog =>
@@ -290,7 +307,7 @@ export const catalogRuns =
         gating: true,
         retries: entry.spec.retries,
         grants: { setup: [...entry.spec.grants.setup], agent: [...entry.spec.grants.agent] },
-        placement: (inputs) => requestPlacement(entry.spec, inputs),
+        placement: (inputs) => hostExecutionPlacement(deployment, entry, requestPlacement(entry.spec, inputs)),
         ...serialKeyOf(entry),
         ...requiredCheckOf(entry),
         ...(manifestRecipeOf(entry)?.dispatchOnly === true ? { dispatchOnly: true } : {}),
@@ -298,6 +315,7 @@ export const catalogRuns =
         ...bindCommitOf(entry),
         ...sourceOf(entry),
         ...(isReadOnlyScanRun(entry.spec.name, entry) ? { readOnlyScan: true } : {}),
+        ...poolOf(entry),
       })),
       Match.orElse(() => undefined),
     );

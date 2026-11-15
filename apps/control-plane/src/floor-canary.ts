@@ -1,6 +1,6 @@
 // The floor canary on the Container pools (specs/operability.md FD-OPS-050, MAMEKO-OPS-012 to MAMEKO-OPS-018): mameko's
-// `floor-canary` run, admitted through intake's admission as an ops run of the canary's class, cloud-pinned, sealed, with
-// no check run. The minute tick's `floor-canary` unit admits each canary pool's canary once per 2 h slot and judges the
+// `floor-canary` run, admitted through intake's admission as an ops run of the canary's class, cloud-pinned, pinned to its
+// pool, sealed, with no check run. The minute tick's `floor-canary` unit admits each canary pool's canary once per 2 h slot and judges the
 // slot before it; `POST /v1/ops/floor-canary` admits one at once for `fd deploy`, and `GET /v1/ops/floor-canary/:id`
 // answers its verdict.
 import { FLOOR_CANARY_CLASS, floorCanary } from "@fractalboxdev/flare-dispatch-catalog";
@@ -144,6 +144,8 @@ export const admitFloorCanary = (
       requiresWorkspace: false,
       check: null,
       opsRun: true,
+      // The canary tests its own pool's image, so only that pool claims it (MAMEKO-LEASE-101).
+      pool,
     };
     if (known === null) yield* store.put(record);
     const answer = yield* admission.admit(admit).pipe(

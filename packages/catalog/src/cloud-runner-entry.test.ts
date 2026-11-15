@@ -284,18 +284,27 @@ const stubFetch = (events: string[], text = '{"findings":[]}') => {
 };
 
 describe("the Container pool's run catalogue", () => {
-  it("serves every cloud run that is no host execution under both deployments: the cloud gate runs, the agentic recipes, the scan runs and the floor canary", () => {
-    const served = ["worker-deploy", "sandbox-image", ...AGENTIC, ...SCAN, "floor-canary"];
-    const cloudOnly = registry
+  it("serves every run whose entry lists the cloud under both deployments: the gate runs, host executions among them, the agentic recipes, the scan runs and the floor canary", () => {
+    const served = [
+      "check",
+      "oxlint",
+      "gate-job",
+      "worker-deploy",
+      "sandbox-image",
+      ...AGENTIC,
+      ...SCAN,
+      "floor-canary",
+    ];
+    const cloud = registry
       .map((r) => r.spec.name)
       .filter((name) => {
         const found = lookupRun("production", name);
         return found._tag === "Available" && found.entry.executors.includes("cloud");
       });
-    expect([...cloudOnly].sort()).toEqual([...served].sort());
-    expect(names(cloudRuns("production"))).toEqual(served);
-    expect(names(cloudRuns("development"))).toEqual(served);
-    expect(names(runs)).toEqual(served);
+    expect([...cloud].sort()).toEqual([...served].sort());
+    expect([...names(cloudRuns("production"))].sort()).toEqual([...served].sort());
+    expect([...names(cloudRuns("development"))].sort()).toEqual([...served].sort());
+    expect([...names(runs)].sort()).toEqual([...served].sort());
     for (const run of runs) {
       const registered = registry.find((r) => r.spec.name === run.spec.name)?.layer;
       // Each run carries the cloud Layers, not the registry's unprovided Layer; the floor canary needs only the
@@ -303,8 +312,6 @@ describe("the Container pool's run catalogue", () => {
       if (run.spec.name === "floor-canary") expect(run.layer).toBe(registered);
       else expect(run.layer).not.toBe(registered);
     }
-    for (const name of ["check", "oxlint", "gate-job"])
-      expect(names(cloudRuns("development"))).not.toContain(name);
   });
 
   it("[FD-AGT-010] [FD-AGT-059] builds pr-review's Layers from its lease: the checkout the workspace holds, the model route the lease names after the setup phase ends, and the diff in the execution's artifact store", async () => {

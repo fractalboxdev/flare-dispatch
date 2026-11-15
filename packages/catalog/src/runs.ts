@@ -5,23 +5,15 @@ import {
   agenticRuns,
   type CloudAgenticServices,
 } from "@fractalboxdev/flare-dispatch-agentic/executor";
-import {
-  type Artifact,
-  type Exec,
-  type Intents,
-  type LocalContent,
-  type RunResult,
-  type Workspace,
-} from "@fractalboxdev/mameko-run";
-import { Effect, Layer } from "effect";
+import { type Intents, type LocalContent } from "@fractalboxdev/mameko-run";
+import { Layer } from "effect";
 import { runCheck } from "./check.ts";
 import { processGateExec, type GateExec } from "./command.ts";
-import { ExecutionLease, type LeaseLayerFailure } from "./execution-lease.ts";
+import { perExecution, type LeaseLayerContext, type LeaseLayerFailure } from "./execution-lease.ts";
 import { githubReadLayer, type GithubRead } from "./github-read.ts";
 import {
   CheckInput,
   GateJobInput,
-  OffloadTestInput,
   OxlintInput,
   SandboxImageInput,
   SecurityGateInput,
@@ -29,10 +21,9 @@ import {
   WorkerDeployInput,
 } from "./inputs.ts";
 import { runGateJob } from "./job.ts";
-import { runOffloadTest } from "./offload-test.ts";
 import { runOxlint } from "./oxlint.ts";
 import { localContentArtifacts, type GateArtifacts } from "./ports.ts";
-import { canaryRun, deploySmokeRun } from "./control-runs.ts";
+import { canaryRun, deploySmokeRun, offloadTestRun } from "./control-runs.ts";
 import { defineGateRun } from "./gate-run.ts";
 import { runSandboxImage } from "./sandbox-image.ts";
 import { runSecurityGate, runSecurityRescan, type ScanServices } from "./security-gate.ts";
@@ -41,7 +32,6 @@ import {
   floorCanary,
   gateJobSpec,
   lookupRun,
-  offloadTestSpec,
   oxlintSpec,
   sandboxImageSpec,
   securityGateSpec,
@@ -56,9 +46,9 @@ const define = defineGateRun;
 export const checkRun = define(checkSpec, CheckInput, runCheck);
 export const oxlintRun = define(oxlintSpec, OxlintInput, runOxlint);
 export const gateJobRun = define(gateJobSpec, GateJobInput, runGateJob);
-export const offloadTestRun = define(offloadTestSpec, OffloadTestInput, (i) => runOffloadTest(i));
 export const workerDeployRun = define(workerDeploySpec, WorkerDeployInput, runWorkerDeploy);
-export { deploySmokeRun };
+export { deploySmokeRun, offloadTestRun };
+export type { LeaseLayerContext };
 export const sandboxImageRun = define(sandboxImageSpec, SandboxImageInput, runSandboxImage);
 export const securityGateRun = define(securityGateSpec, SecurityGateInput, runSecurityGate);
 export const securityRescanRun = define(securityRescanSpec, SecurityRescanInput, runSecurityRescan);
@@ -79,9 +69,9 @@ export const registry = [
   canaryRun,
 ] as const;
 
-/** Which executor kinds serve a run, from its catalogue entry. */
-const servedBy = (name: string, kind: ExecutorKind): boolean => {
-  const found = lookupRun("development", name);
+/** Whether the executor kind serves a run under the deployment, from the deployment's catalogue entry. */
+const servedBy = (deployment: Deployment, name: string, kind: ExecutorKind): boolean => {
+  const found = lookupRun(deployment, name);
   return found._tag === "Available" && found.entry.executors.includes(kind);
 };
 
@@ -98,9 +88,6 @@ export const deviceLayers: Layer.Layer<GateExec | GateArtifacts | GithubRead, ne
 
 /** The services the gate runs a cloud executor serves require: the device's, and the deploy ledger. */
 export type CloudGateServices = GateExec | GateArtifacts | GithubRead | DeployLedger;
-
-/** The runner's services a per-lease Layer may read beside `ExecutionLease`. */
-export type LeaseLayerContext = ExecutionLease | Intents | Workspace | Exec | Artifact;
 
 /** The executor a runner entry serves: the device, or the cloud executor with the Layers of the runs it serves. */
 export type RunnerExecutor =
@@ -148,15 +135,15 @@ type BodiedRun = Exclude<(typeof registry)[number], typeof floorCanary>;
 const withBody = (run: (typeof registry)[number]): run is BodiedRun => "body" in run;
 
 /**
- * The gate runs a cloud executor serves with its gate Layers: a run whose catalogue entry lists `cloud`, that is
- * neither agentic, a scan run nor the floor canary, and that is no host execution. A host execution's run is the device runner entry's
- * under `development` only, so the cloud executor serves the same gate runs under both deployments.
+ * The gate runs a cloud executor serves with its gate Layers: a run whose catalogue entry lists `cloud` and that is
+ * neither agentic, a scan run nor the floor canary. A host execution is among them: the Container is its job sandbox,
+ * so the cloud executor serves the same gate runs under both deployments.
  */
 const isCloudGateRun = (name: string): boolean => {
   const found = lookupRun("development", name);
   return (
     found._tag === "Available" &&
-    !found.entry.hostExecution &&
+    found.entry.executors.includes("cloud") &&
     !AGENTIC_NAMES.has(name) &&
     !SCAN_NAMES.has(name) &&
     name !== FLOOR_CANARY_NAME
@@ -174,7 +161,7 @@ const isCloudGateRun = (name: string): boolean => {
 export const runsFor = (deployment: Deployment, executor: RunnerExecutor = { kind: "device" }) => {
   const available = registry
     .filter((run) => lookupRun(deployment, run.spec.name)._tag === "Available")
-    .filter((run) => servedBy(run.spec.name, executor.kind));
+    .filter((run) => servedBy(deployment, run.spec.name, executor.kind));
   return executor.kind === "device"
     ? available.map((run) => ({
         ...run,
@@ -206,60 +193,6 @@ const gateRunsWith = <R extends BodiedRun>(
             Layer.provide(gate),
           ),
         }));
-
-/** What `perExecution` reads of a run: its name, its workflow and the body its `layer` registers. */
-interface RunBody {
-  readonly spec: { readonly name: string };
-  readonly workflow: (typeof registry)[number]["workflow"];
-  readonly body: (input: never) => Effect.Effect<RunResult, never, unknown>;
-}
-
-/** The run payload fields a per-lease Layer reads. */
-interface LeasePayload {
-  readonly execution_id: string;
-  readonly epoch: number;
-  readonly input: unknown;
-}
-
-/**
- * `run` with its body registered on the engine inside each execution: `layer` is built there from the payload's
- * execution id, epoch and decoded input as `ExecutionLease`, beside the runner's services, so the one bundle serves
- * every lease. A Layer that fails ends the run with `failure` and `infra: <tag>` before the body starts; no default
- * stands in for a missing value.
- */
-const perExecution = <R extends RunBody, A>(
-  run: R,
-  layer: Layer.Layer<A, LeaseLayerFailure, LeaseLayerContext>,
-): R & { readonly layer: Layer.Layer<never, never, unknown> } => {
-  const body = run.body as (input: unknown) => Effect.Effect<RunResult, never, A>;
-  const workflow = run.workflow as unknown as {
-    readonly toLayer: (
-      execute: (payload: LeasePayload) => Effect.Effect<RunResult, never, unknown>,
-    ) => Layer.Layer<never, never, unknown>;
-  };
-  return {
-    ...run,
-    layer: workflow.toLayer((payload) =>
-      body(payload.input).pipe(
-        Effect.provide(
-          layer.pipe(
-            Layer.provide(
-              Layer.succeed(ExecutionLease, {
-                executionId: payload.execution_id,
-                epoch: payload.epoch,
-                run: run.spec.name,
-                input: payload.input,
-              }),
-            ),
-          ),
-        ),
-        Effect.catch((failure: LeaseLayerFailure) =>
-          Effect.succeed<RunResult>({ _tag: "failure", reason: `infra: ${failure._tag}` }),
-        ),
-      ),
-    ),
-  };
-};
 
 /** The agentic recipes of `available`, each with the cloud executor's agentic Layers built per execution; none without them. */
 const agenticRunsWith = <R extends BodiedRun>(

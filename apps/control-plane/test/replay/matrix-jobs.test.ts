@@ -24,28 +24,32 @@ const replayed = async (workflow: ReplayWorkflow<Journal>) => {
   return { extras, first, second, journal: first.journal };
 };
 
+/** The parent's children by job key: each one's dedup key, and how many executions the store holds. */
+const children = (journal: Journal) => ({
+  keys: journal.d.db.sqlite
+    .prepare(
+      `select r.label as key, k.canonical from mameko_executions e join intake_records r on r.execution_id = e.id
+       join mameko_dedup_keys k on k.execution_id = e.id where e.parent_id = ? order by r.label`,
+    )
+    .all(journal.parent),
+  executions: journal.d.db.sqlite.prepare("select count(*) as n from mameko_executions").get(),
+});
+
 describe("a job matrix parent under a replayed workflow", () => {
   it("[FD-GATE-031] gives each job the dedup key <parent dedup key>/<job key>, so the replayed parent admits no second job", async () => {
     const { extras, first, second, journal } = await replayed(workflows[0]!);
     try {
       expect(extras).toEqual([]);
       expect(second.effects).toEqual([]);
-      expect(journal.requests.map((r) => r.dedupKey)).toEqual(
-        [...JOB_KEYS, ...JOB_KEYS].map((k) => `${PARENT_DEDUP_KEY}/${k}`),
-      );
-      // The first run admits each job once; the replay's admissions answer the same executions as duplicates.
-      const firstRun = journal.admissions.slice(0, JOB_KEYS.length);
-      expect(firstRun.map((a) => [a.key, a.answer])).toEqual(JOB_KEYS.map((k) => [k, "Queued"]));
-      expect(journal.admissions.slice(JOB_KEYS.length)).toEqual(
-        firstRun.map((a) => ({ ...a, answer: "Duplicate" })),
-      );
-      expect(
-        journal.db.sqlite.prepare("select count(*) as n from mameko_executions").get() as { n: number },
-      ).toEqual({ n: JOB_KEYS.length });
+      // The first run admits each job once, and the replay's admissions answer the same executions.
+      expect(children(journal)).toEqual({
+        keys: JOB_KEYS.map((k) => ({ key: k, canonical: `${PARENT_DEDUP_KEY}/${k}` })),
+        executions: { n: JOB_KEYS.length + 1 },
+      });
       expect(first.effects.filter((e) => e.kind === "github")).toEqual([]);
       expect(journal.gh.runs).toEqual([]);
     } finally {
-      journal.db.sqlite.close();
+      journal.d.db.sqlite.close();
     }
   });
 
@@ -54,12 +58,22 @@ describe("a job matrix parent under a replayed workflow", () => {
     try {
       expect(extras).toEqual([]);
       expect(second.effects).toEqual([]);
-      const names = JOB_KEYS.map((k) => `flare-dispatch/offload-test:${k}`);
-      expect(journal.requests.map((r) => r.checkName)).toEqual([...names, ...names]);
       // One check run per job, created under its job check name and concluded with the job's outcome.
-      const ids = new Map(journal.admissions.map((a) => [a.id, a.key]));
+      const ids = new Map(
+        (
+          journal.d.db.sqlite
+            .prepare(
+              "select e.id, r.label from mameko_executions e join intake_records r on r.execution_id = e.id where e.parent_id = ?",
+            )
+            .all(journal.parent) as { id: string; label: string }[]
+        ).map((r) => [r.id, r.label]),
+      );
+      // The parent's own check run, `flare-dispatch/offload-test`, stays open while the parent runs.
       expect(
-        journal.gh.runs.map((r) => [ids.get(r.external_id ?? ""), r.name, r.status, r.conclusion]),
+        journal.gh.runs
+          .filter((r) => ids.has(r.external_id ?? ""))
+          .map((r) => [ids.get(r.external_id ?? ""), r.name, r.status, r.conclusion])
+          .sort(),
       ).toEqual(
         JOB_KEYS.map((k) => [k, `flare-dispatch/offload-test:${k}`, "completed", "success"]),
       );
@@ -67,7 +81,7 @@ describe("a job matrix parent under a replayed workflow", () => {
         2 * JOB_KEYS.length,
       );
     } finally {
-      journal.db.sqlite.close();
+      journal.d.db.sqlite.close();
     }
   });
 });

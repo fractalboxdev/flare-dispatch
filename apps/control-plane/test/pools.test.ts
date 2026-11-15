@@ -28,10 +28,18 @@ describe("Container pools", () => {
       "lean",
       "release",
     ]);
-    // The control pool's container is the pool controller's own binding, and the profile gives it no class.
+    // The control pool's container is the pool controller's own binding; it serves every class within its cap.
     expect(settings.pools["control"]).toEqual({
       container: "POOL_CONTROLLER",
-      partition: { cap: 16, classes: {} },
+      partition: {
+        cap: 16,
+        classes: {
+          batch: { max: 2, min: 0 },
+          interactive: { max: 4, min: 0 },
+          required: { max: 6, min: 1 },
+          release: { max: 4, min: 0 },
+        },
+      },
     });
     expect(settings.pools["lean"]).toEqual({
       container: "LEAN_POOL",
@@ -48,8 +56,9 @@ describe("Container pools", () => {
   });
 
   it("[FD-ARCH-001] an admission wakes the controllers of exactly the pools serving its class, and a device-only placement wakes none", async () => {
-    expect(poolsServing(profile, "release")).toEqual(["release"]);
-    expect([...poolsServing(profile, "required")].sort()).toEqual(["agent", "browser"]);
+    // The `control` pool serves every class, and claims only the runs that require no job sandbox.
+    expect([...poolsServing(profile, "release")].sort()).toEqual(["control", "release"]);
+    expect([...poolsServing(profile, "required")].sort()).toEqual(["agent", "browser", "control"]);
     const woken: string[] = [];
     const pools = {
       POOL_CONTROLLER: {
@@ -60,7 +69,12 @@ describe("Container pools", () => {
       },
     } as unknown as ControlPlaneEnv;
     await wakePools(pools, profile, { className: "interactive", eligibleKinds: ["cloudflare"] });
-    expect(woken.sort()).toEqual(["agent:agent", "browser:browser", "lean:lean"]);
+    expect(woken.sort()).toEqual([
+      "agent:agent",
+      "browser:browser",
+      "control:control",
+      "lean:lean",
+    ]);
     woken.length = 0;
     await wakePools(pools, profile, { className: "interactive", eligibleKinds: ["device"] });
     expect(woken).toEqual([]);

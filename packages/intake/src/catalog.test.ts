@@ -4,6 +4,7 @@ import { Outcome, pullRequestSkip, type GateContext } from "@fractalboxdev/flare
 import { FollowOnSubmitter } from "@fractalboxdev/flare-dispatch-github";
 import { Effect, Option } from "effect";
 import { describe, expect, it } from "vitest";
+import { buildProfile, eligibleKinds } from "@fractalboxdev/flare-dispatch-profile";
 import { catalogRuns } from "./catalog.ts";
 import type { DispatchEvent } from "./event.ts";
 import { followOnSubmitterLayer } from "./follow-on.ts";
@@ -523,5 +524,22 @@ describe("the source a run's executions check out", () => {
     // A run that reads no merge base names none.
     for (const run of ["improve-pr", "worker-deploy", "security-rescan"])
       expect(production(run)!.sourceBase, run).toBeUndefined();
+  });
+});
+
+describe("a host execution as intake reads it", () => {
+  it("MAMEKO-ISO-001 places a production host execution on the cloud alone, and a development one anywhere", () => {
+    for (const run of ["check", "oxlint", "gate-job"]) {
+      const production = catalogRuns("production")(run)!.placement!({});
+      expect(production.labels).toContain("cloud-only");
+      const kinds = eligibleKinds(buildProfile("production"), {
+        class: "required",
+        labels: production.labels,
+        constraints: production.constraints,
+      } as Parameters<typeof eligibleKinds>[1]).kinds;
+      expect(kinds.length).toBeGreaterThan(0);
+      expect(kinds).not.toContain("device");
+      expect(catalogRuns("development")(run)!.placement!({}).labels).not.toContain("cloud-only");
+    }
   });
 });

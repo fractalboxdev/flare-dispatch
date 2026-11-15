@@ -2,7 +2,7 @@
 // intake's route and mameko's admission, the `control` pool's run catalogue running the leased run with no Container
 // the way host-cloudflare's `ControlPool` runs it, then the terminal write and the drain that conclude its check.
 import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
-import { canaryRun, controlRuns } from "@fractalboxdev/flare-dispatch-catalog/control-runs";
+import { canaryRun } from "@fractalboxdev/flare-dispatch-catalog/control-runs";
 import {
   ActuatorRateLimitLive,
   CheckRunApplierLive,
@@ -12,8 +12,11 @@ import { fakeGithub, fakeGithubLayers } from "@fractalboxdev/flare-dispatch-gith
 import {
   d1IntakeStore,
   handleIntake,
+  IntakeConfig,
   IntakeStore,
   signBody,
+  submission,
+  submit,
 } from "@fractalboxdev/flare-dispatch-intake";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
@@ -22,7 +25,8 @@ import {
   ExecutionSteps,
   type ExecutionPayload,
 } from "@fractalboxdev/mameko-coordinator";
-import { d1OutboxStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { d1OutboxStore, d1PlacementStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
+import { PlacementStore } from "@fractalboxdev/mameko-ports";
 import { d1ExecutionSteps } from "@fractalboxdev/mameko-host-cloudflare/d1-execution";
 import { memoryLocalContent, runDefinitionDigest } from "@fractalboxdev/mameko-run";
 import { catalogRun, runProgram } from "@fractalboxdev/mameko-runner/program";
@@ -30,6 +34,7 @@ import { Effect, Layer, Match, type Context } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { describe, expect, it } from "vitest";
 import { isolateServices } from "../src/composition.ts";
+import { controlPoolRuns } from "../src/control-pool.ts";
 import { executionConfig } from "../src/config.ts";
 import { concludeFactsLayer } from "../src/github.ts";
 import { requestLeaseFields } from "../src/lease.ts";
@@ -97,6 +102,22 @@ const canaries = (db: TestD1) =>
   db.sqlite
     .prepare("select id, scope_id, run, class, ops_run from mameko_executions where run = 'canary'")
     .all();
+
+/** Whether `executorId`'s claim of the queued execution wins its lease, as a pool or a device claims it. */
+const claimedBy = (db: TestD1, executionId: string, executorId: string) =>
+  Effect.runPromise(
+    PlacementStore.use((p) =>
+      Effect.gen(function* () {
+        const placed = yield* p.get(executionId);
+        const leased = yield* p.claim(executionId, {
+          expectedEpoch: placed!.epoch,
+          executorId,
+          floor: 0,
+        });
+        return leased !== null;
+      }),
+    ).pipe(Effect.provide(d1PlacementStore(db))),
+  );
 
 /** The terminal write of `outcome`, as the `Execution` workflow's `applyOutbox` stage commits it. */
 const terminalWrite = (db: TestD1, executionId: string) =>
@@ -186,7 +207,10 @@ describe("the synthetic webhook canary", () => {
       attempt: 0,
       input: lease.inputs,
     };
-    const run = await catalogRun(controlRuns, payload);
+    const run = await catalogRun(
+      controlPoolRuns(d.env, () => isolateServices(d.env)),
+      payload,
+    );
     expect(run?.spec.name).toBe("canary");
     // The control pool's object runs the program with `LocalContent` and `Intents` alone; the engine here holds its
     // journal in memory where the object holds it in its SQLite storage.
@@ -198,6 +222,17 @@ describe("the synthetic webhook canary", () => {
       engine: (programs) => programs.pipe(Layer.provideMerge(WorkflowEngine.layerMemory)),
     });
     expect(ended).toEqual({ result: { _tag: "success" }, intents: [] });
+
+    // Admission pins the canary to the `control` pool as a run that requires no job sandbox, so a Container pool and a
+    // device that serve `required` claim no lease of it, and the `control` pool does.
+    expect(
+      d.db.sqlite
+        .prepare("select pinned_pool, sandbox from mameko_placements where execution_id = ?")
+        .get(executionId!),
+    ).toEqual({ pinned_pool: "control", sandbox: 0 });
+    expect(await claimedBy(d.db, executionId!, "agent")).toBe(false);
+    expect(await claimedBy(d.db, executionId!, "device-1")).toBe(false);
+    expect(await claimedBy(d.db, executionId!, "control")).toBe(true);
 
     // Admission opened the check `flare-dispatch/canary` on the pushed commit.
     expect(
@@ -221,6 +256,37 @@ describe("the synthetic webhook canary", () => {
         conclusion: "success",
       },
     ]);
+  });
+
+  it("[FD-OPS-039] the control pool claims no lease of a required run that requires a job sandbox, which a Container pool claims", async () => {
+    const d = await deploy();
+    const admitted = await Effect.runPromise(
+      Effect.gen(function* () {
+        const run = (yield* IntakeConfig).catalog("sandbox-image")!;
+        return yield* submit(
+          submission({
+            run,
+            trigger: "dispatch",
+            repo: "acme/app",
+            sha: SHA,
+            ref: "refs/heads/main",
+            inputs: { repo: "https://github.com/acme/app.git", sha: SHA, ref: "refs/heads/main" },
+            forcedClass: "required",
+          }),
+        );
+      }).pipe(Effect.provide(d.services)) as unknown as Effect.Effect<{
+        readonly executionId: string;
+      }>,
+    );
+    expect(
+      d.db.sqlite
+        .prepare(
+          "select e.class, p.pinned_pool, p.sandbox from mameko_placements p join mameko_executions e on e.id = p.execution_id where p.execution_id = ?",
+        )
+        .get(admitted.executionId),
+    ).toEqual({ class: "required", pinned_pool: null, sandbox: 1 });
+    expect(await claimedBy(d.db, admitted.executionId, "control")).toBe(false);
+    expect(await claimedBy(d.db, admitted.executionId, "agent")).toBe(true);
   });
 
   it("[FD-OPS-039] a push to another branch of the fixture repository, or to the canary branch of another repository, admits no canary", async () => {
