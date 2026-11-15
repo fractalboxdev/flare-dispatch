@@ -6,12 +6,14 @@ import { mintLinkToken } from "@fractalboxdev/flare-dispatch-api";
 import { signCompileCacheToken } from "@fractalboxdev/flare-dispatch-cache";
 import { ACCESS_BYPASS, bypassed } from "@fractalboxdev/flare-dispatch-ops";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { signControlPlaneReadToken } from "../../src/control-plane-read.ts";
 import { signDeployClaimToken } from "../../src/deploy-claim.ts";
 import { signModelLeaseToken } from "../../src/model-gateway.ts";
 import { router } from "../../src/http.ts";
 import { connect, hello, newDevice, OPERATOR, registration } from "../support.ts";
 import {
   COMPILE_CACHE_SECRET,
+  CONTROL_PLANE_READ_SECRET,
   DEPLOY_CLAIM_SECRET,
   LINK_KEY,
   MODEL_LEASE_SECRET,
@@ -63,6 +65,33 @@ const linkProbe = (purpose: "logs" | "artifact", objectId: string, path: string)
   expect(other.status).toBe(403);
   const own = await send("GET", `${path}?t=${await link(purpose, objectId)}`);
   expect([401, 403]).not.toContain(own.status);
+};
+
+const readToken = (secret: string) =>
+  signControlPlaneReadToken(secret, {
+    executionId: EXECUTION,
+    epoch: 1,
+    expiresAt: Date.now() + 600_000,
+  });
+
+/**
+ * A surface that takes a lease's control-plane read token as the bearer: a token under another secret is
+ * `unauthenticated`, and one under the deploy's secret passes the token check while the lease it names is not current.
+ */
+const leaseReadProbe = async (path: string) => {
+  const forged = await send("GET", path, {
+    authorization: `Bearer ${await readToken("another-secret")}`,
+  });
+  expect(forged.status).toBe(401);
+  expect(await forged.json()).toMatchObject({ error: "unauthenticated", message: "token invalid" });
+  const signed = await send("GET", path, {
+    authorization: `Bearer ${await readToken(CONTROL_PLANE_READ_SECRET)}`,
+  });
+  expect(signed.status).toBe(401);
+  expect(await signed.json()).toMatchObject({
+    error: "lease_stale",
+    message: "token epoch is not current",
+  });
 };
 
 const compileCacheToken = (secret: string) =>
@@ -147,7 +176,18 @@ const probes: Readonly<Record<string, () => Promise<void>>> = {
       expect({ path, status: r.status }).not.toMatchObject({ status: 403 });
     }
   },
-  "log aggregate": linkProbe("logs", EXECUTION, `/v1/executions/${EXECUTION}/logs`),
+  "executions list": async () => {
+    const path = `/v1/executions?repository=${encodeURIComponent(REPOSITORY)}`;
+    const none = await send("GET", path);
+    expect(none.status).toBe(401);
+    expect(await errorOf(none)).toBe("unauthenticated");
+    await leaseReadProbe(path);
+  },
+  "log aggregate": async () => {
+    const path = `/v1/executions/${EXECUTION}/logs`;
+    await linkProbe("logs", EXECUTION, path)();
+    await leaseReadProbe(path);
+  },
   log: linkProbe("logs", EXECUTION, `/v1/executions/${EXECUTION}/logs/run.log`),
   artifact: linkProbe("artifact", ARTIFACT, `/v1/artifacts/${ARTIFACT}`),
   "compile-cache": async () => {
@@ -256,6 +296,9 @@ describe("the paths Access bypasses", () => {
         path: r.path,
         bypassed: false,
       });
+    // The executions list takes a lease's control-plane read token beside the Access JWT.
+    expect(bypassed("/v1/executions")).toBe(true);
+    expect(bypassed(`/v1/executions/${EXECUTION}/failure-summary`)).toBe(false);
     // The connect upgrade, the compile cache, the deploy claim and the model route are answered before the router.
     expect(bypassed("/v1/executors/connect")).toBe(true);
     expect(bypassed(`/v1/compile-cache/${REPOSITORY}/ns/key`)).toBe(true);

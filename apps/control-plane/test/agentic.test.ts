@@ -41,6 +41,7 @@ import {
 import { leaseCacheAt } from "../src/cache-execution.ts";
 import { isolateServices, type IsolateServices } from "../src/composition.ts";
 import type { ControlPlaneEnv } from "../src/config.ts";
+import { signControlPlaneReadToken } from "../src/control-plane-read.ts";
 import { envOf } from "./conclude.test-support.ts";
 
 const row = (kind: string, payload: unknown): IntentRow =>
@@ -210,6 +211,29 @@ describe("the issued-credential read", () => {
     );
     expect(expected.every((t) => typeof t === "string" && t.startsWith("cc3."))).toBe(true);
     expect([...tokens].sort()).toEqual([...expected].sort());
+  });
+
+  it("[FD-AGT-029] answers a ci-triage-pr lease's control-plane read token beside its compile-cache token", async () => {
+    const db = await leased();
+    await db.prepare("update executions set run = 'ci-triage-pr' where id = 'x1'").run();
+    const env = {
+      DB: db,
+      PUBLIC_ORIGIN: "https://cp.example",
+      COMPILE_CACHE_SECRET: "secret",
+      CONTROL_PLANE_READ_SECRET: "read-secret",
+    } as unknown as ControlPlaneEnv;
+    const tokens = await Effect.runPromise(issuedCredentials(env)("x1"));
+    const reads = await Promise.all(
+      [1, 2].map((epoch) =>
+        signControlPlaneReadToken("read-secret", {
+          executionId: "x1",
+          epoch,
+          expiresAt: 1_900_000_000_000,
+        }),
+      ),
+    );
+    for (const read of reads) expect(tokens).toContain(read);
+    expect(tokens.filter((t) => t.startsWith("cc3."))).toHaveLength(2);
   });
 
   it("fails, never answers empty, when intake holds no record of the execution", async () => {

@@ -4,8 +4,9 @@
 import { spawn } from "node:child_process";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
+import { validArtifactName } from "@fractalboxdev/flare-dispatch-cache/artifact-names";
 import { Intents } from "@fractalboxdev/mameko-run";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Match, Schema } from "effect";
 import { pathInvalid } from "../staged-write/gate.ts";
 import {
   buildStagedWrite,
@@ -15,6 +16,7 @@ import {
 } from "../staged-write/build.ts";
 import { ExecutionsRead } from "./ci-triage-pr.ts";
 import { executionsApiReadLayer } from "./executions-read.ts";
+import { ReadFailed } from "./spec-drift-pr.ts";
 import { githubIssuesReadLayer, IssuesRead } from "./triage-issues.ts";
 import { githubPullRequestsReadLayer, PullRequestsRead } from "./triage-prs.ts";
 import {
@@ -195,14 +197,9 @@ export const stagedWritesLayer = (
       }).pipe(Effect.mapError((e) => new StageFailed({ detail: `${e.step}: ${e.detail}` }))),
   });
 
-/** An artifact name the artifact store accepts (FD-CACHE-070): the name grammar, with no `.`, `..` or empty segment. */
-const ARTIFACT_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
-const validArtifactName = (name: string) =>
-  ARTIFACT_NAME.test(name) && !name.split("/").some((s) => s === ".." || s === "." || s === "");
-
 /**
- * `Artifacts` over the execution's artifact store: each `dashboard` artifact goes byte for byte, with its SHA-256
- * digest, under the lease's artifact prefix through `sink`, and `put` answers nothing a run could publish. The store's
+ * `Artifacts` over the execution's artifact store: each `dashboard` artifact whose name is one artifact-name segment
+ * (FD-CACHE-070) goes byte for byte, with its SHA-256 digest, under the lease's artifact prefix through `sink`, and `put` answers nothing a run could publish. The store's
  * only reader is the dashboard's authenticated artifact route (FD-AGT-059).
  */
 export const artifactsLayer = (sink: ArtifactSink): Layer.Layer<Artifacts> =>
@@ -267,6 +264,8 @@ export interface CloudAgenticConfig {
   readonly credentials: readonly string[];
   /** The suppression ledger's read; the job holds no binding of the control plane's database (FD-AGT-043). */
   readonly suppressionLedger: Layer.Layer<SuppressionLedger>;
+  /** `IssuesRead` in place of GitHub's issue list, such as `issuesFileReadLayer` over a setup-phase read. */
+  readonly issuesRead?: Layer.Layer<IssuesRead>;
 }
 
 export type CloudAgenticServices =
@@ -288,8 +287,8 @@ export type CloudAgenticServices =
  * route through the egress proxy, which alone holds the per-lease token; the shell and the edit loop start with the
  * sandbox environment, so no runner variable reaches them (FD-AGT-010). Artifacts go to the execution's artifact store
  * (FD-AGT-059). `ExecutionsRead` reads the control plane's executions and log routes, so the job holds no binding of the
- * executions table or the log store (FD-AGT-071). `IssuesRead` reads GitHub's issue list and `PullRequestsRead` its
- * open pull requests through the egress proxy. The suppression ledger is the read the runner entry supplies.
+ * executions table or the log store (FD-AGT-071). `IssuesRead` is `config.issuesRead` where set, else GitHub's issue
+ * list through the egress proxy, and `PullRequestsRead` reads GitHub's open pull requests through it. The suppression ledger is the read the runner entry supplies.
  * `ExecutionIdentity` names the execution the lease serves.
  */
 export const cloudAgenticLayers = (
@@ -309,10 +308,11 @@ export const cloudAgenticLayers = (
     artifactsLayer(config.artifacts),
     runnerIntentsLayer,
     executionsApiReadLayer({ baseUrl: config.controlPlaneUrl, fetch: config.fetch }),
-    githubIssuesReadLayer({
-      apiBase: "https://api.github.com",
-      fetch: config.fetch,
-    }),
+    config.issuesRead ??
+      githubIssuesReadLayer({
+        apiBase: "https://api.github.com",
+        fetch: config.fetch,
+      }),
     githubPullRequestsReadLayer({
       apiBase: "https://api.github.com",
       fetch: config.fetch,
@@ -321,3 +321,81 @@ export const cloudAgenticLayers = (
     Layer.succeed(ExecutionIdentity, { executionId: config.executionId }),
   );
 };
+
+// ---- `triage-issues`' setup-phase read ----------------------------------------------------------------------------
+
+const IssueRecord = Schema.Struct({
+  number: Schema.Number,
+  title: Schema.String,
+  body: Schema.String,
+  author: Schema.String,
+  authorAssociation: Schema.String,
+  labels: Schema.Array(Schema.String),
+  stateReason: Schema.NullOr(Schema.String),
+});
+
+/** The issues file: the repository's open issues, or the read's failure, as the setup phase read them. */
+const IssuesFile = Schema.Union([
+  Schema.TaggedStruct("Read", { repository: Schema.String, issues: Schema.Array(IssueRecord) }),
+  Schema.TaggedStruct("Unread", { repository: Schema.String, detail: Schema.String }),
+]);
+type IssuesFile = typeof IssuesFile.Type;
+const decodeIssuesFile = Schema.decodeUnknownEffect(Schema.fromJsonString(IssuesFile));
+
+/** The issues file could not be written to the workspace. */
+export class IssuesFileUnwritable extends Schema.TaggedError<IssuesFileUnwritable>()(
+  "IssuesFileUnwritable",
+  { detail: Schema.String },
+) {}
+
+/**
+ * Reads the repository's open issues through GitHub's issue list while the setup grants hold, and writes them, or the
+ * read's failure, to `file`. `triage-issues` declares private data and untrusted input, so its agent phase reaches no
+ * host but the model gateway (FD-AGT-005); its `IssuesRead` there is `issuesFileReadLayer` over this file.
+ */
+export const prefetchIssues = (
+  repository: string,
+  file: string,
+  fetch: typeof globalThis.fetch,
+): Effect.Effect<void, IssuesFileUnwritable> =>
+  Effect.gen(function* () {
+    const record = yield* IssuesRead.use((r) => r.openIssues(repository)).pipe(
+      Effect.provide(githubIssuesReadLayer({ apiBase: "https://api.github.com", fetch })),
+      Effect.match({
+        onSuccess: (issues): IssuesFile => ({ _tag: "Read", repository, issues }),
+        onFailure: (e): IssuesFile => ({ _tag: "Unread", repository, detail: e.detail }),
+      }),
+    );
+    yield* Effect.tryPromise({
+      try: () => writeFile(file, JSON.stringify(record), { mode: 0o600 }),
+      catch: (cause) => new IssuesFileUnwritable({ detail: String(cause) }),
+    });
+  });
+
+/**
+ * `IssuesRead` over the issues file `prefetchIssues` wrote: the issues it holds for the repository it names. A setup
+ * read that failed, a file for another repository and a file that is missing or does not decode each fail the read,
+ * never an empty list.
+ */
+export const issuesFileReadLayer = (file: string): Layer.Layer<IssuesRead> =>
+  Layer.succeed(IssuesRead, {
+    openIssues: (repository) =>
+      Effect.gen(function* () {
+        const failed = (detail: string) => new ReadFailed({ source: "issues", detail });
+        const text = yield* Effect.tryPromise({
+          try: () => readFile(file, "utf8"),
+          catch: (cause) => failed(String(cause).slice(0, 200)),
+        });
+        const record = yield* decodeIssuesFile(text).pipe(
+          Effect.mapError(() => failed("the issues file does not decode")),
+        );
+        if (record.repository !== repository)
+          return yield* failed(`the issues file holds ${record.repository}, not ${repository}`);
+        return yield* Match.value(record).pipe(
+          Match.tagsExhaustive({
+            Read: ({ issues }) => Effect.succeed(issues),
+            Unread: ({ detail }) => Effect.fail(failed(detail)),
+          }),
+        );
+      }),
+  });

@@ -272,7 +272,7 @@ A proposal's **suppression key** is `<owner>/<name>:<head branch>`: the reposito
 
 ### `ci-triage-pr`
 
-- **FD-AGT-071** · phase 2 · `V-UNIT` — `ci-triage-pr` must read failed executions from the executions table and their failed job logs over the last 24 h, classify each failure with a `transform` call and write one triage report with a `judgment` call.
+- **FD-AGT-071** · phase 2 · `V-UNIT` — `ci-triage-pr` must read failed executions from the executions table and their failed job logs over the last 24 h, classify each failure with a `transform` call and write one triage report with a `judgment` call; in a Container it reads them from `GET /v1/executions` and `GET /v1/executions/:id/logs` under its lease's control-plane read token, which the egress proxy attaches under the `control-plane-read` grant ([../interfaces.md](../interfaces.md) FD-IFC-102, FD-IFC-103).
 - **FD-AGT-072** · phase 2 · `V-UNIT` — `ci-triage-pr` must stage the report as `.flare-dispatch/ci-triage-<YYYY-MM-DD>.md` on the branch `flare-dispatch/ci-triage` with the path allowlist `.flare-dispatch/**`.
 - **FD-AGT-073** · phase 2 · `V-UNIT` — When the executions read succeeds and returns no failure in the window, `ci-triage-pr` must return a `pr.close` intent for its open pull request, which the drain refuses while that branch carries a commit the GitHub App did not author ([../github-output.md](../github-output.md) FD-GH-087).
 
@@ -282,6 +282,7 @@ A proposal's **suppression key** is `<owner>/<name>:<head branch>`: the reposito
 - **FD-AGT-075** · phase 3 · `V-UNIT` — `triage-issues` must map verdicts to intents: `duplicate` to a templated comment naming the original and a close as duplicate; `needs-repro` to the label `triage:needs-repro` and a templated request; `feature` and `question` to `triage:not-actionable`; `bug-with-repro` whose body holds a command block to `triage:fix-pending` with that repro and the reporter's `author_association`, and one whose body holds none to `triage:needs-human`; `bug-without-repro` to `triage:needs-human`; `unclassified` to no intent.
 - **FD-AGT-076** · phase 3 · `V-UNIT` — `triage-issues` must build every comment from a template, taking from model output only the verdict and the original issue number.
 - **FD-AGT-077** · phase 3 · `V-UNIT` — `triage-issues` must close an issue only for the verdict `duplicate` whose original stays open after every close of the same execution, and never an issue whose `state_reason` is `reopened`.
+- **FD-AGT-094** · phase 2 · `V-UNIT` — On a Container, `triage-issues` must read its repository's open issues under the `setup` phase's `github-api-read` grant, `GET` under `/repos/` alone, to a file in its workspace before the setup phase ends, and its `agent` phase must read the issues only from that file and reach no host but the model gateway (FD-AGT-005); a failed setup read must fail the run's issue read, never answer an empty list.
 
 ### `triage-prs`
 

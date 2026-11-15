@@ -10,6 +10,7 @@
     "./ledger-object": "./src/ledger-object.ts",
     "./device": "./src/device/index.ts",
     "./log-names": "./src/log-names.ts",
+    "./artifact-names": "./src/artifact-names.ts",
     "./metrics": "./src/metrics.ts",
     "./oidc": "./src/oidc.ts",
     "./provenance": "./src/provenance/index.ts",

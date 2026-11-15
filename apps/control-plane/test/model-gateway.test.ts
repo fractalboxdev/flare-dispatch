@@ -1,5 +1,6 @@
 // The control plane's model route, `POST /v1/model/completions`: one model call of an execution under its model-lease
 // token, routed by the repository's confidentiality mode and settled against the execution's model allowance in D1.
+import { createHash, createHmac } from "node:crypto";
 import { lookupRun, type CatalogEntry } from "@fractalboxdev/flare-dispatch-catalog";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import { describe, expect, it } from "vitest";
@@ -117,7 +118,14 @@ const BODY = {
 const call = async (
   env: ModelGatewayEnv,
   bearer: string | null,
-  options: { body?: unknown; raw?: string; method?: string; path?: string; at?: number } = {},
+  options: {
+    body?: unknown;
+    raw?: string;
+    method?: string;
+    path?: string;
+    at?: number;
+    fetch?: typeof globalThis.fetch;
+  } = {},
 ) => {
   const method = options.method ?? "POST";
   const response = await modelGatewayFetch(
@@ -131,6 +139,7 @@ const call = async (
     }),
     env,
     options.at ?? NOW,
+    options.fetch,
   );
   if (response === null) throw new Error("the route served no response");
   return { status: response.status, body: (await response.json()) as Record<string, unknown> };
@@ -299,5 +308,230 @@ describe("the model route", () => {
     expect(
       await leaseModelCredentials({ MODEL_LEASE_SECRET: "" }, entry("pr-review"), scope),
     ).toEqual({});
+  });
+});
+
+const REGION = "eu-west-1";
+const ROLE = "arn:aws:iam::000000000000:role/flare-dispatch-bedrock";
+/** The IAM user's keys the Worker holds as `BEDROCK_ACCESS_KEY_ID` and `BEDROCK_SECRET_ACCESS_KEY`. */
+const BASE = { accessKeyId: "AKIABASEEXAMPLE", secretAccessKey: "base-secret" };
+/** The role's temporary credentials STS answers. */
+const SESSION = {
+  accessKeyId: "ASIASESSIONEXAMPLE",
+  secretAccessKey: "session-secret",
+  sessionToken: "session-token",
+};
+const BEDROCK_MODEL = "anthropic.claude-example-v1:0";
+
+/** A registry whose only entry serving `judgment` is a `bedrock` entry, 1 micro-USD per token each way. */
+const BEDROCK_REGISTRY = {
+  "bedrock-judge": {
+    providerId: "bedrock",
+    routeKind: "bedrock",
+    serves: ["judgment"],
+    upstreamModel: BEDROCK_MODEL,
+    inputPriceMicroUsdPerMTok: 1_000_000,
+    outputPriceMicroUsdPerMTok: 1_000_000,
+  },
+};
+
+const BEDROCK_ENV = {
+  MODEL_REGISTRY: BEDROCK_REGISTRY,
+  MODEL_BEDROCK_REGION: REGION,
+  MODEL_BEDROCK_ROLE_ARN: ROLE,
+  BEDROCK_ACCESS_KEY_ID: BASE.accessKeyId,
+  BEDROCK_SECRET_ACCESS_KEY: BASE.secretAccessKey,
+};
+
+/**
+ * An independent Node-crypto SigV4 check of one request: the headers its `SignedHeaders` names, which must cover
+ * `host`, the payload hash and the date (and the session token where the credentials carry one), the canonical URI with
+ * each path segment encoded once more than on the wire, and a signature under `credentials` for `service` in `REGION`.
+ */
+const sigV4Verifies = (
+  url: URL,
+  headers: Headers,
+  body: string,
+  service: string,
+  credentials: { accessKeyId: string; secretAccessKey: string; sessionToken?: string },
+): boolean => {
+  const authorization = headers.get("authorization") ?? "";
+  const m =
+    /^AWS4-HMAC-SHA256 Credential=([^/]+)\/(\d{8})\/([^/]+)\/([^/]+)\/aws4_request, SignedHeaders=([^,]+), Signature=([0-9a-f]{64})$/.exec(
+      authorization,
+    );
+  if (m === null) return false;
+  const [, keyId, day, region, signedService, signedList, signature] = m as unknown as string[];
+  const date = headers.get("x-amz-date") ?? "";
+  const signed = signedList!.split(";");
+  const payloadHash = createHash("sha256").update(body).digest("hex");
+  if (
+    keyId !== credentials.accessKeyId ||
+    region !== REGION ||
+    signedService !== service ||
+    date.slice(0, 8) !== day ||
+    headers.get("x-amz-content-sha256") !== payloadHash ||
+    headers.get("host") !== url.host ||
+    !["host", "x-amz-content-sha256", "x-amz-date"].every((h) => signed.includes(h)) ||
+    (credentials.sessionToken !== undefined &&
+      (!signed.includes("x-amz-security-token") ||
+        headers.get("x-amz-security-token") !== credentials.sessionToken))
+  )
+    return false;
+  const canonical = [
+    "POST",
+    url.pathname
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/"),
+    "",
+    ...signed.map((k) => `${k}:${(headers.get(k) ?? "").trim().replace(/\s+/g, " ")}`),
+    "",
+    signedList,
+    payloadHash,
+  ].join("\n");
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    date,
+    `${day}/${region}/${service}/aws4_request`,
+    createHash("sha256").update(canonical).digest("hex"),
+  ].join("\n");
+  const h = (key: Buffer | string, value: string) =>
+    createHmac("sha256", key).update(value).digest();
+  const key = h(
+    h(h(h(`AWS4${credentials.secretAccessKey}`, day!), region!), service),
+    "aws4_request",
+  );
+  return createHmac("sha256", key).update(stringToSign).digest("hex") === signature;
+};
+
+/**
+ * STS and the Bedrock runtime of `REGION` as AWS answers them: a request whose SigV4 signature does not verify is
+ * `403`. STS answers `AssumeRole` of `ROLE` with `SESSION`, expiring `expiresInMs` from now; the runtime answers
+ * `InvokeModel` signed under `SESSION` with an Anthropic Messages answer, or `bedrockStatus` where set.
+ */
+const aws = (
+  options: { expiresInMs?: number; stsStatus?: number; bedrockStatus?: number } = {},
+) => {
+  const calls: { service: string; path: string; body: string }[] = [];
+  const fetch = (async (input: string | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const headers = new Headers(init?.headers);
+    const body = String(init?.body ?? "");
+    if (url.host === `sts.${REGION}.amazonaws.com` && url.pathname === "/") {
+      calls.push({ service: "sts", path: url.pathname, body });
+      if (!sigV4Verifies(url, headers, body, "sts", BASE))
+        return new Response("<Error><Code>SignatureDoesNotMatch</Code></Error>", { status: 403 });
+      if (options.stsStatus !== undefined)
+        return new Response("<Error><Code>AccessDenied</Code></Error>", {
+          status: options.stsStatus,
+        });
+      const form = new URLSearchParams(body);
+      if (form.get("Action") !== "AssumeRole" || form.get("RoleArn") !== ROLE)
+        return new Response("<Error><Code>InvalidAction</Code></Error>", { status: 400 });
+      const expiration = new Date(Date.now() + (options.expiresInMs ?? 3600_000)).toISOString();
+      return new Response(
+        `<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleResult><Credentials>
+           <AccessKeyId>${SESSION.accessKeyId}</AccessKeyId><SecretAccessKey>${SESSION.secretAccessKey}</SecretAccessKey>
+           <SessionToken>${SESSION.sessionToken}</SessionToken><Expiration>${expiration}</Expiration>
+         </Credentials></AssumeRoleResult></AssumeRoleResponse>`,
+      );
+    }
+    if (url.host === `bedrock-runtime.${REGION}.amazonaws.com`) {
+      calls.push({ service: "bedrock", path: url.pathname, body });
+      if (!sigV4Verifies(url, headers, body, "bedrock", SESSION))
+        return Response.json(
+          { message: "The request signature we calculated does not match" },
+          { status: 403 },
+        );
+      if (options.bedrockStatus !== undefined)
+        return Response.json({ message: "Too many requests" }, { status: options.bedrockStatus });
+      return Response.json({
+        content: [{ type: "text", text: "the bedrock completion" }],
+        usage: { input_tokens: 120, output_tokens: 30 },
+      });
+    }
+    return new Response("no such host", { status: 404 });
+  }) as unknown as typeof globalThis.fetch;
+  return { fetch, calls };
+};
+
+describe("the bedrock route", () => {
+  it("[FD-MDL-024] [FD-MDL-070] assumes the overlay's role with an STS AssumeRole signed under the base secrets, signs InvokeModel under the role's credentials, and settles the reported usage", async () => {
+    const { env, spend } = await plane({ [EXECUTION]: 1 }, { ...BEDROCK_ENV, AI: undefined });
+    const fake = aws();
+    expect(await call(env, await token(), { fetch: fake.fetch })).toEqual({
+      status: 200,
+      body: { text: "the bedrock completion" },
+    });
+    expect(fake.calls.map((c) => c.service)).toEqual(["sts", "bedrock"]);
+    const assume = new URLSearchParams(fake.calls[0]!.body);
+    expect(Object.fromEntries(assume)).toMatchObject({
+      Action: "AssumeRole",
+      RoleArn: ROLE,
+      RoleSessionName: "flare-dispatch-model-gateway",
+    });
+    expect(fake.calls[1]!.path).toBe(`/model/${encodeURIComponent(BEDROCK_MODEL)}/invoke`);
+    expect(JSON.parse(fake.calls[1]!.body)).toEqual({
+      anthropic_version: "bedrock-2023-05-31",
+      max_tokens: 1000,
+      system: "review",
+      messages: [{ role: "user", content: "the diff" }],
+    });
+    // 120 input and 30 output tokens at 1 micro-USD each.
+    expect((await spend(EXECUTION))[0]!.settled).toBe(150);
+  });
+
+  it("[FD-MDL-070] reuses the assumed credentials across calls, and assumes the role again once they are within 5 min of expiry", async () => {
+    const { env } = await plane({ [EXECUTION]: 1 }, { ...BEDROCK_ENV, AI: undefined });
+    const lasting = aws();
+    for (let i = 0; i < 3; i++)
+      expect((await call(env, await token(), { fetch: lasting.fetch })).status).toBe(200);
+    expect(lasting.calls.map((c) => c.service)).toEqual(["sts", "bedrock", "bedrock", "bedrock"]);
+    const expiring = aws({ expiresInMs: 4 * 60_000 });
+    for (let i = 0; i < 2; i++)
+      expect((await call(env, await token(), { fetch: expiring.fetch })).status).toBe(200);
+    expect(expiring.calls.map((c) => c.service)).toEqual(["sts", "bedrock", "sts", "bedrock"]);
+  });
+
+  it("[FD-MDL-070] answers unavailable and sends no InvokeModel when STS refuses the AssumeRole, and rate_limited when Bedrock throttles", async () => {
+    const { env } = await plane({ [EXECUTION]: 1 }, { ...BEDROCK_ENV, AI: undefined });
+    const denied = aws({ stsStatus: 403 });
+    expect(await call(env, await token(), { fetch: denied.fetch })).toMatchObject({
+      status: 503,
+      body: { error: "unavailable" },
+    });
+    expect(denied.calls.map((c) => c.service)).toEqual(["sts"]);
+    // A refusal keeps nothing: the next call assumes the role again.
+    expect((await call(env, await token(), { fetch: denied.fetch })).status).toBe(503);
+    expect(denied.calls.map((c) => c.service)).toEqual(["sts", "sts"]);
+    const throttled = aws({ bedrockStatus: 429 });
+    expect(await call(env, await token(), { fetch: throttled.fetch })).toMatchObject({
+      status: 429,
+      body: { error: "rate_limited" },
+    });
+  });
+
+  it("[FD-MDL-070] a deploy without the region, the role or either base secret holds no bedrock route and reaches no AWS host", async () => {
+    for (const unset of [
+      "MODEL_BEDROCK_REGION",
+      "MODEL_BEDROCK_ROLE_ARN",
+      "BEDROCK_ACCESS_KEY_ID",
+      "BEDROCK_SECRET_ACCESS_KEY",
+    ] as const) {
+      const { env } = await plane(
+        { [EXECUTION]: 1 },
+        { ...BEDROCK_ENV, AI: undefined, [unset]: "" },
+      );
+      const fake = aws();
+      expect(await call(env, await token(), { fetch: fake.fetch }), unset).toMatchObject({
+        status: 503,
+        body: {
+          error: "unavailable",
+          message: "no model entry this deploy routes serves judgment",
+        },
+      });
+      expect(fake.calls, unset).toEqual([]);
+    }
   });
 });

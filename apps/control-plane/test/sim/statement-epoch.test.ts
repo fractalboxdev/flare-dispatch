@@ -51,7 +51,7 @@ const MANIFEST = JSON.stringify({
 const sha = (n: number) => `sha256:${n.toString(16).padStart(64, "0")}`;
 /** The key helper's `cdhash` as the enrollment route records it: lowercase hex of 20 bytes (FD-PROV-031). */
 const CODE_HASH = "4".repeat(40);
-const ARTIFACT = { name: "dist/app.tgz", digest: sha(10) };
+const ARTIFACT = { name: "app.tgz", digest: sha(10) };
 
 let team: AccessTeam;
 let mf: Miniflare;

@@ -1,5 +1,10 @@
 // One gate job: a checkout of the execution's commit in a fresh workspace, an optional install, the job command, the
 // verdict, and the redacted log uploaded before the verdict returns (specs/runs/gate.md § Exit to verdict).
+import {
+  STAGED_WRITE_MANIFEST,
+  stagedBlobName,
+  type Manifest,
+} from "@fractalboxdev/flare-dispatch-agentic";
 import { Effect, Option, Schema, type Scope } from "effect";
 import { CommandExit, GateExec } from "./command.ts";
 import { redactLog } from "./egress.ts";
@@ -215,19 +220,23 @@ export const runGateJob = (input: GateJobInput) =>
 const hex = (bytes: ArrayBuffer) =>
   [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
 
-export const sha256 = (bytes: Uint8Array) =>
+const sha256Hex = (bytes: Uint8Array) =>
   Effect.promise(() => crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>)).pipe(
-    Effect.map((d) => `sha256:${hex(d)}`),
+    Effect.map(hex),
   );
+
+export const sha256 = (bytes: Uint8Array) =>
+  sha256Hex(bytes).pipe(Effect.map((d) => `sha256:${d}`));
 
 /** The branch a staged write proposes: always under `flare-dispatch/` (FD-GATE-081). */
 export const writebackBranch = (branch: string): string =>
   branch.startsWith("flare-dispatch/") ? branch : `flare-dispatch/${branch}`;
 
 /**
- * Stages the files the job changed that match the writeback paths as one staged write: blobs under
- * `staged-write/blobs/<digest>` and the manifest as `staged-write.json`, which the `pr.propose` applier's
- * staged-write gate checks (FD-GATE-081). A job that changed no matching file stages nothing.
+ * Stages the files the job changed that match the writeback paths as one staged write, under the artifact names the
+ * `pr.propose` reader opens: each blob as `staged-write.blob.<sha256>` and the manifest as
+ * `staged-write.manifest.json`, each one artifact-name segment (FD-CACHE-070). The `pr.propose` applier's staged-write
+ * gate checks the manifest (FD-GATE-081). A job that changed no matching file stages nothing.
  */
 const stageWriteback = (input: GateJobInput, writeback: Writeback, dir: string) =>
   Effect.gen(function* () {
@@ -248,18 +257,18 @@ const stageWriteback = (input: GateJobInput, writeback: Writeback, dir: string) 
       .map((entry) => entry.slice(3))
       .filter((path) => writeback.paths.some((glob) => globMatches(glob, path)));
     if (paths.length === 0) return Outcome.success();
-    const entries: { path: string; mode: string; digest: string }[] = [];
+    const entries: Manifest["entries"][number][] = [];
     for (const path of paths) {
       const bytes = yield* exec.readFile(`${dir}/${path}`);
-      const digest = yield* sha256(bytes);
-      yield* artifacts.upload(`staged-write/blobs/${digest}`, bytes);
+      const digest = yield* sha256Hex(bytes);
+      yield* artifacts.upload(stagedBlobName(digest), bytes);
       entries.push({ path, mode: "100644", digest });
     }
-    const manifest = {
+    const manifest: Manifest = {
       branch: writebackBranch(writeback.branch),
       baseBranch: input.ref.replace(/^refs\/heads\//, ""),
       baseCommit: input.sha,
-      commitMessage: writeback.title ?? `chore: ${input.key} writeback`,
+      message: writeback.title ?? `chore: ${input.key} writeback`,
       pr: {
         title: writeback.title ?? `${input.key}: regenerated files`,
         body: `Files the \`${input.key}\` job regenerated at ${input.sha}.`,
@@ -269,7 +278,7 @@ const stageWriteback = (input: GateJobInput, writeback: Writeback, dir: string) 
       entries,
     };
     yield* artifacts.upload(
-      "staged-write.json",
+      STAGED_WRITE_MANIFEST,
       new TextEncoder().encode(`${JSON.stringify(manifest)}\n`),
     );
     return Outcome.success();

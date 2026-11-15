@@ -13,9 +13,12 @@ import {
   AgentLease,
   SuppressionLedger,
   SuppressionReadFailed,
+  TriageIssuesInput,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import {
   cloudAgenticLayers,
+  issuesFileReadLayer,
+  prefetchIssues,
   type ArtifactSink,
   type CloudAgenticServices,
 } from "@fractalboxdev/flare-dispatch-agentic/executor";
@@ -112,6 +115,32 @@ const scratchDir = (prefix: string) =>
     (dir) => Effect.promise(() => rm(dir, { recursive: true, force: true })),
   );
 
+/** The run whose issue read happens in the setup phase, and the workspace file it reads in the agent phase. */
+export const SETUP_ISSUES_READER = "triage-issues";
+export const ISSUES_FILE = ".fd-triage-issues.json";
+
+/**
+ * `triage-issues`' issue read before the setup phase ends: its open issues, fetched under the setup grants to the issues
+ * file in the workspace, and the `IssuesRead` over that file its agent phase uses. Its agent phase reaches no host but
+ * the model gateway, because it reads untrusted issues beside private data (FD-AGT-005). Any other run reads nothing
+ * here.
+ */
+const setupIssuesRead = (
+  run: string,
+  input: unknown,
+  workspace: string,
+  fetch: typeof globalThis.fetch,
+) =>
+  Effect.gen(function* () {
+    if (run !== SETUP_ISSUES_READER) return undefined;
+    const { repo } = yield* Schema.decodeUnknownEffect(TriageIssuesInput)(input).pipe(
+      Effect.mapError((e) => new CloudLeaseMissing({ detail: e.message })),
+    );
+    const file = join(workspace, ISSUES_FILE);
+    yield* prefetchIssues(`${repo.owner}/${repo.name}`, file, fetch);
+    return issuesFileReadLayer(file);
+  });
+
 /** What the Container entry fixes for every agentic lease. */
 export interface ContainerAgenticOptions {
   /** The job's `fetch`; every request leaves through the Container's outbound handler. */
@@ -127,8 +156,9 @@ export interface ContainerAgenticOptions {
  * from its `cloudLease`; the execution id from the payload; the checkout the device executor placed in the workspace,
  * verified through mameko's `Workspace` and read at its `HEAD` as the staged write's base commit; artifacts through
  * mameko's `Artifact`; and the suppression ledger that fails every read. The setup egress phase ends once the checkout is
- * read, so the edit loop and every model call run under the `agent` grants (FD-AGT-010). The runner holds no
- * credential, so no model request is refused for carrying one (FD-AGT-011).
+ * read, and for `triage-issues` once its issues are read to the workspace, so the edit loop and every model call run
+ * under the `agent` grants (FD-AGT-005, FD-AGT-010). The runner holds no credential, so no model request is refused for
+ * carrying one (FD-AGT-011).
  */
 export const containerAgenticLayers = (
   options: ContainerAgenticOptions,
@@ -140,6 +170,12 @@ export const containerAgenticLayers = (
       yield* (yield* Workspace).checkout();
       const exec = yield* Exec;
       const checkout = yield* workspaceCheckout(exec);
+      const issuesRead = yield* setupIssuesRead(
+        lease.run,
+        lease.input,
+        checkout.root,
+        options.fetch,
+      );
       yield* exec.endSetup();
       const artifact = yield* Artifact;
       const stagingDir = yield* scratchDir("fd-staging-");
@@ -156,6 +192,7 @@ export const containerAgenticLayers = (
         env: options.env,
         credentials: [],
         suppressionLedger: unreachableSuppressionLedger,
+        ...(issuesRead === undefined ? {} : { issuesRead }),
       });
     }),
   );
@@ -219,7 +256,7 @@ const presignedAdvisorySnapshots = (
           const file = join(dir, "all.zip");
           const hash = sha256Stream();
           await pipeline(
-            Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
+            Readable.fromWeb(response.body as unknown as Parameters<typeof Readable.fromWeb>[0]),
             hash.pass,
             createWriteStream(file, { flags: "wx" }),
           );

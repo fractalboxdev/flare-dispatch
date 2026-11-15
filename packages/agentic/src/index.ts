@@ -8,6 +8,7 @@ export * from "./writeback/applier.ts";
 export * from "./writeback/records.ts";
 export * from "./model/routes.ts";
 export * from "./model/sigv4.ts";
+export * from "./model/sts.ts";
 export * from "./local/store.ts";
 export * from "./local/registration.ts";
 export * from "./local/run-context.ts";

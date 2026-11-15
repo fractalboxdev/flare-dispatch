@@ -34,10 +34,14 @@ export const dispatchGroup = apiGroup({
   handlers: DispatchHandlers,
 });
 
+/**
+ * The executions routes. The listing serves an Access identity, or a Container lease's control-plane read token, which
+ * it answers only its own repository's executions (FD-IFC-102).
+ */
 export const executionsGroup = apiGroup({
   group: ExecutionsGroup,
   surfaces: {
-    list: member,
+    list: { _tag: "AccessOrLease" },
     get: { _tag: "AccessOrActions" },
     failureSummary: member,
     cancel: member,
@@ -101,17 +105,19 @@ export const provenanceGroup = apiGroup({
 });
 
 const logLink: Surface = { _tag: "Link", purpose: "logs", param: "id" };
+const logLinkOrLease: Surface = { ...logLink, lease: true };
 
 /**
  * The logs group, mounted with the cache-artifacts area's handlers. Its routes serve an Access identity or a link token
- * for that execution (FD-IFC-017).
+ * for that execution (FD-IFC-017); the aggregate also serves a Container lease's control-plane read token, which the
+ * handlers answer only for an execution of the lease's own repository (FD-IFC-103).
  */
 export const logsGroup = <R>(
   handlers: Layer.Layer<HttpApiGroup.Service<"flare-dispatch", "logs">, never, R>,
 ) =>
   apiGroup({
     group: LogsGroup,
-    surfaces: { aggregate: logLink, file: logLink },
+    surfaces: { aggregate: logLinkOrLease, file: logLink },
     handlers,
   });
 

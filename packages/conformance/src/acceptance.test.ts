@@ -53,7 +53,7 @@ const requirementOf = (cdhash: string) =>
   `identifier "dev.flare-dispatch.key-helper" and anchor apple generic and cdhash H"${cdhash}"`;
 /** The code hash the enrollment route records for mac-1 from its attestation evidence (FD-PROV-031). */
 const CODE_HASH = codeSigningHashOfRequirement(requirementOf("4C".repeat(32)))!;
-const ARTIFACT = { name: "dist/app.tgz", digest: sha(10) };
+const ARTIFACT = { name: "app.tgz", digest: sha(10) };
 const LEASED = "01JDZ8Q6V3M2K9T4WXYZ5LEASE";
 const REGISTERED = "01JDZ8Q6V3M2K9T4WXYZ5REGIS";
 

@@ -16,6 +16,7 @@ const DISTINCT = {
   INSTALL_STATE_KEY: "install-state-value",
   DEPLOY_CLAIM_SECRET: "deploy-claim-value",
   MODEL_LEASE_SECRET: "model-lease-value",
+  CONTROL_PLANE_READ_SECRET: "control-plane-read-value",
 };
 
 describe("fd deploy against the control plane's own key check", () => {
@@ -38,6 +39,7 @@ describe("fd deploy against the control plane's own key check", () => {
       "INSTALL_STATE_KEY",
       "DEPLOY_CLAIM_SECRET",
       "MODEL_LEASE_SECRET",
+      "CONTROL_PLANE_READ_SECRET",
     ] as const) {
       const clash = account({ ...DISTINCT, [name]: DISTINCT.PROVENANCE_KEY });
       const logged: unknown[] = [];

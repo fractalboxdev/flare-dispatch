@@ -374,6 +374,7 @@ describe("the staged write on a Container", () => {
           Layer.succeed(ExecutionLease, {
             executionId: EXECUTION,
             epoch: 1,
+            run: "improve-pr",
             input: { ...agenticInput("improve-pr", base, head), cloudLease: AGENT_LEASE },
           }),
           jobServices(d.client, { executionId: EXECUTION, epoch: 1, outputPaths: [] }),
@@ -493,6 +494,7 @@ describe("the scan runs' per-lease Layers", () => {
           Layer.succeed(ExecutionLease, {
             executionId: EXECUTION,
             epoch: 1,
+            run: "security-rescan",
             input: scanInput("security-rescan", lease),
           }),
           jobServices(d.client, { executionId: EXECUTION, epoch: 1, outputPaths: [] }),
