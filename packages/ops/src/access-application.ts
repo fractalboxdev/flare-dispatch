@@ -33,6 +33,7 @@ export const ACCESS_BYPASS: readonly BypassPath[] = [
   { path: "/v1/executions/*/logs/*", surface: "log", identity: "link token, or Access JWT" },
   { path: "/v1/artifacts/*", surface: "artifact", identity: "link token, or Access JWT" },
   { path: "/v1/compile-cache/*", surface: "compile-cache", identity: "compile-cache token" },
+  { path: "/v1/deploy-claims/*", surface: "deploy-claim", identity: "deploy-claim token" },
   {
     path: "/v1/model/completions",
     surface: "model-gateway",

@@ -35,6 +35,7 @@ Every surface passes exactly one identity check before any route logic runs.
 | `POST /v1/executors/register` | Dispatcher | An operator enrolling a device | Access JWT of an identity in `operators` | 1 |
 | `/v1/executions/:id/logs`, `/v1/executions/:id/logs/:file`, `/v1/artifacts/:artifact_id/*` | Dispatcher | Anyone holding a link | Link token, or Access JWT | 0 |
 | `/v1/compile-cache/*` | Dispatcher | `sccache` in a job | Compile-cache token ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-057) | 0 |
+| `POST /v1/deploy-claims/:id` | Dispatcher | A `worker-deploy` run in a Container | Deploy-claim token bound to the execution and its current epoch ([runs/gate.md](runs/gate.md) FD-GATE-067) | 0 |
 | `POST /v1/model/completions` | Dispatcher | An executor's egress proxy, a local scheduler's host proxy | The execution's per-lease token with its epoch, or a capacity-lease proof of possession ([MAMEKO-MDL-040](https://github.com/fractalboxdev/mameko/blob/045fe5c576aa79ade726e0a08c30eb6cbf02afd1/specs/model-gateway.md), [MAMEKO-MDL-041](https://github.com/fractalboxdev/mameko/blob/045fe5c576aa79ade726e0a08c30eb6cbf02afd1/specs/model-gateway.md), [MAMEKO-MDL-043](https://github.com/fractalboxdev/mameko/blob/045fe5c576aa79ade726e0a08c30eb6cbf02afd1/specs/model-gateway.md)) | 0 |
 | `/.well-known/*`, `/health` | Dispatcher | Anyone | None | 0 |
 | `/v1/provenance/executions/*`, `/v1/provenance/subjects/*` | Dispatcher | Verifiers | None for public repositories, Access JWT otherwise | 4 |
@@ -157,6 +158,7 @@ Every error response is a JSON object `{ "error": <code>, "message": <text>, "re
 | `GET /v1/executions/:id/artifacts` | An execution's artifacts, one page with a cursor ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-078) | 0 |
 | `GET /v1/artifacts/:artifact_id/*` | One stored artifact, or with a path below it one file of its browse expansion ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-075) | 0 |
 | `GET`, `HEAD`, `PUT`, `PROPFIND`, `MKCOL` `/v1/compile-cache/:owner/:name/*` | The compile cache ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-056) | 0 |
+| `POST /v1/deploy-claims/:id` | Claim one execution's deploy command; the first claim answers `claimed: true`, every later one `claimed: false` ([runs/gate.md](runs/gate.md) FD-GATE-067) | 0 |
 | `POST /v1/model/completions` | One `ModelCompletionRequest` through the model gateway | 0 |
 | `POST /v1/executors/register` | Register one device key ([§ Device connection and enrollment](#device-connection-and-enrollment)) | 1 |
 | `POST /v1/ops/halt` | Set the control state: `run`, `halt-cloud`, `halt-all` | 0 |

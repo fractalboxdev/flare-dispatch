@@ -1,8 +1,24 @@
 #!/bin/sh
-# The gate image's entry: the run catalogue's runner entry (FD-RUN-063) under Node's type stripping. Arguments pass
-# through to `runnerMain` (`--journal <path>`, `--content-socket <path>`); `--version` prints the Node version the
-# image's smoke command checks.
+# The gate image's entry.
+#
+# With no argument and `MAMEKO_EXECUTOR_ID` set, a Container pool launched the image: it runs mameko's device executor
+# in one-lease mode on the port the Container's Durable Object connects to, over the run-catalogue bundle the image
+# pins (MAMEKO-EXEC-053). The Container is the job sandbox, so jobs start through `host-process`.
+#
+# Otherwise it runs the run catalogue's runner entry (FD-RUN-063) under Node's type stripping. Arguments pass through to
+# `runnerMain` (`--journal <path>`, `--content-socket <path>`); `--version` prints the Node version the image's smoke
+# command checks.
 set -eu
+if [ "$#" -eq 0 ] && [ -n "${MAMEKO_EXECUTOR_ID:-}" ]; then
+  catalog=/opt/flare-dispatch/pool-catalog
+  exec mameko-device-executor --listen 0.0.0.0:8080 \
+    --executor-id "$MAMEKO_EXECUTOR_ID" \
+    --node "$(command -v node)" \
+    --work-dir /tmp/fd-executor \
+    --catalog-bundle "$catalog/bundle" \
+    --catalog-sha256 "$(cat "$catalog/pin")" \
+    --catalog-key "$(cat "$catalog/key")"
+fi
 if [ "${1:-}" = "--version" ]; then
   exec node --version
 fi

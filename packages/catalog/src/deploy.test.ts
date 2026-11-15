@@ -1,4 +1,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer, Option } from "effect";
@@ -20,7 +22,12 @@ import {
 import type { DeploySmokeInput, WorkerDeployInput } from "./inputs.ts";
 import { lookupRun } from "./spec.ts";
 import { workerDeployDecoder, workerDeployDedupKey, workerDeploySerialGroup } from "./triggers.ts";
-import { DeployLedger, fileDeployLedger, runWorkerDeploy } from "./worker-deploy.ts";
+import {
+  DeployLedger,
+  fileDeployLedger,
+  httpDeployLedger,
+  runWorkerDeploy,
+} from "./worker-deploy.ts";
 
 const deployInput = (over: Partial<WorkerDeployInput["entry"]> = {}): WorkerDeployInput => ({
   ...ctx,
@@ -154,6 +161,86 @@ describe("worker-deploy", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  describe("on a ledger the control plane holds", () => {
+    /** A deploy-claim route on a local port: each request's method, path and authorization, and a scripted answer. */
+    const route = async (answer: (n: number) => { status: number; body: string }) => {
+      const seen: { method?: string; path?: string; authorization?: string }[] = [];
+      const server: Server = createServer((request, response) => {
+        seen.push({
+          method: request.method,
+          path: request.url,
+          authorization: request.headers.authorization,
+        });
+        const { status, body } = answer(seen.length);
+        response.writeHead(status, { "content-type": "application/json" }).end(body);
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/deploy-claims/01J`;
+      const close = () => new Promise<void>((resolve) => server.close(() => resolve()));
+      return { url, seen, close };
+    };
+    const claimed = (url: string) => ({
+      ...deployInput(),
+      deployClaim: { url, token: "dc1.payload.mac" },
+    });
+    const ledger = httpDeployLedger(globalThis.fetch);
+
+    it("[FD-GATE-067] presents the lease's token to the deploy-claim route, and starts the deploy only on the execution's first claim", async () => {
+      const r = await route((n) => ({ status: 200, body: JSON.stringify({ claimed: n === 1 }) }));
+      try {
+        const first = await deploy(claimed(r.url), { ledger });
+        const again = await deploy(claimed(r.url), { ledger });
+        expect(first.outcome).toEqual({ _tag: "success" });
+        expect(first.exec.ran.map((x) => x.command)).toContain("pnpm wrangler deploy");
+        expect(again.outcome).toEqual({ _tag: "failure", reason: "infra: DeployAlreadyStarted" });
+        expect(again.exec.ran).toEqual([]);
+        expect(r.seen).toEqual([
+          {
+            method: "POST",
+            path: "/v1/deploy-claims/01J",
+            authorization: "Bearer dc1.payload.mac",
+          },
+          {
+            method: "POST",
+            path: "/v1/deploy-claims/01J",
+            authorization: "Bearer dc1.payload.mac",
+          },
+        ]);
+      } finally {
+        await r.close();
+      }
+    });
+
+    it("[FD-GATE-067] fails closed with infra: DeployClaimFailed on a refusal, an unreadable answer, no answer or no deploy claim, and starts no deploy", async () => {
+      const answers = [
+        { status: 403, body: JSON.stringify({ error: "forbidden" }) },
+        { status: 503, body: JSON.stringify({ error: "unavailable" }) },
+        { status: 200, body: "not json" },
+        { status: 200, body: JSON.stringify({ claimed: "yes" }) },
+      ];
+      const r = await route((n) => answers[n - 1]!);
+      try {
+        for (const answer of answers) {
+          const refused = await deploy(claimed(r.url), { ledger });
+          expect(refused.outcome, answer.body).toEqual({
+            _tag: "failure",
+            reason: "infra: DeployClaimFailed",
+          });
+          expect(refused.exec.ran).toEqual([]);
+        }
+      } finally {
+        await r.close();
+      }
+      // The route is gone: the request does not complete.
+      const unreachable = await deploy(claimed(r.url), { ledger });
+      expect(unreachable.outcome).toEqual({ _tag: "failure", reason: "infra: DeployClaimFailed" });
+      // A lease without a deploy claim never reaches the route.
+      const unclaimed = await deploy(deployInput(), { ledger });
+      expect(unclaimed.outcome).toEqual({ _tag: "failure", reason: "infra: DeployClaimFailed" });
+      expect(unclaimed.exec.ran).toEqual([]);
+    });
   });
 
   it("[FD-GATE-068] runs the deploy with timeoutSec, 900 s by default, and sets FD_BRANCH and FD_BRANCH_HEAD_SHA", async () => {

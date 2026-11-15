@@ -289,7 +289,9 @@ export const workerDeploySpec = gate("worker-deploy", {
   },
   constraints: ["cloud-pinned"],
   serialize: true,
-  grants: { setup: ["cf-api"], agent: [] },
+  // `deploy-claim` reaches the control plane's deploy-claim route alone, where the run claims the deploy before the
+  // command starts; `cf-api` is the Cloudflare API the command reaches (FD-GATE-066, FD-GATE-067).
+  grants: { setup: ["cf-api", "deploy-claim"], agent: [] },
   intentKinds: ["dispatch.followOn"],
 });
 export const deploySmokeSpec = gate("deploy-smoke", {

@@ -82,10 +82,14 @@ export interface ApiEnv {
   readonly PROVENANCE_KEY?: string;
   /** The log key, which signs the private log's checkpoints (specs/provenance.md § Keys). */
   readonly LOG_KEY?: string;
-  /** The other capability secrets: compile-cache tokens (FD-CACHE-057) and install states (FD-OPS-073). */
+  /**
+   * The other capability secrets: compile-cache tokens (FD-CACHE-057), install states (FD-OPS-073) and
+   * `worker-deploy`'s deploy-claim tokens (specs/runs/gate.md FD-GATE-067).
+   */
   readonly COMPILE_CACHE_SECRET?: string;
   readonly CACHE_TOKEN_SECRET?: string;
   readonly INSTALL_STATE_KEY?: string;
+  readonly DEPLOY_CLAIM_SECRET?: string;
   /** The verdict record signing key, which signs each job and verdict record (specs/github-output.md FD-GH-099). */
   readonly RECORDS_SIGNING_KEY?: string;
 }
@@ -198,6 +202,7 @@ export const PROVENANCE_KEY_DISTINCT_FROM = [
   "COMPILE_CACHE_SECRET",
   "CACHE_TOKEN_SECRET",
   "INSTALL_STATE_KEY",
+  "DEPLOY_CLAIM_SECRET",
 ] as const satisfies ReadonlyArray<keyof ApiEnv>;
 
 /**

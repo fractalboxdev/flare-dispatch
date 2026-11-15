@@ -1,11 +1,26 @@
-# FlareDispatch v2 gate image: the runner child of a cloud lease and the toolchain its gate jobs run.
+# FlareDispatch v2 gate image: the runner child of a cloud lease, the device executor of a Container pool's launch,
+# and the toolchain its gate jobs run.
 #
 # The cloud executor starts `fd-runner` once per lease with the run payload on stdin; the runner answers one result
-# line on stdout (MAMEKO-EXEC-143). A lease names this image by digest (MAMEKO-EXEC-041), so every input below is
+# line on stdout (MAMEKO-EXEC-143). A Container pool starts `fd-runner` with no argument and `MAMEKO_EXECUTOR_ID`
+# set; it runs mameko's device executor in one-lease mode over the run-catalogue bundle this image pins
+# (MAMEKO-EXEC-053, MAMEKO-EXEC-144). A lease names this image by digest (MAMEKO-EXEC-041), so every input below is
 # pinned and `sandbox-image` refuses an unpinned one (FD-GATE-078).
 #
 # Build context: the repository root, including the `vendor/mameko` submodule. `.dockerignore` keeps node_modules
 # and build output out of the context.
+
+# The device executor, from the pinned mameko submodule's Cargo workspace and its lockfile. The image's slim variant
+# carries the C compiler and libc headers `ring` builds with, and the build needs no other system package. The
+# workspace's `rust-toolchain.toml` stays out of the context: it names this same 1.97.0 toolchain with components and
+# a target the executor build does not use, which rustup would otherwise download unpinned.
+FROM docker.io/library/rust:1.97.0-slim-bookworm@sha256:6d220bf85c74e842a79da63997af8d2e74455c0b8847d8bb3a5888572334991d AS device-executor
+WORKDIR /src
+COPY vendor/mameko/Cargo.toml vendor/mameko/Cargo.lock ./
+COPY vendor/mameko/crates crates
+RUN cargo build --release --locked -p mameko-device-executor && \
+    install -m 0755 target/release/mameko-device-executor /usr/local/bin/mameko-device-executor
+
 FROM docker.io/library/node:22.21.1-bookworm-slim@sha256:25b3eb23a00590b7499f2a2ce939322727fcce1b15fdd69754fcd09536a3ae2c
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -75,8 +90,29 @@ COPY vendor/mameko/package.json vendor/mameko/tsconfig.base.json vendor/mameko/
 RUN pnpm install --frozen-lockfile --prod --filter "@fractalboxdev/flare-dispatch-catalog..." && \
     mkdir -p /workspaces && chown node:node /workspaces
 
+# The run-catalogue bundle of a Container launch, its pin and its verifying key (packages/catalog/scripts/
+# build-pool-catalog.ts). The builder's `esbuild` is a production dependency of the runner package, so the install
+# above holds it.
+RUN node --experimental-strip-types --no-warnings packages/catalog/scripts/build-pool-catalog.ts \
+      /opt/flare-dispatch/pool-catalog
+
+COPY --from=device-executor /usr/local/bin/mameko-device-executor /usr/local/bin/mameko-device-executor
 COPY infra/v2/fd-runner /usr/local/bin/fd-runner
-RUN chmod 0755 /usr/local/bin/fd-runner && fd-runner --version
+# The executor verifies the pinned bundle before it listens, so an address it cannot bind shows the binary runs and
+# the bundle, pin and key agree.
+RUN set -eu; \
+    chmod 0755 /usr/local/bin/fd-runner; \
+    fd-runner --version; \
+    catalog=/opt/flare-dispatch/pool-catalog; \
+    if mameko-device-executor --listen 256.0.0.0:0 --executor-id smoke --node "$(command -v node)" \
+         --work-dir /tmp/fd-executor-smoke --catalog-bundle "$catalog/bundle" \
+         --catalog-sha256 "$(cat "$catalog/pin")" --catalog-key "$(cat "$catalog/key")" \
+         2> /tmp/executor-smoke.log; then \
+      echo "the device executor listened on an invalid address" >&2; exit 1; \
+    fi; \
+    cat /tmp/executor-smoke.log; \
+    grep -q "cannot listen on 256.0.0.0:0" /tmp/executor-smoke.log; \
+    rm -rf /tmp/executor-smoke.log /tmp/fd-executor-smoke
 
 USER node
 ENTRYPOINT ["/usr/local/bin/fd-runner"]
