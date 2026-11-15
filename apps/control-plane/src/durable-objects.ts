@@ -36,6 +36,7 @@ import { guardLease } from "./agentic.ts";
 import { isolateServices, presignerLayer } from "./composition.ts";
 import { leaseCache } from "./cache.ts";
 import { leaseCacheAt } from "./cache-execution.ts";
+import { prProposeOnFrame } from "./pr-propose.ts";
 import { type ChannelSocket, cloudStatementOnFrame } from "./provenance.ts";
 import { imageDigestOf, invalidateLeaseNonce, leaseNonce, requestLeaseFields } from "./lease.ts";
 import { launchKeysOf, poolSettings } from "./pools.ts";
@@ -64,12 +65,15 @@ const PROGRESS_TIMEOUT_MS = 300_000;
  */
 const channelHooks = (bindings: ControlPlaneEnv) => ({
   /**
-   * An `exec.result` that the accept compare-and-set accepted from a cloud executor gets its cloud-builder statement,
-   * signed with the provenance key and queued for the transparency log (FD-PROV-008, FD-PROV-009); the placement row,
-   * not the frame, decides whether it was accepted.
+   * An `exec.result` that the accept compare-and-set accepted from a cloud executor gets its `pr.propose` row where it
+   * is a `success` that carries a staged write (FD-AGT-034), and its cloud-builder statement, signed with the
+   * provenance key and queued for the transparency log (FD-PROV-008, FD-PROV-009); the placement row, not the frame,
+   * decides whether it was accepted.
    */
-  afterFrame: (ws: unknown, message: string | ArrayBuffer) =>
-    cloudStatementOnFrame(bindings, ws as ChannelSocket, message, Date.now()),
+  afterFrame: async (ws: unknown, message: string | ArrayBuffer) => {
+    await prProposeOnFrame(bindings, ws as ChannelSocket, message, Date.now());
+    await cloudStatementOnFrame(bindings, ws as ChannelSocket, message, Date.now());
+  },
 
   /**
    * Signs each `exec.presign` URL with the object-store presigner over the presign token, on the bucket's S3 endpoint
