@@ -1,5 +1,5 @@
 // The artifact store (specs/cache-artifacts.md § Artifacts). An artifact is stored at
-// `artifacts/<execution_id>/<epoch>/<name>` and described by one D1 row; the `artifact_id` is the public handle and
+// `artifact/<execution_id>/<epoch>/<name>` and described by one D1 row; the `artifact_id` is the public handle and
 // the R2 path is never exposed. A browse expansion's files sit under `<path>.browse/`.
 import type { ExecutorKind } from "@fractalboxdev/mameko-kernel";
 import { Context, Effect, Schema } from "effect";
@@ -96,7 +96,7 @@ export const validArtifactName = (name: string) =>
 export const newArtifactId = random128;
 
 export const artifactPath = (executionId: string, epoch: number, name: string) =>
-  `artifacts/${executionId}/${epoch}/${name}`;
+  `artifact/${executionId}/${epoch}/${name}`;
 
 /** Browse-expansion bounds (FD-CACHE-073). */
 export const BROWSE_BOUNDS = {

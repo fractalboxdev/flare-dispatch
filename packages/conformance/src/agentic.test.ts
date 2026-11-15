@@ -83,7 +83,7 @@ afterAll(async () => {
   for (const d of dirs) await rm(d, { recursive: true, force: true });
 });
 
-/** A fresh control plane store: mameko's D1 tables and the `CACHE` bucket that holds `artifacts/`. */
+/** A fresh control plane store: mameko's D1 tables and the `CACHE` bucket that holds `artifact/`. */
 const freshPlane = async () => {
   const n = databases++;
   const db = (await mf.getD1Database(`DB${n}`)) as unknown as D1Like;

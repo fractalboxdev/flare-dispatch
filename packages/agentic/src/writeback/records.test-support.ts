@@ -49,4 +49,4 @@ export const memoryBucket = (): ArtifactObjects & {
 };
 
 export const artifactPath = (executionId: string, epoch: number, name: string) =>
-  `artifacts/${executionId}/${epoch}/${name}`;
+  `artifact/${executionId}/${epoch}/${name}`;

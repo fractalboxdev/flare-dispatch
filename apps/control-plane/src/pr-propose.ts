@@ -50,7 +50,7 @@ export const resultOf = (frame: string) =>
     };
   });
 
-/** What the step inserts on: the store and the bucket that holds `artifacts/`, unbound on a deploy that binds none. */
+/** What the step inserts on: the store and the bucket that holds `artifact/`, unbound on a deploy that binds none. */
 export interface PrProposeStores {
   readonly db: D1Like;
   readonly artifacts: ArtifactObjects | undefined;
@@ -76,7 +76,7 @@ const sha256Hex = (text: string) =>
 /**
  * Inserts the execution's `pr.propose` row for a result the placement accepted at `epoch` from `executorId`, and
  * answers whether the binding gave a payload. A result the placement did not accept from that executor at that epoch
- * gets none. A `success` result's staged write is its manifest at `artifacts/<execution_id>/<epoch>/`; an absent
+ * gets none. A `success` result's staged write is its manifest at `artifact/<execution_id>/<epoch>/`; an absent
  * manifest is a result with no staged write. A manifest that does not decode, an unreadable bucket or store, or a
  * deploy that binds no bucket fails, so no caller reads a missing row as "nothing staged".
  */

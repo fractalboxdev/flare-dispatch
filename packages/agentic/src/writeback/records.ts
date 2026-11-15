@@ -15,9 +15,9 @@ export interface ArtifactObjects {
 export interface WritebackRecordsConfig {
   /** The control plane's database: mameko's `placements`, `executors` and `model_calls` tables. */
   readonly db: D1Binding;
-  /** The bucket that holds `artifacts/`; undefined on a deploy that binds none, where every blob read fails. */
+  /** The bucket that holds `artifact/`; undefined on a deploy that binds none, where every blob read fails. */
   readonly artifacts: ArtifactObjects | undefined;
-  /** The object key of an execution's artifact name at an epoch (`artifacts/<execution_id>/<epoch>/<name>`). */
+  /** The object key of an execution's artifact name at an epoch (`artifact/<execution_id>/<epoch>/<name>`). */
   readonly artifactPath: (executionId: string, epoch: number, name: string) => string;
   /** Every credential the control plane issued to the execution, at any epoch (FD-AGT-029). */
   readonly issuedCredentials: (
@@ -59,7 +59,7 @@ const placementOf = (db: D1Binding, executionId: string) =>
   });
 
 /**
- * Reads each distinct blob of the entries from `artifacts/<execution_id>/<epoch>/staged-write/blobs/<sha256>` and
+ * Reads each distinct blob of the entries from `artifact/<execution_id>/<epoch>/staged-write/blobs/<sha256>` and
  * recomputes the SHA-256 digest of the bytes read, so the gate compares the manifest with what is stored rather than
  * with the key it was stored under. A blob absent from the store is left out, for the gate to reject as
  * `blob-missing`. When the stored sizes of the distinct blobs add up to more than `maxBytes`, no bytes are read, so an

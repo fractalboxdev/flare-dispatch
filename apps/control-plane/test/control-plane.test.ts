@@ -505,14 +505,14 @@ describe("the cache, artifact and log routes", () => {
           "0".repeat(64),
           repo,
           isPrivate ? 1 : 0,
-          `artifacts/${executionId}/1/report.txt`,
+          `artifact/${executionId}/1/report.txt`,
           Date.now(),
           Date.now() + 3_600_000,
         )
         .run();
     await artifact(ARTIFACT, EXECUTION, "fractalboxdev/flare-dispatch", false);
-    await bucket.put(`artifacts/${EXECUTION}/1/report.txt`, "report body");
-    await bucket.put(`artifacts/${EXECUTION}/1/report.txt.browse/a/b.txt`, "browse body");
+    await bucket.put(`artifact/${EXECUTION}/1/report.txt`, "report body");
+    await bucket.put(`artifact/${EXECUTION}/1/report.txt.browse/a/b.txt`, "browse body");
     await db
       .prepare(
         `insert into executions (id, scope_id, run, class, status, enqueued_at)
@@ -529,9 +529,9 @@ describe("the cache, artifact and log routes", () => {
       .bind(PRIVATE_EXECUTION, SHA, PRIVATE_EXECUTION, AUTHOR, Date.now())
       .run();
     await artifact(PRIVATE_ARTIFACT, PRIVATE_EXECUTION, "acme/private", true);
-    await bucket.put(`artifacts/${PRIVATE_EXECUTION}/1/report.txt`, "private body");
+    await bucket.put(`artifact/${PRIVATE_EXECUTION}/1/report.txt`, "private body");
     await bucket.put(
-      `artifacts/${PRIVATE_EXECUTION}/1/report.txt.browse/a/b.txt`,
+      `artifact/${PRIVATE_EXECUTION}/1/report.txt.browse/a/b.txt`,
       "private browse",
     );
   });
@@ -1018,7 +1018,7 @@ describe("a development deployment", () => {
     // A device restores the device and content tiers and writes none for a dispatch (FD-CACHE-016).
     expect(lease["upload_grant"]).toMatchObject({
       cache_prefix: null,
-      artifact_prefix: `artifacts/${id}/${String(epoch)}/`,
+      artifact_prefix: `artifact/${id}/${String(epoch)}/`,
       log_prefix: `logs/${id}/${String(epoch)}/`,
       compile_cache: null,
     });

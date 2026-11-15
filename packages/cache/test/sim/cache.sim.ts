@@ -193,7 +193,7 @@ const WORKSPACE_KEYS = (executionId: string, epoch: number) => [
   `workspace/${executionId}/${epoch}/src.tar`,
   `checkout/${executionId}/${epoch}/repo.tar`,
   `target/${executionId}/${epoch}/release.tar`,
-  `artifacts/${executionId}/${epoch}/workspace.tar`,
+  `artifact/${executionId}/${epoch}/workspace.tar`,
   `cache/${pullRequestNamespace(REPO, 7)}/workspace.tar`,
 ];
 

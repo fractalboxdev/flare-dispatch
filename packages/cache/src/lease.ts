@@ -86,7 +86,7 @@ export const leaseCacheFields = async (
     cache_namespaces: namespaces,
     upload_grant: {
       cache_prefix: namespaces.write === null ? null : `cache/${namespaces.write}/`,
-      artifact_prefix: `artifacts/${epochPath}`,
+      artifact_prefix: `artifact/${epochPath}`,
       log_prefix: `logs/${epochPath}`,
       compile_cache:
         token === null

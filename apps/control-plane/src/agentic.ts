@@ -201,7 +201,7 @@ export const issuedCredentials = (env: ControlPlaneEnv) => (executionId: string)
   }).pipe(Effect.provide(d1IntakeStore(env.DB)));
 
 /**
- * The staged write's records: its blobs from the `CACHE` bucket's `artifacts/` prefix, the gateway's model calls and
+ * The staged write's records: its blobs from the `CACHE` bucket's `artifact/` prefix, the gateway's model calls and
  * the issued credentials (FD-AGT-013). A deploy that binds no `CACHE` bucket fails every blob read.
  */
 export const writebackRecords = (env: ControlPlaneEnv) =>

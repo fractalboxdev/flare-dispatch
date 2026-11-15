@@ -7,12 +7,12 @@ import { CACHE_KINDS, type CacheKind } from "./key.ts";
 import type { UploadGrant } from "./lease.ts";
 
 /** The only R2 prefixes an executor may write through the control plane. */
-export const UPLOAD_PREFIXES = ["cache/", "artifacts/", "logs/"] as const;
+export const UPLOAD_PREFIXES = ["cache/", "artifact/", "logs/"] as const;
 
 /** FD-CACHE-002: every prefix of an upload grant is a cache, artifact or log prefix of this execution. */
 export const grantCarriesNoWorkspace = (grant: UploadGrant, executionId: string, epoch: number): boolean =>
   (grant.cache_prefix === null || grant.cache_prefix.startsWith("cache/")) &&
-  grant.artifact_prefix === `artifacts/${executionId}/${epoch}/` &&
+  grant.artifact_prefix === `artifact/${executionId}/${epoch}/` &&
   grant.log_prefix === `logs/${executionId}/${epoch}/`;
 
 /** What the runner must do when it starts an execution at any epoch, and what it may restore. */

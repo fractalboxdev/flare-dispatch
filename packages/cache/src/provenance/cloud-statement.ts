@@ -1,6 +1,6 @@
 // The cloud builder's statement (specs/provenance.md § Statement, FD-PROV-008). A cloud executor holds no device key,
 // so when its result submission is accepted the control plane writes the statement itself: each subject digest comes
-// from the artifact bytes the control plane stores in R2 at `artifacts/<execution_id>/<epoch>/<name>`, never from a
+// from the artifact bytes the control plane stores in R2 at `artifact/<execution_id>/<epoch>/<name>`, never from a
 // digest the executor reports, and the provenance key signs the envelope as the cloud builder.
 import { Effect, Schema } from "effect";
 import { artifactPath } from "../artifacts.ts";
