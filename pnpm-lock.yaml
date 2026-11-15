@@ -97,6 +97,9 @@ importers:
       '@fractalboxdev/flare-dispatch-local-ci':
         specifier: workspace:*
         version: link:../../packages/local-ci
+      '@fractalboxdev/mameko-run':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/run
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1

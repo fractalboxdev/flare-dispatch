@@ -31,6 +31,7 @@
     "@cloudflare/workers-types": "5.20261012.1",
     "@fractalboxdev/flare-dispatch-fd": "workspace:*",
     "@fractalboxdev/flare-dispatch-local-ci": "workspace:*",
+    "@fractalboxdev/mameko-run": "workspace:*",
     "@types/node": "^22.19.0",
     "esbuild": "0.28.2",
     "miniflare": "4.20260515.0",
