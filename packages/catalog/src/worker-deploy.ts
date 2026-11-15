@@ -1,25 +1,41 @@
-// The `worker-deploy` run: re-read the branch head, run the deploy command once per epoch with the Cloudflare API
+// The `worker-deploy` run: re-read the branch head, claim the deploy, run the deploy command with the Cloudflare API
 // reached only through the `cf-api` grant, then start `deploy-smoke` on the same commit (FD-GATE-061 to FD-GATE-069).
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { Intents } from "@fractalboxdev/mameko-run";
-import { Context, Effect, Layer, Option } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { CREDENTIAL_PLACEHOLDER } from "./egress.ts";
 import { GithubRead } from "./github-read.ts";
 import { checkedOutWorkspace, runStep, uploadLog } from "./job.ts";
-import { WORKER_DEPLOY_MAX_DURATION_SEC, type WorkerDeployInput } from "./inputs.ts";
+import {
+  WORKER_DEPLOY_MAX_DURATION_SEC,
+  type DeployClaimGrant,
+  type WorkerDeployInput,
+} from "./inputs.ts";
 import { timeoutProblem } from "./manifest.ts";
 import { isSuccess, Outcome } from "./reasons.ts";
 
 export const DEFAULT_DEPLOY_TIMEOUT_SEC = 900;
 
-/** Records that a deploy command started in an epoch, so it starts at most once there (FD-GATE-067). */
+/** The deploy claim got no answer the ledger can decide on, so the run starts no deploy command. */
+export class DeployClaimFailed extends Schema.TaggedError<DeployClaimFailed>()(
+  "DeployClaimFailed",
+  { detail: Schema.String },
+) {}
+
+/** Records that a deploy command started, so it starts at most once in an epoch (FD-GATE-067). */
 export class DeployLedger extends Context.Service<
   DeployLedger,
   {
-    /** `true` the first time a key is claimed, `false` after. */
-    readonly claim: (epochKey: string) => Effect.Effect<boolean>;
+    /**
+     * `true` the first time a key is claimed, `false` after. `grant` is the lease's deploy claim, which a ledger held
+     * by the control plane presents.
+     */
+    readonly claim: (
+      epochKey: string,
+      grant?: DeployClaimGrant,
+    ) => Effect.Effect<boolean, DeployClaimFailed>;
   }
 >()("@fractalboxdev/flare-dispatch-catalog/DeployLedger") {}
 
@@ -38,6 +54,42 @@ export const fileDeployLedger = (root: string): Layer.Layer<DeployLedger> =>
         } catch {
           return false;
         }
+      }),
+  });
+
+const ClaimAnswer = Schema.Struct({ claimed: Schema.Boolean });
+
+/**
+ * `DeployLedger` held by the control plane, for an executor whose file system does not outlive a reclaim, such as a
+ * Container: a claim is one `POST` of the lease's deploy-claim token to the route the lease names. The control plane
+ * keys the claim by execution id, so the first claim of an execution answers `true` and every later one, from any
+ * epoch, answers `false`. The ledger fails closed: a lease without a deploy claim, a request that does not complete, a
+ * non-2xx status or a body other than `{ "claimed": <boolean> }` fails the claim with `DeployClaimFailed`.
+ */
+export const httpDeployLedger = (fetch: typeof globalThis.fetch): Layer.Layer<DeployLedger> =>
+  Layer.succeed(DeployLedger, {
+    claim: (_epochKey, grant) =>
+      Effect.gen(function* () {
+        if (grant === undefined)
+          return yield* new DeployClaimFailed({ detail: "the lease carries no deploy claim" });
+        const response = yield* Effect.tryPromise({
+          try: () =>
+            fetch(grant.url, {
+              method: "POST",
+              headers: { authorization: `Bearer ${grant.token}` },
+            }),
+          catch: (cause) => new DeployClaimFailed({ detail: String(cause) }),
+        });
+        if (!response.ok)
+          return yield* new DeployClaimFailed({ detail: `status ${response.status}` });
+        const body = yield* Effect.tryPromise({
+          try: () => response.json() as Promise<unknown>,
+          catch: (cause) => new DeployClaimFailed({ detail: `body: ${String(cause)}` }),
+        });
+        const answer = yield* Schema.decodeUnknownEffect(ClaimAnswer)(body).pipe(
+          Effect.mapError((e) => new DeployClaimFailed({ detail: `body: ${e.message}` })),
+        );
+        return answer.claimed;
       }),
   });
 
@@ -71,7 +123,7 @@ export const runWorkerDeploy = (input: WorkerDeployInput) =>
     if (head !== input.sha && input.entry.requireHead !== false)
       return Outcome.cancelled("superseded: branch head moved");
     const ledger = yield* DeployLedger;
-    if (!(yield* ledger.claim(yield* epochKey(input))))
+    if (!(yield* ledger.claim(yield* epochKey(input), input.deployClaim)))
       return Outcome.failure("infra: DeployAlreadyStarted");
     const outcome = yield* Effect.scoped(
       Effect.gen(function* () {
@@ -99,6 +151,7 @@ export const runWorkerDeploy = (input: WorkerDeployInput) =>
     return outcome;
   }).pipe(
     Effect.catchTags({
+      DeployClaimFailed: () => Effect.succeed(Outcome.failure("infra: DeployClaimFailed")),
       CheckoutFailed: () => Effect.succeed(Outcome.failure("infra: CheckoutFailed")),
       GithubReadFailed: () => Effect.succeed(Outcome.failure("infra: GithubReadFailed")),
       GithubUncredentialed: () => Effect.succeed(Outcome.failure("infra: GithubUncredentialed")),

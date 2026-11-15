@@ -74,6 +74,20 @@ export const OffloadTestInput = Schema.Struct({
 });
 export type OffloadTestInput = typeof OffloadTestInput.Type;
 
+/** The control plane's deploy-claim route, one path per execution: `POST /v1/deploy-claims/<execution id>`. */
+export const DEPLOY_CLAIM_ROUTE = "/v1/deploy-claims/";
+
+/**
+ * The deploy claim of a `worker-deploy` lease: the control plane's route for the execution and the token it minted
+ * for the execution at the lease's epoch, which expires at `deadline_at`. The control plane writes it into the lease's
+ * input, the one lease field the run payload carries to the run, and drops any value a request recorded there.
+ */
+export const DeployClaimGrant = Schema.Struct({
+  url: Schema.NonEmptyString,
+  token: Schema.NonEmptyString,
+});
+export type DeployClaimGrant = typeof DeployClaimGrant.Type;
+
 export const WorkerDeployInput = Schema.Struct({
   ...GateContextFields,
   /** `<owner>/<repo>`. */
@@ -81,6 +95,8 @@ export const WorkerDeployInput = Schema.Struct({
   /** The deploy branch: `workerDeploy.branch`, else the default branch. */
   branch: Schema.NonEmptyString,
   entry: WorkerDeployEntrySchema,
+  /** The lease's deploy claim; absent on a deploy whose control plane mints none. */
+  deployClaim: Schema.optionalKey(DeployClaimGrant),
 });
 export type WorkerDeployInput = typeof WorkerDeployInput.Type;
 

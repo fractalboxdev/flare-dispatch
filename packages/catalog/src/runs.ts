@@ -44,7 +44,7 @@ import {
   type ExecutorKind,
   type RunSpecFields,
 } from "./spec.ts";
-import { runWorkerDeploy } from "./worker-deploy.ts";
+import { runWorkerDeploy, type DeployLedger } from "./worker-deploy.ts";
 
 const define = <I extends Parameters<typeof defineRun>[0]["input"], R>(
   spec: RunSpecFields,
@@ -107,18 +107,30 @@ export const deviceLayers: Layer.Layer<GateExec | GateArtifacts | GithubRead, ne
     githubReadLayer({ apiBase: "https://api.github.com", fetch: globalThis.fetch }),
   );
 
-/** The executor a runner entry serves: the device, or the cloud executor with its agentic Layers. */
+/** The services the gate runs a cloud executor serves require: the device's, and the deploy ledger. */
+export type CloudGateServices = GateExec | GateArtifacts | GithubRead | DeployLedger;
+
+/** The executor a runner entry serves: the device, or the cloud executor with the Layers of the runs it serves. */
 export type RunnerExecutor =
   | { readonly kind: "device" }
   | {
       readonly kind: "cloud";
-      /** The agentic recipes' services for the execution's job sandbox, from `cloudAgenticLayers`. */
-      readonly layers: Layer.Layer<CloudAgenticServices, never, Intents>;
+      /**
+       * The agentic recipes' services for the execution's job sandbox, from `cloudAgenticLayers`. Without them the cloud
+       * executor serves no agentic recipe.
+       */
+      readonly layers?: Layer.Layer<CloudAgenticServices, never, Intents>;
       /**
        * The scan runs' services for the execution's job sandbox: its processes, the scan bundle store, the image, the
        * advisory snapshots and the deployment's scan settings. Without them the cloud executor serves no scan run.
        */
       readonly scan?: Layer.Layer<Exclude<ScanServices, Intents>>;
+      /**
+       * The gate runs' services where the Container is the job sandbox: processes on its host, artifacts on the
+       * execution's local content store, GitHub reads and a deploy ledger that outlives a reclaim. Without them the
+       * cloud executor serves no gate run.
+       */
+      readonly gate?: Layer.Layer<CloudGateServices, never, LocalContent>;
     };
 
 const AGENTIC_NAMES: ReadonlySet<string> = new Set(agenticRuns.map((run) => run.spec.name));
@@ -130,11 +142,26 @@ const SCAN_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The gate runs a cloud executor serves with its gate Layers: a run whose catalogue entry lists `cloud`, that is
+ * neither agentic nor a scan run, and that is no host execution. A host execution's run is the device runner entry's
+ * under `development` only, so the cloud executor serves the same gate runs under both deployments.
+ */
+const isCloudGateRun = (name: string): boolean => {
+  const found = lookupRun("development", name);
+  return (
+    found._tag === "Available" &&
+    !found.entry.hostExecution &&
+    !AGENTIC_NAMES.has(name) &&
+    !SCAN_NAMES.has(name)
+  );
+};
+
+/**
  * The runs an executor may execute under a deployment, each with that executor's Layers provided. A run `lookupRun`
  * refuses, that the catalogue does not serve on the executor's kind, or that needs a service the executor lacks is
  * absent, so its lease answers `RunNotInCatalog`. The device serves the gate runs; the cloud executor serves the
- * agentic recipes, whose catalogue entries are cloud-only, and, where it supplies the scan Layers, `security-gate` and
- * `security-rescan`.
+ * agentic recipes, whose catalogue entries are cloud-only, where it supplies their Layers; `security-gate` and
+ * `security-rescan` where it supplies the scan Layers; and the cloud gate runs where it supplies the gate Layers.
  */
 export const runsFor = (deployment: Deployment, executor: RunnerExecutor = { kind: "device" }) => {
   const available = registry
@@ -148,17 +175,43 @@ export const runsFor = (deployment: Deployment, executor: RunnerExecutor = { kin
         ),
       }))
     : [
-        ...available
-          .filter((run) => AGENTIC_NAMES.has(run.spec.name))
-          .map((run) => ({
-            ...run,
-            layer: (run.layer as Layer.Layer<never, never, CloudAgenticServices>).pipe(
-              Layer.provide(executor.layers),
-            ),
-          })),
+        ...gateRunsWith(available, executor.gate),
+        ...agenticRunsWith(available, executor.layers),
         ...scanRunsWith(available, executor.scan),
       ];
 };
+
+/** The cloud gate runs of `available`, each with the cloud executor's gate Layers provided; none without them. */
+const gateRunsWith = <R extends (typeof registry)[number]>(
+  available: readonly R[],
+  gate: Layer.Layer<CloudGateServices, never, LocalContent> | undefined,
+) =>
+  gate === undefined
+    ? []
+    : available
+        .filter((run) => isCloudGateRun(run.spec.name))
+        .map((run) => ({
+          ...run,
+          layer: (run.layer as Layer.Layer<never, never, CloudGateServices>).pipe(
+            Layer.provide(gate),
+          ),
+        }));
+
+/** The agentic recipes of `available`, each with the cloud executor's agentic Layers provided; none without them. */
+const agenticRunsWith = <R extends (typeof registry)[number]>(
+  available: readonly R[],
+  layers: Layer.Layer<CloudAgenticServices, never, Intents> | undefined,
+) =>
+  layers === undefined
+    ? []
+    : available
+        .filter((run) => AGENTIC_NAMES.has(run.spec.name))
+        .map((run) => ({
+          ...run,
+          layer: (run.layer as Layer.Layer<never, never, CloudAgenticServices>).pipe(
+            Layer.provide(layers),
+          ),
+        }));
 
 /** The scan runs of `available`, each with the cloud executor's scan Layers provided; none without them. */
 const scanRunsWith = <R extends (typeof registry)[number]>(
