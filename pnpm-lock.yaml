@@ -45,9 +45,6 @@ importers:
 
   apps/control-plane:
     dependencies:
-      '@cloudflare/containers':
-        specifier: 0.3.7
-        version: 0.3.7
       '@fractalboxdev/flare-dispatch-agentic':
         specifier: workspace:*
         version: link:../../packages/agentic

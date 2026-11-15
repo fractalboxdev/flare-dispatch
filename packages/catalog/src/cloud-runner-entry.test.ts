@@ -10,12 +10,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
-import {
-  intentList,
-  localContentLayer,
-  memoryLocalContent,
-  type RunResult,
-} from "@fractalboxdev/mameko-run";
+import { intentList, type RunResult } from "@fractalboxdev/mameko-run";
 import {
   STAGED_WRITE_MANIFEST,
   stagedBlobName,
@@ -23,7 +18,6 @@ import {
 } from "@fractalboxdev/flare-dispatch-agentic";
 import { jobServices, runnerMain } from "@fractalboxdev/mameko-runner";
 import { Effect, Layer } from "effect";
-import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cloudRuns, runs } from "./cloud-runner-entry.ts";
 import { GateExec } from "./command.ts";
@@ -99,9 +93,10 @@ const artifactName = (name: string) =>
   name.length >= 1 && name.length <= 128 && !name.startsWith(".") && /^[A-Za-z0-9._-]+$/.test(name);
 
 /**
- * The device executor's side of one execution's socket, where the Container is the job sandbox: the job's commands run
- * in `workspace`, `job.egress` ends the setup phase (answered by `egress`), and an artifact upload reads the
- * workspace file. Every request is recorded in `events` in arrival order.
+ * The one-lease device executor's side of one execution's socket, where the Container is the job sandbox: it serves
+ * the lease's grants (`job.grants`, MAMEKO-EXEC-055), the job's commands run in `workspace`, `job.egress` ends the
+ * setup phase (answered by `egress`), and an artifact upload reads the workspace file. Every request is recorded in
+ * `events` in arrival order.
  */
 const device = (
   workspace: string,
@@ -114,6 +109,9 @@ const device = (
       case "job.prepare":
         events.push("prepare");
         return { type: "job.prepare.ok" };
+      case "job.grants":
+        events.push("grants");
+        return { type: "job.grants.ok" };
       case "job.exec": {
         const argv = m["argv"] as string[];
         events.push(`exec:${argv.join(" ")}`);
@@ -417,30 +415,9 @@ const scanInput = (run: string, cloudLease?: ScanLease) => ({
   ...(cloudLease === undefined ? {} : { cloudLease }),
 });
 
-/**
- * One scan lease through the entry's run on the runner's services over the device's socket. The bundle's runner ends
- * a run that declares a grant before its body (MAMEKO-EXEC-172), so the scan bodies run here on the same services
- * outside that refusal.
- */
-const runScan = (run: string, inputs: unknown, d: ReturnType<typeof device>) => {
-  const served = runs.find((r) => r.spec.name === run)!;
-  const services = Layer.mergeAll(
-    intentList().layer,
-    localContentLayer(memoryLocalContent(), "acme/app"),
-    jobServices(d.client, { executionId: EXECUTION, epoch: 1, outputPaths: [] }),
-    WorkflowEngine.layerMemory,
-  );
-  return Effect.runPromise(
-    (served.workflow.execute(leasePayload(run, inputs) as never) as Effect.Effect<RunResult>).pipe(
-      Effect.provide(
-        Layer.provideMerge(
-          served.layer as Layer.Layer<never, never, never>,
-          services as Layer.Layer<never>,
-        ),
-      ),
-    ) as Effect.Effect<RunResult>,
-  );
-};
+/** One scan lease through the bundle's runner over the device's socket, answering the run's result. */
+const runScan = async (run: string, inputs: unknown, d: ReturnType<typeof device>) =>
+  (await runLease(d, run, inputs)).line.result;
 
 const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 
@@ -481,7 +458,8 @@ describe("the scan runs' per-lease Layers", () => {
         reason: "infra: CloudLeaseMissing",
       });
       expect(events).toEqual([url]);
-      expect(d.events).toEqual([]);
+      // Each lease's run program runs after the device executor serves its grants, and no scanner command runs.
+      expect(d.events).toEqual(Array.from({ length: 4 }, () => ["prepare", "grants", "stop"]).flat());
     },
   );
 

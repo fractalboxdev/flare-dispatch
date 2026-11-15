@@ -12,7 +12,6 @@
     "test:e2e-local-device": "vitest run --config vitest.e2e-device.config.ts"
   },
   "dependencies": {
-    "@cloudflare/containers": "0.3.7",
     "@fractalboxdev/flare-dispatch-agentic": "workspace:*",
     "@fractalboxdev/flare-dispatch-api": "workspace:*",
     "@fractalboxdev/flare-dispatch-cache": "workspace:*",
