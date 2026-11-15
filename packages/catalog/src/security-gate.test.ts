@@ -122,13 +122,20 @@ describe("the security gate recipes in the catalogue", () => {
     }
   });
 
-  it("[FD-GATE-084] gives both input schemas only the commit and its range base: no command, scanner, flag or skip field", () => {
+  it("[FD-GATE-084] gives both input schemas only the commit, its range base and the lease's scan values: no command, scanner, flag or skip field", () => {
+    // `cloudLease` holds the values the control plane writes on the lease (the bundle pin, the advisory max age and
+    // reads of the stored objects), and it drops any value a request recorded there.
     expect(fieldNames(SecurityGateInput.ast)).toEqual([
       "repo",
       "sha",
       "ref",
       "scope",
       "deadlineAt",
+      "cloudLease",
+      "bundleDigest",
+      "bundleUrl",
+      "advisoryMaxAgeHours",
+      "advisories",
       "base",
       "_tag",
       "branch",
@@ -141,6 +148,11 @@ describe("the security gate recipes in the catalogue", () => {
       "ref",
       "scope",
       "deadlineAt",
+      "cloudLease",
+      "bundleDigest",
+      "bundleUrl",
+      "advisoryMaxAgeHours",
+      "advisories",
     ]);
     for (const input of [SecurityGateInput, SecurityRescanInput]) {
       expect(commandInputsOf(input.ast)).toEqual([]);
