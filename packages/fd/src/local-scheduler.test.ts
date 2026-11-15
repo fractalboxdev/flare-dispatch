@@ -127,9 +127,17 @@ const protocolServer = (path: string): Promise<Server> => {
   });
 };
 
-/** Resolves once the socket at `path` accepts a connection. */
-const accepting = async (path: string) => {
-  for (let i = 0; i < 200; i++) {
+/**
+ * Resolves once the socket at `path` accepts a connection, within 30 s, since a process started under a loaded machine
+ * may take seconds to listen; fails at once when the scheduler process exits first.
+ */
+const accepting = async (path: string, process?: ChildProcess) => {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (process !== undefined && process.exitCode !== null)
+      throw new Error(
+        `the local scheduler exited ${process.exitCode} before it listened on ${path}`,
+      );
     const ok = await new Promise<boolean>((resolve) => {
       const s = connect(path);
       s.once("connect", () => (s.destroy(), resolve(true)));
@@ -164,7 +172,7 @@ beforeAll(async () => {
     writeFileSync(lease, JSON.stringify(LEASE));
     child = spawn(binary, ["--socket", socket, "--lease", lease], { stdio: "ignore" });
   }
-  await accepting(socket);
+  await accepting(socket, child);
   // A working tree with one tracked file, one untracked executable and one ignored file.
   const tree = join(dir, "tree");
   spawnSync("mkdir", ["-p", tree]);
