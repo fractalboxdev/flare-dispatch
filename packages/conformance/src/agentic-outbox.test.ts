@@ -30,6 +30,7 @@ import {
 } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer } from "effect";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "../../../apps/control-plane/test/workerd-bundle.ts";
 import { fetch as mfFetch, Miniflare, type Request as MfRequest } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { writebackApplier } from "../../../apps/control-plane/src/agentic.ts";
@@ -78,11 +79,15 @@ beforeAll(async () => {
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   });
   plane = new Miniflare({
-    modules: [{ type: "ESModule", path: "worker.js", contents: bundle.outputFiles[0]!.text }],
+    modules: [
+      { type: "ESModule", path: "worker.js", contents: bundle.outputFiles[0]!.text },
+      ...wasmModules(),
+    ],
     compatibilityDate: "2026-05-01",
     d1Databases: { DB: "control-plane" },
     durableObjects: {

@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "../../../apps/control-plane/test/workerd-bundle.ts";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -46,11 +47,15 @@ beforeAll(async () => {
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   });
   plane = new Miniflare({
-    modules: [{ type: "ESModule", path: "worker.js", contents: bundle.outputFiles[0]!.text }],
+    modules: [
+      { type: "ESModule", path: "worker.js", contents: bundle.outputFiles[0]!.text },
+      ...wasmModules(),
+    ],
     compatibilityDate: "2026-05-01",
     d1Databases: { DB: "control-plane" },
     durableObjects: {

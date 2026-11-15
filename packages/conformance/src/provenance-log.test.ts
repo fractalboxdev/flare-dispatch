@@ -25,6 +25,7 @@ import {
   type ReadStoredHash,
 } from "@fractalboxdev/flare-dispatch-cache";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "../../../apps/control-plane/test/workerd-bundle.ts";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -54,11 +55,15 @@ beforeAll(async () => {
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   });
   plane = new Miniflare({
-    modules: [{ type: "ESModule", path: "worker.js", contents: bundle.outputFiles[0]!.text }],
+    modules: [
+      { type: "ESModule", path: "worker.js", contents: bundle.outputFiles[0]!.text },
+      ...wasmModules(),
+    ],
     compatibilityDate: "2026-05-01",
     d1Databases: { DB: "control-plane" },
     durableObjects: { TRANSPARENCY_LOG: { className: "TransparencyLog", useSQLite: true } },

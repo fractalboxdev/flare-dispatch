@@ -55,10 +55,7 @@ export {
   type IntakeLayerOptions,
 } from "./layer.ts";
 export { followOnSubmitterLayer } from "./follow-on.ts";
-export {
-  reproductionSubmission,
-  reproductionSubmitterLayer,
-} from "./reproduction.ts";
+export { reproductionSubmission, reproductionSubmitterLayer } from "./reproduction.ts";
 export {
   LOCAL_CLASS,
   LOCAL_ONLY,

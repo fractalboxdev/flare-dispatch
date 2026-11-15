@@ -25,6 +25,7 @@ import {
 import { LeaseStore } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "../../../apps/control-plane/test/workerd-bundle.ts";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { profileOf, type ControlPlaneEnv } from "../../../apps/control-plane/src/config.ts";
@@ -95,6 +96,7 @@ beforeAll(async () => {
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   });
@@ -103,7 +105,7 @@ beforeAll(async () => {
     deployment,
     planeId,
     mf: new Miniflare({
-      modules: [{ type: "ESModule", path: "worker.js", contents: script }],
+      modules: [{ type: "ESModule", path: "worker.js", contents: script }, ...wasmModules()],
       compatibilityDate: "2026-05-01",
       d1Databases: { DB: `control-plane-${deployment}` },
       durableObjects: {
