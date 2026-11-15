@@ -6,10 +6,12 @@ import { mintLinkToken } from "@fractalboxdev/flare-dispatch-api";
 import { signCompileCacheToken } from "@fractalboxdev/flare-dispatch-cache";
 import { ACCESS_BYPASS, bypassed } from "@fractalboxdev/flare-dispatch-ops";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { signDeployClaimToken } from "../../src/deploy-claim.ts";
 import { router } from "../../src/http.ts";
 import { connect, hello, newDevice, OPERATOR, registration } from "../support.ts";
 import {
   COMPILE_CACHE_SECRET,
+  DEPLOY_CLAIM_SECRET,
   LINK_KEY,
   OIDC_AUDIENCE,
   PLANE_ID,
@@ -162,6 +164,29 @@ const probes: Readonly<Record<string, () => Promise<void>>> = {
     });
     expect(await signed.text()).toBe("token epoch is not current");
   },
+  "deploy-claim": async () => {
+    const path = `/v1/deploy-claims/${EXECUTION}`;
+    const token = (secret: string) =>
+      signDeployClaimToken(secret, {
+        executionId: EXECUTION,
+        epoch: 1,
+        expiresAt: Date.now() + 600_000,
+      });
+    const none = await send("POST", path);
+    expect(none.status).toBe(401);
+    expect(await none.json()).toMatchObject({ error: "unauthenticated", message: "token missing" });
+    const forged = await send("POST", path, {
+      authorization: `Bearer ${await token("another-secret")}`,
+    });
+    expect(forged.status).toBe(401);
+    expect(await forged.json()).toMatchObject({ message: "token invalid" });
+    // A token signed under the deploy's secret passes the token check; the lease it names is not current.
+    const signed = await send("POST", path, {
+      authorization: `Bearer ${await token(DEPLOY_CLAIM_SECRET)}`,
+    });
+    expect(signed.status).toBe(403);
+    expect(await signed.json()).toMatchObject({ message: "token epoch is not current" });
+  },
   // No route serves the model gateway or the provenance reads on this deploy, so the Worker answers each with its own
   // Access check: a bypass at the edge reaches no route logic.
   "model-gateway": async () => {
@@ -206,9 +231,10 @@ describe("the paths Access bypasses", () => {
         path: r.path,
         bypassed: false,
       });
-    // The connect upgrade and the compile cache are answered before the router.
+    // The connect upgrade, the compile cache and the deploy claim are answered before the router.
     expect(bypassed("/v1/executors/connect")).toBe(true);
     expect(bypassed(`/v1/compile-cache/${REPOSITORY}/ns/key`)).toBe(true);
+    expect(bypassed(`/v1/deploy-claims/${EXECUTION}`)).toBe(true);
   });
 
   it("[FD-OPS-088] the Worker runs each bypassed surface's own identity check on a request with no Access JWT", async () => {

@@ -37,6 +37,7 @@ import { guardLease } from "./agentic.ts";
 import { isolateServices, presignerLayer } from "./composition.ts";
 import { leaseCache, presignOnFrame } from "./cache.ts";
 import { leaseCacheAt } from "./cache-execution.ts";
+import { leaseDeployClaim, withDeployClaim } from "./deploy-claim.ts";
 import { prProposeOnFrame } from "./pr-propose.ts";
 import { type ChannelSocket, cloudStatementOnFrame } from "./provenance.ts";
 import { imageDigestOf, invalidateLeaseNonce, leaseNonce, requestLeaseFields } from "./lease.ts";
@@ -153,7 +154,8 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
   /**
    * The inputs and request context intake recorded for a won claim, the run registry's run and workflow versions
    * (FD-PROF-063), and the `deadline_at` admission wrote on the execution row (MAMEKO-EXEC-002), which a gate run's
-   * input carries as its `deadlineAt` (FD-GATE-007). A payload that carries a write credential fails the grant
+   * input carries as its `deadlineAt` (FD-GATE-007). A `worker-deploy` input carries the deploy claim minted for the
+   * execution at the placement's epoch (FD-GATE-067). A payload that carries a write credential fails the grant
    * (FD-AGT-008). The nonce is 128 random bits bound to the execution and the placement's epoch (FD-PROV-010).
    */
   leaseFields: (executionId: string): Promise<ClaimedLease> =>
@@ -181,9 +183,19 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
           Match.tag("Available", ({ entry }) => entry),
           Match.orElse(() => null),
         );
+        const request = requestLeaseFields(entry, record, row);
+        // A `worker-deploy` lease's input carries its deploy claim: the input is the one lease field the run body receives.
+        const claim = yield* Effect.promise(() =>
+          leaseDeployClaim(bindings, entry, {
+            executionId,
+            epoch: row.epoch,
+            expiresAt: row.deadline_at,
+          }),
+        );
         return yield* guardLease(bindings, {
           run: row.run,
-          ...requestLeaseFields(entry, record, row),
+          ...request,
+          inputs: withDeployClaim(entry, request.inputs, claim),
           image_digest: yield* imageDigestOf(
             entry,
             row.kind ?? "device",

@@ -53,20 +53,46 @@ describe("Container pools", () => {
     expect(woken).toEqual([]);
   });
 
-  it("[FD-GATE-066] worker-deploy's setup grants are cf-api alone, which attaches the deploy token the Worker holds and none without it", () => {
-    const withToken = poolSettings(env({ DEPLOY_API_TOKEN: "cf-token" }), profile);
+  it("[FD-GATE-066] worker-deploy's setup grants reach the Cloudflare API only through cf-api, which attaches the deploy token the Worker holds and none without it", () => {
+    const withToken = poolSettings(
+      env({ DEPLOY_API_TOKEN: "cf-token", PUBLIC_ORIGIN: "https://ci.example.com" }),
+      profile,
+    );
     const grants = launchGrants(withToken, "worker-deploy");
-    expect(grants.setup.map((g) => g.name)).toEqual(["cf-api"]);
+    expect(grants.setup.map((g) => g.name)).toEqual(["cf-api", "deploy-claim"]);
     expect(grants.agent).toEqual([]);
-    expect(grants.setup[0]).toMatchObject({
-      host: "api.cloudflare.com",
-      credential: "Bearer cf-token",
-    });
+    expect(grants.setup.filter((g) => g.host === "api.cloudflare.com")).toEqual([
+      expect.objectContaining({ name: "cf-api", credential: "Bearer cf-token" }),
+    ]);
     expect(launchGrants(poolSettings(env(), profile), "worker-deploy").setup[0]!.credential).toBe(
       undefined,
     );
     // A run the catalogue does not declare gets no grant.
     expect(launchGrants(withToken, "no-such-run")).toEqual({ setup: [], agent: [] });
+  });
+
+  it("[FD-GATE-067] worker-deploy's deploy-claim grant covers POST to the dispatcher's deploy-claim route alone, with no credential, and exists only on a deploy with a public origin", () => {
+    const settings = poolSettings(env({ PUBLIC_ORIGIN: "https://ci.example.com/" }), profile);
+    const claim = launchGrants(settings, "worker-deploy").setup.find(
+      (g) => g.name === "deploy-claim",
+    );
+    expect(claim).toMatchObject({
+      host: "ci.example.com",
+      methods: ["POST"],
+      pathPrefix: "/v1/deploy-claims/",
+    });
+    expect(claim?.credential).toBeUndefined();
+    // No other run holds it.
+    for (const run of ["sandbox-image", "security-gate", "pr-review"])
+      expect(launchGrants(settings, run).setup.map((g) => g.name)).not.toContain("deploy-claim");
+    for (const origin of [undefined, "", "not a url"])
+      expect(
+        launchGrants(
+          poolSettings(env({ PUBLIC_ORIGIN: origin }), profile),
+          "worker-deploy",
+        ).setup.map((g) => g.name),
+        String(origin),
+      ).toEqual(["cf-api"]);
   });
 
   it("[FD-ARCH-001] the launch keys are the secret's P-256 private JWK and its public half, and none for any other value", async () => {

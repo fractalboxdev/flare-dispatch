@@ -11,6 +11,7 @@ import { Effect } from "effect";
 import { healthOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { migrateLocalStore } from "./agentic.ts";
 import { cacheFetch, cacheSweeps } from "./cache.ts";
+import { deployClaimFetch, migrateDeployClaims } from "./deploy-claim.ts";
 import { boundFetch } from "./github.ts";
 import { apiFetch } from "./http.ts";
 import { launchKeysOf, registerPools } from "./pools.ts";
@@ -48,6 +49,7 @@ const migrate = (env: ControlPlaneEnv) =>
     await runApiMigrations(env.DB);
     await Effect.runPromise(migrateIntake(env.DB));
     await migrateLocalStore(env.DB);
+    await migrateDeployClaims(env.DB);
     // Each Container pool's executor row, on a deploy that can launch its Containers (MAMEKO-LEASE-003).
     if (launchKeysOf(env) !== null) await registerPools(env, profileOf(env));
   })().catch((e: unknown) => {
@@ -79,6 +81,9 @@ export default {
         channel: env.CHANNEL,
         planeId: env.PLANE_ID,
       });
+    // The deploy-claim route checks its own token, bound to the execution and its current epoch (FD-GATE-067).
+    const claimed = await deployClaimFetch(request, env);
+    if (claimed !== null) return claimed;
     // The compile-cache route checks its own token (FD-CACHE-051); the log and artifact reads are the router's.
     const cached = await cacheFetch(request, env, (p) => ctx.waitUntil(p));
     if (cached !== null) return cached;

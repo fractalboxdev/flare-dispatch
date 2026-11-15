@@ -1,7 +1,7 @@
 // The Container pools of the `cloudflare` executor kind (specs/architecture.md § Components, specs/profile.md § Pools and
 // browser sessions): each pool's declaration for mameko's composition, the `PoolController` settings derived from the
 // profile, the grant catalogue a Container's outbound handler decides over, and the launch keys.
-import { RUN_CATALOG } from "@fractalboxdev/flare-dispatch-catalog";
+import { DEPLOY_CLAIM_ROUTE, RUN_CATALOG } from "@fractalboxdev/flare-dispatch-catalog";
 import { poolAdmissionCaps, type Profile } from "@fractalboxdev/flare-dispatch-profile";
 import {
   poolPartition,
@@ -19,6 +19,7 @@ import {
 import { LeaseStore } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import type { ControlPlaneEnv } from "./config.ts";
+import { deployClaimHost } from "./deploy-claim.ts";
 
 /**
  * Each Container pool's Container binding and `max_instances`, as `wrangler.jsonc` declares its Container class. The
@@ -72,32 +73,51 @@ const GIT_METHODS = ["GET", "POST"];
 
 /**
  * The grant catalogue each Container's outbound handler decides over (MAMEKO-ISO-021): `git-remote`, the repository's git
- * host for the checkout of the `setup` phase (FD-GATE-110), and `cf-api`, the Cloudflare API under the deploy token
- * the Worker holds (FD-GATE-066). `cf-api` carries no credential on a deploy without that token, so a request under it
- * leaves unauthenticated and the API refuses it.
+ * host for the checkout of the `setup` phase (FD-GATE-110); `cf-api`, the Cloudflare API under the deploy token the
+ * Worker holds (FD-GATE-066); and `deploy-claim`, `POST` to the dispatcher's deploy-claim route alone, where
+ * `worker-deploy` presents its lease's deploy-claim token (FD-GATE-067). `cf-api` carries no credential on a deploy
+ * without that token, so a request under it leaves unauthenticated and the API refuses it. `deploy-claim` attaches no
+ * credential, and a deploy that names no `PUBLIC_ORIGIN` has no such grant, so its leases carry no deploy claim either.
  */
-export const poolGrants = (env: Pick<ControlPlaneEnv, "DEPLOY_API_TOKEN">): readonly Grant[] => [
-  {
-    name: "git-remote",
-    host: "github.com",
-    methods: GIT_METHODS,
-    pathPrefix: "/",
-    maxBodyBytes: 1024 * 1024,
-    headers: CLIENT_HEADERS,
-  },
-  {
-    name: "cf-api",
-    host: "api.cloudflare.com",
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-    pathPrefix: "/client/v4/",
-    maxBodyBytes: 100 * 1024 * 1024,
-    headers: CLIENT_HEADERS,
-    credential:
-      env.DEPLOY_API_TOKEN === undefined || env.DEPLOY_API_TOKEN === ""
-        ? undefined
-        : `Bearer ${env.DEPLOY_API_TOKEN}`,
-  },
-];
+export const poolGrants = (
+  env: Pick<ControlPlaneEnv, "DEPLOY_API_TOKEN" | "PUBLIC_ORIGIN">,
+): readonly Grant[] => {
+  const dispatcher = deployClaimHost(env);
+  return [
+    {
+      name: "git-remote",
+      host: "github.com",
+      methods: GIT_METHODS,
+      pathPrefix: "/",
+      maxBodyBytes: 1024 * 1024,
+      headers: CLIENT_HEADERS,
+    },
+    {
+      name: "cf-api",
+      host: "api.cloudflare.com",
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+      pathPrefix: "/client/v4/",
+      maxBodyBytes: 100 * 1024 * 1024,
+      headers: CLIENT_HEADERS,
+      credential:
+        env.DEPLOY_API_TOKEN === undefined || env.DEPLOY_API_TOKEN === ""
+          ? undefined
+          : `Bearer ${env.DEPLOY_API_TOKEN}`,
+    },
+    ...(dispatcher === undefined
+      ? []
+      : [
+          {
+            name: "deploy-claim",
+            host: dispatcher,
+            methods: ["POST"],
+            pathPrefix: DEPLOY_CLAIM_ROUTE,
+            maxBodyBytes: 1024,
+            headers: CLIENT_HEADERS,
+          },
+        ]),
+  ];
+};
 
 /** Each catalogue run's grant names per egress phase, as its spec declares them. */
 export const RUN_GRANTS: PoolControllerSettings["runGrants"] = Object.fromEntries(

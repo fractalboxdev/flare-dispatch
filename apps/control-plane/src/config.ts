@@ -91,6 +91,11 @@ export interface ControlPlaneEnv extends CacheEnv {
   readonly LAUNCH_SIGNING_KEY?: string;
   /** The Cloudflare API token (a Worker secret) the `cf-api` grant attaches to a job's API request (FD-GATE-066). */
   readonly DEPLOY_API_TOKEN?: string;
+  /**
+   * The secret (a Worker secret) `worker-deploy`'s deploy-claim tokens derive from, distinct from every other key;
+   * unset, no lease carries a deploy claim and the deploy-claim route answers `unavailable` (FD-GATE-067).
+   */
+  readonly DEPLOY_CLAIM_SECRET?: string;
   /** `alerts.sink`; without it every alarm delivery fails and the alarm stays active. */
   readonly ALERT_SINK?: string;
   /** The rendered `{{spend}}`: the overlay's spend values in USD, each it leaves out at its default (FD-PROF-054). */
