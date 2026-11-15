@@ -444,4 +444,5 @@ A `containment` identity tightens controls and does not release them. The order 
 ## Open items
 
 - TODO(maintainer): confirm that the MCP server implementation in Effect 4.0.6 serves the Streamable HTTP transport inside a Worker; FD-IFC-072 assumes it.
+- TODO(maintainer): the pinned mameko release's local scheduler socket serves `submit`, `queue`, `status`, `cancel` and `lease` but no outcome or failure-summary request, so `get_verdict` and `get_failure_summary` on a `local-` id, and `rehearse` with `wait_seconds`, answer `scheduler_protocol` until mameko serves them. `fd` carries no run catalogue, so a submission sends no pool, memory, model use, labels or declarations, and the scheduler takes them as none.
 - TODO(operator): decide whether enrollment stays an operator action under an Access identity or a managed device enrolls itself with an enrollment token; mameko leaves the route's authentication to the application.
