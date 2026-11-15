@@ -9,6 +9,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Exec, type EgressPhaseFailed } from "@fractalboxdev/mameko-run";
 import { Context, Data, Effect, Layer, Schema, type Scope } from "effect";
 
 /** The most combined stdout and stderr one command may write (FD-GATE-008). */
@@ -91,9 +92,9 @@ export class GateExec extends Context.Service<
     ) => Effect.Effect<void, WorkspaceWriteFailed>;
     /**
      * Ends the job's setup egress phase: every later command runs under the run's `agent` grants and reaches no `setup`
-     * grant again (MAMEKO-ISO-025). It returns once the switch holds.
+     * grant again (MAMEKO-ISO-025). It returns once the switch holds, and fails where the switch does not hold.
      */
-    readonly endSetup: Effect.Effect<void>;
+    readonly endSetup: Effect.Effect<void, EgressPhaseFailed>;
   }
 >()("@fractalboxdev/flare-dispatch-catalog/GateExec") {}
 
@@ -213,8 +214,8 @@ const workspace: Effect.Effect<string, never, Scope.Scope> = Effect.acquireRelea
     ),
 );
 
-/** `GateExec` over this host's processes and file system. */
-export const processGateExec: Layer.Layer<GateExec> = Layer.succeed(GateExec, {
+/** This host's processes and file system, as `GateExec` serves them. */
+const hostGateExec: GateExec["Service"] = {
   workspace,
   // A device's job runtime serves no grant in either phase, so the setup phase ends at once (MAMEKO-EXEC-054).
   endSetup: Effect.void,
@@ -235,4 +236,20 @@ export const processGateExec: Layer.Layer<GateExec> = Layer.succeed(GateExec, {
       try: () => writeFile(path, bytes, { mode: 0o444, flag: "wx" }),
       catch: (cause) => new WorkspaceWriteFailed({ path, detail: String(cause) }),
     }),
-});
+};
+
+/** `GateExec` over this host's processes and file system. */
+export const processGateExec: Layer.Layer<GateExec> = Layer.succeed(GateExec, hostGateExec);
+
+/**
+ * `GateExec` where a Container is the job sandbox: the host's processes and file system as `processGateExec` has them,
+ * and the setup phase ended through mameko's `Exec`, so the Container's outbound handler switches to the run's `agent`
+ * grants before the call returns (MAMEKO-HOST-058).
+ */
+export const containerGateExec: Layer.Layer<GateExec, never, Exec> = Layer.effect(
+  GateExec,
+  Effect.gen(function* () {
+    const exec = yield* Exec;
+    return { ...hostGateExec, endSetup: exec.endSetup() };
+  }),
+);
