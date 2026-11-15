@@ -145,7 +145,7 @@ export const artifactPrefixSink = (
 
 /**
  * Uploads a built staged write: each distinct blob from `<stagingDir>/blobs/<sha256>` byte for byte under
- * `staged-write/blobs/<sha256>`, then the manifest under `staged-write/manifest.json`. A staged blob whose bytes no
+ * `staged-write.blob.<sha256>`, then the manifest under `staged-write.manifest.json`. A staged blob whose bytes no
  * longer hash to its digest fails the upload instead of storing bytes the manifest does not name.
  */
 export const uploadStagedWrite = (

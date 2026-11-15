@@ -16,13 +16,18 @@ import {
   memoryLocalContent,
   type RunResult,
 } from "@fractalboxdev/mameko-run";
+import {
+  STAGED_WRITE_MANIFEST,
+  stagedBlobName,
+  StagedWrites,
+} from "@fractalboxdev/flare-dispatch-agentic";
 import { jobServices, runnerMain } from "@fractalboxdev/mameko-runner";
 import { Effect, Layer } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cloudRuns, runs } from "./cloud-runner-entry.ts";
 import { GateExec } from "./command.ts";
-import { containerScanLayers } from "./container-layers.ts";
+import { containerAgenticLayers, containerScanLayers } from "./container-layers.ts";
 import { ExecutionLease } from "./execution-lease.ts";
 import type { ScanLease } from "./inputs.ts";
 import { AdvisorySnapshots } from "./ports.ts";
@@ -353,6 +358,53 @@ describe("the Container pool's run catalogue", () => {
       expect(bare.events).not.toContain("egress:agent");
     },
   );
+});
+
+describe("the staged write on a Container", () => {
+  it("[FD-AGT-013] uploads the manifest and each blob under one-segment artifact names mameko's artifact grammar accepts", async () => {
+    const { dir, base, head } = checkout();
+    const d = device(dir);
+    const layers = containerAgenticLayers({
+      fetch: globalThis.fetch,
+      env: process.env,
+      editLoop: ["true"],
+    }).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(ExecutionLease, {
+            executionId: EXECUTION,
+            epoch: 1,
+            input: { ...agenticInput("improve-pr", base, head), cloudLease: AGENT_LEASE },
+          }),
+          jobServices(d.client, { executionId: EXECUTION, epoch: 1, outputPaths: [] }),
+          intentList().layer,
+        ),
+      ),
+    );
+    writeFileSync(join(dir, "README.md"), "readme\nmore\nstaged\n");
+    const manifest = await Effect.runPromise(
+      StagedWrites.use((s) =>
+        s.stage({
+          branch: "flare-dispatch/improve-size",
+          baseBranch: "main",
+          message: "m",
+          pr: { title: "t", body: "b", draft: true, labels: [] },
+        }),
+      ).pipe(Effect.provide(layers)),
+    );
+    expect(manifest.baseCommit).toBe(head);
+    const digest = sha256("readme\nmore\nstaged\n");
+    expect(manifest.entries).toEqual([{ path: "README.md", mode: "100644", digest }]);
+    expect(d.events.filter((e) => e.startsWith("artifact:"))).toEqual([
+      `artifact:staged-write.blob.${digest}`,
+      "artifact:staged-write.manifest.json",
+    ]);
+    expect([...d.artifacts.keys()]).toEqual([stagedBlobName(digest), STAGED_WRITE_MANIFEST]);
+    for (const name of d.artifacts.keys()) expect(artifactName(name), name).toBe(true);
+    expect(new TextDecoder().decode(d.artifacts.get(stagedBlobName(digest)))).toBe(
+      "readme\nmore\nstaged\n",
+    );
+  });
 });
 
 const SHA = "c".repeat(40);

@@ -59,7 +59,7 @@ const placementOf = (db: D1Binding, executionId: string) =>
   });
 
 /**
- * Reads each distinct blob of the entries from `artifact/<execution_id>/<epoch>/staged-write/blobs/<sha256>` and
+ * Reads each distinct blob of the entries from `artifact/<execution_id>/<epoch>/staged-write.blob.<sha256>` and
  * recomputes the SHA-256 digest of the bytes read, so the gate compares the manifest with what is stored rather than
  * with the key it was stored under. A blob absent from the store is left out, for the gate to reject as
  * `blob-missing`. When the stored sizes of the distinct blobs add up to more than `maxBytes`, no bytes are read, so an
