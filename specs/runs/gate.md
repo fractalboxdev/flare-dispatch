@@ -382,6 +382,8 @@ sequenceDiagram
 
 ### Release matrices
 
+A release job's infrastructure retries are the parent's restarts of FD-GATE-060, each a new child under the attempt's dedup key. The control plane retries a `release` child under its class's retry bound `run` ([profile.md](../profile.md) FD-PROF-009), which takes the `gate-job` run's declared retries, and `gate-job` declares none, so the two layers never both restart one job. A job of any other class takes the control plane's retries alone: the parent restarts none.
+
 - **FD-GATE-054** · phase 0 · `V-UNIT` — Where a job matrix declares `release: true`, when a `refs/tags/v<semver>` push arrives, the parent must verify that the tag's commit is reachable from the default branch before it starts any job.
 - **FD-GATE-055** · phase 0 · `V-UNIT` — If a release tag's commit is not reachable from the default branch, then the parent must record `failure` with the reason `release: tag not on default branch` and start no job.
 - **FD-GATE-056** · phase 0 · `V-UNIT` `V-REPLAY` — Where a job matrix declares `release: true`, the parent must emit a `release.draft` intent before its first job starts and must not emit an intent that modifies a published release.

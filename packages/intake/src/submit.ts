@@ -500,6 +500,8 @@ export const submit = (
       // A merge group's runs report on the group's head, which is the request's commit (FD-GH-075).
       check: s.run.ownsCheck ? { name, headSha: s.sha } : null,
       refusal,
+      // A `release` execution's infrastructure retries are its run's declared `retries` (FD-PROF-009).
+      runRetries: s.run.retries,
     };
 
     // Inside the run's cooldown window the request is held before admission, and the minute tick admits it once the

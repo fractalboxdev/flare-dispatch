@@ -380,6 +380,11 @@ export const channelConfig = (profile: Profile): ExecutorChannelEnv["MAMEKO_CHAN
       .map(([name, kind]) => [name, kind.effect_class]),
   ),
   notApplicableDetails: [...profile.outcome_mapping.not_applicable_details],
+  // Each class's retry bound after an infrastructure failure: `release` the run's declared retries, `required` and
+  // `interactive` 1, `batch` one retry on a device (FD-PROF-009, MAMEKO-ADM-083).
+  classRetries: Object.fromEntries(
+    profile.classes.flatMap((c) => (c.retries === undefined ? [] : [[c.name, c.retries]])),
+  ),
   executorKind: "device",
   planeShare: deviceSlotDefaults.total,
 });

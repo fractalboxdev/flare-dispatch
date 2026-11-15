@@ -134,6 +134,11 @@ export interface IntakeAdmitInput {
    * (MAMEKO-ADM-005). Null or absent admits the request.
    */
   readonly refusal?: string | null;
+  /**
+   * The run's declared `retries`. Admission records them only for a class whose retry bound is `run` (`release`), which
+   * the control plane takes as the execution's infrastructure retries (FD-PROF-009, MAMEKO-ADM-083). Absent counts as 0.
+   */
+  readonly runRetries?: number;
 }
 
 /** Admission did not answer: the store transaction failed, and nothing was written. */
@@ -361,6 +366,9 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
           },
           supersessionKey: input.supersessionKey ?? null,
           serialKey: input.serialKey ?? null,
+          ...(cls?.retries === "run" && input.runRetries !== undefined
+            ? { runRetries: input.runRetries }
+            : {}),
           ...(ports.cancelExecution === undefined
             ? {}
             : { cancelExecution: ports.cancelExecution }),

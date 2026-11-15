@@ -1127,6 +1127,62 @@ describe("a development deployment", () => {
       await endStandingClaim(socket);
     },
   );
+
+  it("[FD-PROF-009] MAMEKO-ADM-083 requeues a batch execution after an infrastructure failure once, on devices only, and records the second infrastructure failure", async () => {
+    const device = await newDevice();
+    await post(development, "/v1/executors/register", registration("mac-infra", device.identity));
+    const admitted = await post(development, "/v1/dispatch/check", dispatchBody("7".repeat(40)));
+    const { execution_id: id, class: className } = (await admitted.json()) as {
+      execution_id: string;
+      class: string;
+    };
+    expect(className).toBe("batch");
+    const socket = await connect(development, "mac-infra", device.keys);
+    socket.send(hello("mac-infra"));
+    await socket.next("session.welcome");
+    const infraFailure = async (claim: string) => {
+      socket.send({ type: "exec.claim", id: claim, free: { batch: 1 } });
+      const lease = await socket.next("exec.lease");
+      expect(lease).toMatchObject({ execution_id: id });
+      socket.send({
+        type: "exec.result",
+        id: `r-${claim}`,
+        execution_id: id,
+        epoch: lease["epoch"],
+        result_id: `${id}:${String(lease["epoch"])}`,
+        outcome: { status: "failure", reason: "infra: ExecFailed" },
+        usage: {},
+        artifacts: [],
+      });
+      expect(await socket.next("exec.result.ack")).toMatchObject({ status: "accepted" });
+      return lease["epoch"] as number;
+    };
+    const placement = async () =>
+      (await (
+        await development.getD1Database("DB")
+      )
+        .prepare(
+          "select state, epoch, eligible_kinds, infra_retries from mameko_placements where execution_id = ?",
+        )
+        .bind(id)
+        .first()) as {
+        state: string;
+        epoch: number;
+        eligible_kinds: string;
+        infra_retries: number;
+      };
+
+    const first = await infraFailure("c1");
+    // `batch`'s retry bound is `local-only`: one retry, at the next epoch, eligible for devices alone.
+    expect(await placement()).toMatchObject({ epoch: first + 1, infra_retries: 1 });
+    expect(JSON.parse((await placement()).eligible_kinds)).toEqual(["device"]);
+    const second = await infraFailure("c2");
+    expect(second).toBe(first + 1);
+    await expect
+      .poll(() => execution(development, id), { timeout: 20_000 })
+      .toMatchObject({ status: "done", verdict: "failure", reason: "infra: ExecFailed" });
+    await endStandingClaim(socket);
+  });
 });
 
 /** A manifest that lists `worker-deploy`, `sandbox-image` and `security-rescan` for dispatch. */

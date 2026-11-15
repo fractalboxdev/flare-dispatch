@@ -149,6 +149,30 @@ describe("the workflow start at admission", () => {
   });
 });
 
+describe("a run's declared retries at admission", () => {
+  it("[FD-PROF-009] MAMEKO-ADM-083 records the run's declared retries on a release execution, whose class takes them, and none on a required one", async () => {
+    const h = await harness({
+      resolve: requested,
+      settings: {
+        catalog: (name) =>
+          name === "check" ? { ...CATALOG["check"]!, retries: 2 } : CATALOG[name],
+      },
+    });
+    const runRetries = (id: string) =>
+      h.rows("select run_retries from mameko_executions where id = ?", id)[0]?.run_retries;
+    const release = await dispatch(h, "check", check("release"));
+    expect(release.className).toBe("release");
+    expect(runRetries(release.executionId)).toBe(2);
+    const required = await dispatch(h, "check", {
+      ...check("required"),
+      sha: "e".repeat(40),
+      inputs: { sha: "e".repeat(40) },
+    });
+    expect(required.className).toBe("required");
+    expect(runRetries(required.executionId)).toBe(0);
+  });
+});
+
 describe("placement at admission", () => {
   it("MAMEKO-ADM-037 an unplaceable request concludes placement: no eligible executor, with no placement and no start", async () => {
     const h = await harness({
