@@ -1,8 +1,10 @@
 // Egress-attached grants (specs/isolation-egress.md): a job reaches a credentialed service only through the egress
 // proxy, which adds the credential to a request for a granted host after the request leaves the job (FD-GATE-014,
-// FD-GATE-066). This module is the proxy's decision; the control plane's `ContainerProxy` export calls
-// `attachGrants` on each intercepted request, log upload calls `redactLog`, and a scan log withholds a scanner's
-// matched values through `redactValues`.
+// FD-GATE-066). On a Container pool the proxy is the Container's outbound handler, which decides each request with
+// mameko's egress decision over the grant catalogue in `apps/control-plane/src/pools.ts`. This module holds the grant
+// names gate recipes declare, `attachGrants` (the attach rule over one request, which no production path calls), the
+// redaction log upload applies through `redactLog`, and `redactValues`, which withholds a scanner's matched values
+// from a scan log.
 
 /** One grant: the hosts it covers and the header the proxy sets on a request to them. */
 export interface GrantRule {

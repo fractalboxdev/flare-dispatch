@@ -3,8 +3,10 @@
 // and runs the deploy command through `processGateExec`. The command is a wrangler stand-in from the commit: it reads
 // `CLOUDFLARE_API_TOKEN`, sends its deploy to the Cloudflare API and one request to another host, and the job copies
 // its environment and its workspace to an evidence directory. Each request leaves through an egress stand-in that
-// applies the `cf-api` grant with `attachGrants` and delivers it to a Cloudflare API stand-in, which records the
-// headers it receives. The executor host's own environment holds the credential, as an operator's shell does.
+// runs the Container pools' outbound handler, `egressOutbound`, over the grants the control plane launches the run's
+// Container with, and delivers what it admits to a Cloudflare API stand-in, which records the headers it receives. The
+// executor host's own environment holds the credential, as an operator's shell does; the Worker holds it as the deploy
+// token the `cf-api` grant attaches.
 import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
@@ -18,16 +20,17 @@ import {
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  attachGrants,
-  CREDENTIAL_PLACEHOLDER,
-  githubReadLayer,
-} from "@fractalboxdev/flare-dispatch-catalog";
+import { CREDENTIAL_PLACEHOLDER, githubReadLayer } from "@fractalboxdev/flare-dispatch-catalog";
+import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
+import { launchGrants } from "@fractalboxdev/mameko-host-cloudflare";
+import { egressOutbound } from "@fractalboxdev/mameko-host-cloudflare/containers";
 import { Effect, Layer } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { intentList } from "../../../../vendor/mameko/packages/run/src/index.ts";
 import { processGateExec } from "../../../../packages/catalog/src/command.ts";
 import { GateArtifacts } from "../../../../packages/catalog/src/ports.ts";
+import type { ControlPlaneEnv } from "../../src/config.ts";
+import { poolSettings } from "../../src/pools.ts";
 import {
   fileDeployLedger,
   runWorkerDeploy,
@@ -52,7 +55,7 @@ const deployed = await fetch(process.env.CLOUDFLARE_API_BASE_URL + "/accounts/ac
 console.log("deploy " + deployed.status + " " + (await deployed.text()) + " with " + token);
 const other = await fetch(process.env.FD_OTHER_URL + "/collect", { headers: auth });
 console.log("other " + other.status);
-process.exit(deployed.ok && other.ok ? 0 : 1);
+process.exit(deployed.ok ? 0 : 1);
 `;
 
 interface Seen {
@@ -152,16 +155,24 @@ beforeAll(async () => {
         ...(body === undefined ? {} : { body }),
       });
       fromJob.push({ url: target, authorization: asSent.headers.get("authorization") });
-      const decided = attachGrants(asSent, ["cf-api"], (grant) =>
-        grant === "cf-api" ? SENTINEL : undefined,
+      // The setup grants the pool controller launches the `worker-deploy` Container with.
+      const settings = poolSettings(
+        { DEPLOY_API_TOKEN: SENTINEL } as unknown as ControlPlaneEnv,
+        buildProfile("production"),
       );
-      const headers = new Headers(decided.headers);
-      headers.set("x-forwarded-host", host);
-      const answer = await fetch(`${upstreamUrl}/${rest.join("/")}`, {
-        method: decided.method,
-        headers,
-        ...(body === undefined ? {} : { body }),
-      });
+      const answer = await egressOutbound(
+        asSent,
+        { grants: launchGrants(settings, "worker-deploy").setup, objectStoreHost: null },
+        (decided) => {
+          const headers = new Headers(decided.headers);
+          headers.set("x-forwarded-host", host);
+          return fetch(`${upstreamUrl}/${rest.join("/")}`, {
+            method: decided.method,
+            headers,
+            ...(body === undefined ? {} : { body }),
+          });
+        },
+      );
       res.writeHead(answer.status).end(Buffer.from(await answer.arrayBuffer()));
     })().catch((e: unknown) => res.writeHead(502).end(String(e)));
   });
@@ -249,7 +260,8 @@ describe("the worker-deploy run's Cloudflare credential", () => {
     // The uploaded deploy log records the deploy and never the credential.
     const log = uploads.get("deploy.log");
     expect(log).toContain("deploy 200");
-    expect(log).toContain("other 200");
+    // The pool's outbound handler admits no host but the grant's: the other request is refused before it leaves.
+    expect(log).toContain("other 403");
     expect(log).not.toContain(SENTINEL);
 
     // Each request leaves the job with the placeholder alone.
@@ -260,13 +272,13 @@ describe("the worker-deploy run's Cloudflare credential", () => {
       },
       { url: "https://example.com/collect", authorization: `Bearer ${CREDENTIAL_PLACEHOLDER}` },
     ]);
-    // The grant attaches the credential to the Cloudflare API request after it leaves the job, and to no other host.
+    // The grant attaches the credential to the Cloudflare API request after it leaves the job, and no other request
+    // leaves at all.
     expect(received).toEqual([
       {
         url: "https://api.cloudflare.com/client/v4/accounts/acc/workers/scripts/widgets",
         authorization: `Bearer ${SENTINEL}`,
       },
-      { url: "https://example.com/collect", authorization: null },
     ]);
   });
 });

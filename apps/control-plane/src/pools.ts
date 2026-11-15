@@ -49,7 +49,7 @@ export const POOL_DECLARATIONS: Readonly<Record<string, PoolDeclaration>> = Obje
   ]),
 );
 
-/** The headers a job's HTTPS client sends; a grant admits a request only when it allows every header it carries. */
+/** The headers a job's HTTPS client sends, Node's `fetch` and git's among them; a grant admits a request only when it allows every header it carries. */
 const CLIENT_HEADERS = [
   "accept",
   "accept-encoding",
@@ -63,6 +63,7 @@ const CLIENT_HEADERS = [
   "git-protocol",
   "host",
   "pragma",
+  "sec-fetch-mode",
   "user-agent",
 ];
 
