@@ -17,6 +17,8 @@ import {
   checkoutLayer,
   cloudAgenticLayers,
   editLoopLayer,
+  issuesFileReadLayer,
+  prefetchIssues,
   shellLayer,
   type CloudAgenticConfig,
 } from "./executor-layers.ts";
@@ -25,6 +27,7 @@ import { payload } from "./fakes.test-support.ts";
 import { ciTriageRun, prReviewRun, selfHealPrRun } from "./runs.ts";
 import { selfHealBranch } from "./self-heal-pr.ts";
 import { Artifacts, Checkout, EditLoop, ModelClient, Shell } from "./services.ts";
+import { IssuesRead } from "./triage-issues.ts";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -648,5 +651,75 @@ describe("the cloud executor's agentic layers", () => {
       .bind()
       .run();
     expect(await read()).toMatchObject({ _tag: "Success", success: "old attempt" });
+  });
+});
+
+describe("triage-issues' setup-phase issue read", () => {
+  const issuesPage = [
+    {
+      number: 3,
+      title: "Cache question",
+      body: null,
+      user: { login: "reporter" },
+      author_association: "NONE",
+      labels: [{ name: "triage:needs-repro" }],
+      state_reason: null,
+    },
+    { number: 4, title: "PR", body: "", user: null, author_association: "MEMBER", labels: [], pull_request: {} },
+  ];
+  const read = (file: string, repository: string) =>
+    Effect.runPromise(
+      Effect.result(
+        IssuesRead.use((r) => r.openIssues(repository)).pipe(Effect.provide(issuesFileReadLayer(file))),
+      ),
+    );
+
+  it("[FD-AGT-094] writes the setup read to the file, and the file read answers its issues for that repository alone", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fd-issues-"));
+    dirs.push(dir);
+    const file = join(dir, "issues.json");
+    const requested: string[] = [];
+    const fetch = (async (url: string) => {
+      requested.push(url);
+      return Response.json(issuesPage);
+    }) as unknown as typeof globalThis.fetch;
+    await Effect.runPromise(prefetchIssues("acme/app", file, fetch));
+    expect(requested).toHaveLength(1);
+    expect(requested[0]).toMatch(/^https:\/\/api\.github\.com\/repos\/acme\/app\/issues\?state=open/);
+    expect(await read(file, "acme/app")).toMatchObject({
+      _tag: "Success",
+      success: [
+        {
+          number: 3,
+          title: "Cache question",
+          body: "",
+          author: "reporter",
+          authorAssociation: "NONE",
+          labels: ["triage:needs-repro"],
+          stateReason: null,
+        },
+      ],
+    });
+    expect(await read(file, "acme/other")).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "ReadFailed", source: "issues" },
+    });
+  });
+
+  it("[FD-AGT-094] a failed setup read, a missing file and a file that does not decode each fail the read, never an empty list", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fd-issues-"));
+    dirs.push(dir);
+    const file = join(dir, "issues.json");
+    const refused = (async () => new Response("{}", { status: 403 })) as unknown as typeof globalThis.fetch;
+    await Effect.runPromise(prefetchIssues("acme/app", file, refused));
+    const failed = await read(file, "acme/app");
+    expect(failed).toMatchObject({ _tag: "Failure", failure: { _tag: "ReadFailed", source: "issues" } });
+    expect(JSON.stringify(failed)).toContain("403");
+    expect(await read(join(dir, "missing.json"), "acme/app")).toMatchObject({ _tag: "Failure" });
+    await writeFile(file, "[]");
+    expect(await read(file, "acme/app")).toMatchObject({
+      _tag: "Failure",
+      failure: { detail: "the issues file does not decode" },
+    });
   });
 });

@@ -224,8 +224,9 @@ const gateRunsWith = <R extends (typeof registry)[number]>(
           ),
         }));
 
-/** What `perExecution` reads of a run: its workflow and the body its `layer` registers. */
+/** What `perExecution` reads of a run: its name, its workflow and the body its `layer` registers. */
 interface RunBody {
+  readonly spec: { readonly name: string };
   readonly workflow: (typeof registry)[number]["workflow"];
   readonly body: (input: never) => Effect.Effect<RunResult, never, unknown>;
 }
@@ -263,6 +264,7 @@ const perExecution = <R extends RunBody, A>(
               Layer.succeed(ExecutionLease, {
                 executionId: payload.execution_id,
                 epoch: payload.epoch,
+                run: run.spec.name,
                 input: payload.input,
               }),
             ),

@@ -167,16 +167,23 @@ export const poolGrants = (
  * The runs whose `agent` phase reads GitHub's repository routes with no credential: `triage-prs` reads a repository's
  * open pull requests, their check runs and reviews, and declares `outbound`. `triage-issues` reads issues, untrusted
  * input beside private data, so a host beyond the model gateway in its `agent` phase would complete the trifecta
- * (FD-AGT-005); it holds none.
+ * (FD-AGT-005); it holds none there.
  */
 const GITHUB_API_READERS: ReadonlySet<string> = new Set(["triage-prs"]);
+
+/**
+ * The runs whose `setup` phase reads GitHub's repository routes: `triage-issues` reads its open issues to a workspace
+ * file before the setup phase ends, and its `agent` phase reads only that file (FD-AGT-005, FD-AGT-074).
+ */
+const SETUP_GITHUB_API_READERS: ReadonlySet<string> = new Set(["triage-issues"]);
 
 /**
  * Each catalogue run's grant names per egress phase: the grants its spec declares; for a run that requires
  * `Workspace`, the `setup` profile's `git-remote` base grant (FD-PROF-050), through which the executor checks the
  * lease's source out before the job starts; for an agentic recipe that calls models, the `agent` profile's
  * `model-gateway` base grant, so its `agent` phase reaches the model route; for a run of `CONTROL_PLANE_READERS`,
- * `control-plane-read` in its `agent` phase; and for a run of `GITHUB_API_READERS`, `github-api-read`.
+ * `control-plane-read` in its `agent` phase; for a run of `GITHUB_API_READERS`, `github-api-read` in its `agent`
+ * phase; and for a run of `SETUP_GITHUB_API_READERS`, `github-api-read` in its `setup` phase alone.
  */
 export const RUN_GRANTS: PoolControllerSettings["runGrants"] = Object.fromEntries(
   Object.values(RUN_CATALOG).map(({ spec, agentic }) => [
@@ -186,6 +193,7 @@ export const RUN_GRANTS: PoolControllerSettings["runGrants"] = Object.fromEntrie
         ...new Set([
           ...(spec.requires.includes("Workspace") ? ["git-remote"] : []),
           ...spec.grants.setup,
+          ...(SETUP_GITHUB_API_READERS.has(spec.name) ? ["github-api-read"] : []),
         ]),
       ],
       agent: [

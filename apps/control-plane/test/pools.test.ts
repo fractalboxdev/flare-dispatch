@@ -146,7 +146,7 @@ describe("Container pools", () => {
     expect(git.credential).toBeUndefined();
   });
 
-  it("[FD-AGT-005] github-api-read covers GET of GitHub's repository routes with no credential, in triage-prs' agent phase alone", () => {
+  it("[FD-AGT-005] [FD-AGT-094] github-api-read covers GET of GitHub's repository routes with no credential, in triage-prs' agent phase and triage-issues' setup phase alone", () => {
     const settings = poolSettings(env({ PUBLIC_ORIGIN: "https://ci.example.com/" }), profile);
     const read = launchGrants(settings, "triage-prs").agent.find(
       (g) => g.name === "github-api-read",
@@ -179,18 +179,24 @@ describe("Container pools", () => {
     expect(request("POST", "/repos/acme/app/issues")._tag).toBe("Deny");
     expect(request("GET", "/user")._tag).toBe("Deny");
     expect(request("GET", "/repos/acme/app/pulls", ["accept", "cookie"])._tag).toBe("Deny");
-    // `triage-issues` reads untrusted issues beside private data, so its agent phase reaches no host beyond the model
-    // route; no other run holds the grant in either phase.
-    for (const run of Object.keys(RUN_CATALOG).filter((r) => r !== "triage-prs")) {
+    // `triage-issues` reads untrusted issues beside private data, so it reads them in its setup phase and its agent
+    // phase reaches no host beyond the model route; no other run holds the grant in either phase.
+    for (const run of Object.keys(RUN_CATALOG).filter(
+      (r) => r !== "triage-prs" && r !== "triage-issues",
+    )) {
       const grants = launchGrants(settings, run);
       expect(
         [...grants.setup, ...grants.agent].map((g) => g.name),
         run,
       ).not.toContain("github-api-read");
     }
-    expect(launchGrants(settings, "triage-issues").agent.map((g) => g.name)).toEqual([
-      "model-gateway",
-    ]);
+    const triage = launchGrants(settings, "triage-issues");
+    expect(triage.setup.map((g) => g.name)).toEqual(["git-remote", "github-api-read"]);
+    expect(triage.setup.find((g) => g.name === "github-api-read")).toMatchObject({
+      methods: ["GET"],
+      pathPrefix: "/repos/",
+    });
+    expect(triage.agent.map((g) => g.name)).toEqual(["model-gateway"]);
   });
 
   it("[FD-IFC-102] [FD-IFC-103] control-plane-read covers GET under the dispatcher's executions path alone, in ci-triage-pr's agent phase alone", () => {
