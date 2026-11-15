@@ -7,7 +7,7 @@ export class LocalStoreFailed extends Schema.TaggedError<LocalStoreFailed>()("Lo
   detail: Schema.String,
 }) {}
 
-/** What a rehearsal tested, as `local.register` carries it (MAMEKO-LOCAL-069, FD-LOCAL-072). */
+/** What a rehearsal tested, as `local.register` carries it (MAMEKO-LOCAL-070, FD-LOCAL-072). */
 export const Provenance = Schema.Struct({
   treeHash: Schema.String,
   baseCommit: Schema.String,

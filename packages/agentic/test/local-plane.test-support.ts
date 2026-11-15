@@ -62,7 +62,7 @@ export interface PlaneEffect {
   readonly key: string;
 }
 
-/** A registration payload with the provenance fields `local.register` carries (MAMEKO-LOCAL-069). */
+/** A registration payload with the provenance fields `local.register` carries (MAMEKO-LOCAL-070). */
 export const registrationPayload = (
   reuseKey: string,
   wants: { readonly reuse: boolean; readonly writeback: boolean },

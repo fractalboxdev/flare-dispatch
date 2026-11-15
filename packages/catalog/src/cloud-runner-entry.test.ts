@@ -187,7 +187,7 @@ const device = (
   };
 };
 
-/** The run payload the device executor writes on the runner child's stdin for a lease of `run` (MAMEKO-EXEC-143). */
+/** The run payload the device executor writes on the runner child's stdin for a lease of `run` (MAMEKO-EXEC-152). */
 const leasePayload = (run: string, inputs: unknown) => ({
   workflow_version: 1,
   execution_id: EXECUTION,
@@ -419,7 +419,7 @@ const scanInput = (run: string, cloudLease?: ScanLease) => ({
 
 /**
  * One scan lease through the entry's run on the runner's services over the device's socket. The bundle's runner ends
- * a run that declares a grant before its body (MAMEKO-EXEC-163), so the scan bodies run here on the same services
+ * a run that declares a grant before its body (MAMEKO-EXEC-172), so the scan bodies run here on the same services
  * outside that refusal.
  */
 const runScan = (run: string, inputs: unknown, d: ReturnType<typeof device>) => {

@@ -1,5 +1,5 @@
 // The composition checks of specs/architecture.md: the components a control plane's configuration declares
-// (FD-ARCH-001), the application ports each phase requires a Layer for (FD-ARCH-039, MAMEKO-HOST-046), the credentials
+// (FD-ARCH-001), the application ports each phase requires a Layer for (FD-ARCH-039, MAMEKO-HOST-048), the credentials
 // no executor holds or receives (FD-ARCH-004, FD-ARCH-005) and when each class's workflow starts (FD-ARCH-019).
 import {
   deploymentOf,
@@ -111,7 +111,7 @@ export const requiredPorts = (
   ...(phase >= 4 ? ["launcher:gha", "result-acceptance-check"] : []),
 ];
 
-/** Each port the phase requires that the composition supplies no Layer for (FD-ARCH-039, MAMEKO-HOST-046). */
+/** Each port the phase requires that the composition supplies no Layer for (FD-ARCH-039, MAMEKO-HOST-048). */
 export const compositionFindings = (
   phase: Phase,
   supplied: readonly string[],
@@ -150,7 +150,7 @@ const allSet = (env: object, names: readonly string[]) => unsetBindings(env, nam
 
 /**
  * The application ports the dispatcher's composition (`apps/control-plane/src/composition.ts`) supplies a Layer for
- * over an env of vars and secrets, by mameko port id, which configuration validation reads (MAMEKO-HOST-046). The
+ * over an env of vars and secrets, by mameko port id, which configuration validation reads (MAMEKO-HOST-048). The
  * Worker reads its own env through it, and the deploy stage reads the rendered vars and the Worker's secrets.
  */
 export const composedPorts = (env: object): readonly string[] => [

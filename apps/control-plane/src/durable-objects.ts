@@ -69,7 +69,7 @@ const PROGRESS_TIMEOUT_MS = 300_000;
  */
 /**
  * Signs each `exec.presign` URL with the object-store presigner over the presign token, on the bucket's S3 endpoint
- * (MAMEKO-HOST-051, FD-CACHE-091). A deploy without the presign token, the account id or the bucket name signs none.
+ * (MAMEKO-HOST-053, FD-CACHE-091). A deploy without the presign token, the account id or the bucket name signs none.
  */
 const presignWith =
   (bindings: ControlPlaneEnv) =>
@@ -291,7 +291,7 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
 type PoolEnv = ChannelEnv & PoolControllerEnv;
 
 /**
- * One per Container pool, addressed by the pool's name (MAMEKO-HOST-059): mameko's pool controller, with the same
+ * One per Container pool, addressed by the pool's name (MAMEKO-HOST-061): mameko's pool controller, with the same
  * hooks as `ExecutorChannel` and the settings `poolSettings` derives from the profile. Without a launch signing key it
  * is given no pool, so it claims nothing and starts no Container.
  */

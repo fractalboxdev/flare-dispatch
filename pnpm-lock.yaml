@@ -1022,6 +1022,9 @@ importers:
       '@fractalboxdev/mameko-run':
         specifier: workspace:*
         version: link:../run
+      '@fractalboxdev/mameko-runner':
+        specifier: workspace:*
+        version: link:../runner
       '@fractalboxdev/mameko-store-sqlite':
         specifier: workspace:*
         version: link:../store-sqlite

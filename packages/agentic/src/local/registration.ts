@@ -1,6 +1,6 @@
 // FlareDispatch's local registration port: what a rehearsal registers, the local submit through intake that admits
 // it, and the execution id and nonce it receives (specs/local-scheduler.md § Rehearsal and registration,
-// MAMEKO-PROTO-090, MAMEKO-LOCAL-069, FD-INT-061).
+// MAMEKO-PROTO-090, MAMEKO-LOCAL-070, FD-INT-061).
 import { LocalRegistration } from "@fractalboxdev/mameko-ports";
 import { Clock, Context, Effect, Exit, Layer, Schema } from "effect";
 import { LocalStore, Provenance, type RegistrationRecord } from "./store.ts";
@@ -97,7 +97,7 @@ const recordMatches = (prior: RegistrationRecord, r: RegistrationPayload): boole
  * commit, run-definition digest, image digest, platform and inputs digest under the admitted execution id
  * (FD-LOCAL-072), and issues a nonce of 128 random bits stored with that execution id, the capacity lease id and the
  * capacity-lease epoch (FD-PROV-012). A registration that requests neither reuse nor writeback, fails to
- * decode or that intake refuses is rejected, so the execution runs unregistered (MAMEKO-LOCAL-070). A repeated
+ * decode or that intake refuses is rejected, so the execution runs unregistered (MAMEKO-LOCAL-071). A repeated
  * registration that intake deduplicates to an already registered execution receives that record's nonce only when the
  * record holds exactly its provenance, scope, reuse key, environment names and wants; any other repeat is rejected, so
  * the record keeps describing what the first rehearsal tested.

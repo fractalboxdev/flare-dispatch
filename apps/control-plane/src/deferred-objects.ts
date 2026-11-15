@@ -5,7 +5,7 @@ import { DurableObject } from "cloudflare:workers";
 
 /**
  * The `control` pool: a `cloudflare` executor whose runner runs each run program inside a Durable Object with no
- * Container (MAMEKO-EXEC-056), which host-cloudflare does not provide yet. No pool declaration names it, so nothing
+ * Container (MAMEKO-EXEC-057), which host-cloudflare does not provide yet. No pool declaration names it, so nothing
  * claims for it.
  */
 export class ControlPool extends DurableObject {
@@ -13,7 +13,7 @@ export class ControlPool extends DurableObject {
     return Response.json(
       {
         error: "not_implemented",
-        message: "ControlPool waits on host-cloudflare's control pool (MAMEKO-EXEC-056)",
+        message: "ControlPool waits on host-cloudflare's control pool (MAMEKO-EXEC-057)",
       },
       { status: 501 },
     );

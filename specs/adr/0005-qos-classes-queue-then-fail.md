@@ -1,6 +1,6 @@
 # ADR-0005: QoS classes P0–P3 and queue-then-fail
 
-Status: Superseded by mameko [ADR-0007](https://github.com/fractalboxdev/mameko/blob/045fe5c576aa79ade726e0a08c30eb6cbf02afd1/specs/adr/0007-classes-queue-then-fail.md) and [ADR-0017](https://github.com/fractalboxdev/mameko/blob/045fe5c576aa79ade726e0a08c30eb6cbf02afd1/specs/adr/0017-application-profiles.md) · 2026-10-24
+Status: Superseded by mameko [ADR-0007](https://github.com/fractalboxdev/mameko/blob/2ec08c67359fc1f27d1a51af48c848422e1fccff/specs/adr/0007-classes-queue-then-fail.md) and [ADR-0017](https://github.com/fractalboxdev/mameko/blob/2ec08c67359fc1f27d1a51af48c848422e1fccff/specs/adr/0017-application-profiles.md) · 2026-10-24
 
 FlareDispatch's values for the classes P0 to P3 are in [profile.md](../profile.md).
 

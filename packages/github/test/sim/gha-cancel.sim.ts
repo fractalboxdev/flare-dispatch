@@ -5,7 +5,7 @@
 // cancelled. The scenario checks that the cancels of a batch reach exactly the workflow runs GitHub answered for the
 // (execution, epoch) each names, through the Actions API's cancel endpoint, and never another epoch's run.
 // `scenarios` is what the `sim` job runs (packages/ops/scripts/harness.ts): each seed fails on any violation.
-// The control plane's coordinator does not call `cancel` yet (mameko MAMEKO-HOST-047), so the scenario drives the
+// The control plane's coordinator does not call `cancel` yet (mameko MAMEKO-HOST-049), so the scenario drives the
 // launcher port directly.
 import type { Launcher } from "@fractalboxdev/mameko-ports";
 import type { Layer } from "effect";

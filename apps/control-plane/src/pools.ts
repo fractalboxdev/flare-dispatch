@@ -41,7 +41,7 @@ const POOL_CONTAINERS: Readonly<
 
 /**
  * The Container pools the composition declares, by pool name. The `control` pool runs a run program in its Durable
- * Object with no Container (MAMEKO-EXEC-056), so it is not a Container pool.
+ * Object with no Container (MAMEKO-EXEC-057), so it is not a Container pool.
  */
 export const POOL_DECLARATIONS: Readonly<Record<string, PoolDeclaration>> = Object.fromEntries(
   Object.entries(POOL_CONTAINERS).map(([name, p]) => [
@@ -219,7 +219,7 @@ export const launchKeysOf = (
   }
 };
 
-/** The pools that serve `className`, whose controllers an admission of that class wakes (MAMEKO-HOST-054). */
+/** The pools that serve `className`, whose controllers an admission of that class wakes (MAMEKO-HOST-056). */
 export const poolsServing = (profile: Profile, className: string): readonly string[] =>
   Object.entries(POOL_DECLARATIONS)
     .filter(([name, d]) => poolServes(poolPartition(profile, name, d), className))
