@@ -58,7 +58,12 @@ const gitleaksEntry = (overrides: Record<string, unknown> = {}) => ({
 });
 
 /** One zizmor JSON finding, as `zizmor --format json` writes it; `row` is 0-based. */
-const zizmorFinding = (ident: string, severity: string, row: number, options: { ignored?: boolean } = {}) => ({
+const zizmorFinding = (
+  ident: string,
+  severity: string,
+  row: number,
+  options: { ignored?: boolean } = {},
+) => ({
   ident,
   desc: "a workflow weakness",
   url: `https://docs.zizmor.sh/audits/#${ident}`,
@@ -105,7 +110,11 @@ const osvReport = () => ({
         {
           package: { name: "lodash", version: "4.17.20", ecosystem: "npm" },
           vulnerabilities: [
-            { id: "GHSA-35jh-r3h4-6jhm", aliases: ["CVE-2021-23337"], summary: "Command injection" },
+            {
+              id: "GHSA-35jh-r3h4-6jhm",
+              aliases: ["CVE-2021-23337"],
+              summary: "Command injection",
+            },
             { id: "GHSA-29mw-wpgm-hmr9", aliases: ["CVE-2020-28500"], summary: "ReDoS" },
           ],
           groups: [{ ids: ["GHSA-35jh-r3h4-6jhm"], max_severity: "7.2" }],
@@ -137,7 +146,10 @@ describe("scan findings", () => {
   it("[FD-GATE-096] reports each gitleaks match with its rule id, file, start line and level", async () => {
     const findings = await read(
       "gitleaks",
-      pretty([gitleaksEntry(), gitleaksEntry({ RuleID: "generic-api-key", File: "src/key.ts", StartLine: 12 })]),
+      pretty([
+        gitleaksEntry(),
+        gitleaksEntry({ RuleID: "generic-api-key", File: "src/key.ts", StartLine: 12 }),
+      ]),
     );
     expect(findings).toEqual([
       {
@@ -171,17 +183,47 @@ describe("scan findings", () => {
       ]),
     );
     expect(findings.map(({ fingerprint: _, ...f }) => f)).toEqual([
-      { scanner: "zizmor", ruleId: "template-injection", path: ".github/workflows/ci.yml", startLine: 15, level: "failure" },
-      { scanner: "zizmor", ruleId: "artipacked", path: ".github/workflows/ci.yml", startLine: 10, level: "warning" },
-      { scanner: "zizmor", ruleId: "unpinned-uses", path: ".github/workflows/ci.yml", startLine: 21, level: "notice" },
+      {
+        scanner: "zizmor",
+        ruleId: "template-injection",
+        path: ".github/workflows/ci.yml",
+        startLine: 15,
+        level: "failure",
+      },
+      {
+        scanner: "zizmor",
+        ruleId: "artipacked",
+        path: ".github/workflows/ci.yml",
+        startLine: 10,
+        level: "warning",
+      },
+      {
+        scanner: "zizmor",
+        ruleId: "unpinned-uses",
+        path: ".github/workflows/ci.yml",
+        startLine: 21,
+        level: "notice",
+      },
     ]);
   });
 
   it("[FD-GATE-096] reports each OSV advisory against its lockfile, relative to the checkout", async () => {
     const findings = await read("osv-scanner", pretty(osvReport()));
     expect(findings.map(({ fingerprint: _, ...f }) => f)).toEqual([
-      { scanner: "osv-scanner", ruleId: "GHSA-35jh-r3h4-6jhm", path: "pnpm-lock.yaml", startLine: 1, level: "failure" },
-      { scanner: "osv-scanner", ruleId: "GHSA-29mw-wpgm-hmr9", path: "pnpm-lock.yaml", startLine: 1, level: "failure" },
+      {
+        scanner: "osv-scanner",
+        ruleId: "GHSA-35jh-r3h4-6jhm",
+        path: "pnpm-lock.yaml",
+        startLine: 1,
+        level: "failure",
+      },
+      {
+        scanner: "osv-scanner",
+        ruleId: "GHSA-29mw-wpgm-hmr9",
+        path: "pnpm-lock.yaml",
+        startLine: 1,
+        level: "failure",
+      },
       {
         scanner: "osv-scanner",
         ruleId: "GHSA-35jh-r3h4-6jhm",
@@ -200,22 +242,33 @@ describe("scan findings", () => {
       "",
     ].join("\n");
     expect((await read("zizmor", output)).map((f) => f.ruleId)).toEqual(["template-injection"]);
-    expect(reportJson(`Scanning dir ${DIR}\n${pretty(osvReport())}\nDone {1 lockfile}\n`)).toEqual(osvReport());
+    expect(reportJson(`Scanning dir ${DIR}\n${pretty(osvReport())}\nDone {1 lockfile}\n`)).toEqual(
+      osvReport(),
+    );
   });
 
   it("[FD-GATE-096] fails with ScanReportUnreadable where the output holds no report of the scanner's shape", async () => {
-    expect((await readFailure("gitleaks", "8:52AM INF 1 commits scanned.\n8:52AM WRN leaks found: 1\n"))._tag).toBe(
-      "ScanReportUnreadable",
-    );
+    expect(
+      (await readFailure("gitleaks", "8:52AM INF 1 commits scanned.\n8:52AM WRN leaks found: 1\n"))
+        ._tag,
+    ).toBe("ScanReportUnreadable");
     const wrongShape = await readFailure("zizmor", pretty([{ ident: "template-injection" }]));
-    expect(wrongShape).toMatchObject({ scanner: "zizmor", detail: "report does not match the zizmor schema" });
+    expect(wrongShape).toMatchObject({
+      scanner: "zizmor",
+      detail: "report does not match the zizmor schema",
+    });
   });
 
   it("[FD-GATE-097] sets each fingerprint to the SHA-256 of the canonical JSON of scanner, ruleId and locator", async () => {
     const [gitleaks] = await read("gitleaks", pretty([gitleaksEntry()]));
-    expect(gitleaks!.fingerprint).toBe(expectedFingerprint("gitleaks", "aws-access-token", "config/app.conf:3"));
+    expect(gitleaks!.fingerprint).toBe(
+      expectedFingerprint("gitleaks", "aws-access-token", "config/app.conf:3"),
+    );
 
-    const [zizmor] = await read("zizmor", pretty([zizmorFinding("template-injection", "High", 14)]));
+    const [zizmor] = await read(
+      "zizmor",
+      pretty([zizmorFinding("template-injection", "High", 14)]),
+    );
     expect(zizmor!.fingerprint).toBe(
       expectedFingerprint("zizmor", "template-injection", ".github/workflows/ci.yml:15"),
     );
@@ -224,7 +277,11 @@ describe("scan findings", () => {
     expect(osv.map((f) => f.fingerprint)).toEqual([
       expectedFingerprint("osv-scanner", "GHSA-35jh-r3h4-6jhm", "pnpm-lock.yaml:lodash@4.17.20"),
       expectedFingerprint("osv-scanner", "GHSA-29mw-wpgm-hmr9", "pnpm-lock.yaml:lodash@4.17.20"),
-      expectedFingerprint("osv-scanner", "GHSA-35jh-r3h4-6jhm", "apps/web/package-lock.json:lodash@4.17.20"),
+      expectedFingerprint(
+        "osv-scanner",
+        "GHSA-35jh-r3h4-6jhm",
+        "apps/web/package-lock.json:lodash@4.17.20",
+      ),
     ]);
   });
 
@@ -233,13 +290,19 @@ describe("scan findings", () => {
       "gitleaks",
       pretty([
         gitleaksEntry(),
-        gitleaksEntry({ Commit: "3".repeat(40), Fingerprint: "other", Date: "2026-11-02T00:00:00Z" }),
+        gitleaksEntry({
+          Commit: "3".repeat(40),
+          Fingerprint: "other",
+          Date: "2026-11-02T00:00:00Z",
+        }),
         gitleaksEntry({ StartLine: 4 }),
       ]),
     );
     expect(findings.map((f) => f.startLine)).toEqual([3, 4]);
     expect(new Set(findings.map((f) => f.fingerprint)).size).toBe(2);
-    expect(expectedFingerprint("zizmor", "aws-access-token", "config/app.conf:3")).not.toBe(findings[0]!.fingerprint);
+    expect(expectedFingerprint("zizmor", "aws-access-token", "config/app.conf:3")).not.toBe(
+      findings[0]!.fingerprint,
+    );
   });
 });
 
@@ -252,14 +315,21 @@ describe("matched values", () => {
     );
     const otherValue = await read(
       "gitleaks",
-      pretty([gitleaksEntry({ Secret: "AKIAFDSMOKEOTHER0002", Match: "key = AKIAFDSMOKEOTHER0002" })]),
+      pretty([
+        gitleaksEntry({ Secret: "AKIAFDSMOKEOTHER0002", Match: "key = AKIAFDSMOKEOTHER0002" }),
+      ]),
     );
     expect(unredacted).toEqual(redacted);
     expect(otherValue).toEqual(redacted);
     expect(JSON.stringify(unredacted)).not.toContain(PLANTED);
-    expect(Object.keys(unredacted[0]!).sort()).toEqual(
-      ["fingerprint", "level", "path", "ruleId", "scanner", "startLine"],
-    );
+    expect(Object.keys(unredacted[0]!).sort()).toEqual([
+      "fingerprint",
+      "level",
+      "path",
+      "ruleId",
+      "scanner",
+      "startLine",
+    ]);
   });
 
   it("[FD-GATE-098] withholds every matched value from a scanner's log, in the report and wherever the output repeats it", () => {
@@ -270,7 +340,12 @@ describe("matched values", () => {
       `Secret:      ${PLANTED}`,
       pretty([
         gitleaksEntry({ Secret: PLANTED, Match: PLANTED_LINE }),
-        gitleaksEntry({ RuleID: "generic-password", Secret: short, Match: `"${short}"`, StartLine: 9 }),
+        gitleaksEntry({
+          RuleID: "generic-password",
+          Secret: short,
+          Match: `"${short}"`,
+          StartLine: 9,
+        }),
       ]),
       "8:52AM WRN leaks found: 2",
     ].join("\n");
@@ -308,13 +383,26 @@ const FILES: ScanFiles = {
 const prepared = (): PreparedScan => ({
   bundle: {
     digest: "d".repeat(64),
-    envelope: { payloadType: "application/vnd.flare-dispatch.scan-bundle.v1+json", payload: "", signatures: [] },
+    envelope: {
+      payloadType: "application/vnd.flare-dispatch.scan-bundle.v1+json",
+      payload: "",
+      signatures: [],
+    },
     payload: Schema.decodeUnknownSync(ScanBundlePayload)({
       ...validPayload(),
       scanners: {
-        gitleaks: { versions: "^8.18.0", exitMap: { "0": "clean", "42": "finding", "1": "tool-error" } },
-        zizmor: { versions: ">=1.5.0 <2.0.0", exitMap: { "0": "clean", "14": "finding", "1": "tool-error" } },
-        "osv-scanner": { versions: "~1.9.0", exitMap: { "0": "clean", "1": "finding", "127": "tool-error" } },
+        gitleaks: {
+          versions: "^8.18.0",
+          exitMap: { "0": "clean", "42": "finding", "1": "tool-error" },
+        },
+        zizmor: {
+          versions: ">=1.5.0 <2.0.0",
+          exitMap: { "0": "clean", "14": "finding", "1": "tool-error" },
+        },
+        "osv-scanner": {
+          versions: "~1.9.0",
+          exitMap: { "0": "clean", "1": "finding", "127": "tool-error" },
+        },
       },
       baselineChecks: [
         {
@@ -342,9 +430,12 @@ const RANGE: ScanRange = {
 const scan = (script: readonly Scripted[]) => {
   const exec = fakeExec(script);
   return Effect.runPromise(
-    runScanTools({ ctx, prepared: prepared(), checkout: { dir: DIR, range: RANGE }, files: FILES }).pipe(
-      Effect.provide(exec.layer),
-    ),
+    runScanTools({
+      ctx,
+      prepared: prepared(),
+      checkout: { dir: DIR, range: RANGE },
+      files: FILES,
+    }).pipe(Effect.provide(exec.layer)),
   ).then((report) => ({ ...report, exec }));
 };
 
@@ -358,14 +449,20 @@ describe("scan steps", () => {
       },
       { match: "zizmor", exit: CommandExit.Exited({ code: 0 }), output: "[]" },
       { match: "osv-scanner", exit: CommandExit.Exited({ code: 1 }), output: pretty(osvReport()) },
-      { match: "semgrep", exit: CommandExit.Exited({ code: 1 }), output: pretty([gitleaksEntry()]) },
+      {
+        match: "semgrep",
+        exit: CommandExit.Exited({ code: 1 }),
+        output: pretty([gitleaksEntry()]),
+      },
     ]);
     const byId: Record<string, StepFindings | undefined> = Object.fromEntries(
       steps.map((s) => [s.id, s.findings]),
     );
     expect(byId["gitleaks"]).toMatchObject({
       _tag: "Read",
-      findings: [{ scanner: "gitleaks", ruleId: "aws-access-token", path: "config/app.conf", startLine: 3 }],
+      findings: [
+        { scanner: "gitleaks", ruleId: "aws-access-token", path: "config/app.conf", startLine: 3 },
+      ],
     });
     expect(byId["osv-scanner"]).toMatchObject({ _tag: "Read" });
     expect(byId["zizmor"]).toBeUndefined();
@@ -375,7 +472,11 @@ describe("scan steps", () => {
 
   it("[FD-GATE-096] reports an unreadable report as unreadable, never as no findings", async () => {
     const { steps, outcome } = await scan([
-      { match: "gitleaks git", exit: CommandExit.Exited({ code: 42 }), output: "8:52AM WRN leaks found: 1\n" },
+      {
+        match: "gitleaks git",
+        exit: CommandExit.Exited({ code: 42 }),
+        output: "8:52AM WRN leaks found: 1\n",
+      },
     ]);
     expect(steps.find((s) => s.id === "gitleaks")?.findings).toEqual(
       expect.objectContaining({ _tag: "Unreadable", detail: "no JSON report in the output" }),
@@ -386,7 +487,8 @@ describe("scan steps", () => {
   it("[FD-GATE-098] runs every scanner with a log that withholds matched values, and leaves baseline checks live", async () => {
     const { exec } = await scan([]);
     const byTool = new Map<string, ArgvOptions>(exec.ranArgv.map((o) => [o.argv[0], o]));
-    for (const scanner of ["gitleaks", "zizmor", "osv-scanner"]) expect(byTool.get(scanner)?.logAs).toBe(scanLogBytes);
+    for (const scanner of ["gitleaks", "zizmor", "osv-scanner"])
+      expect(byTool.get(scanner)?.logAs).toBe(scanLogBytes);
     expect(byTool.get("semgrep")?.logAs).toBeUndefined();
   });
 });

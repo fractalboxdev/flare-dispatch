@@ -8,7 +8,13 @@ import { newRow } from "@fractalboxdev/mameko-kernel";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { NOW } from "../conclude.test-support.ts";
-import { appDeploy, followOnRow, INTENT_KEY, PARENT, type AppDeploy } from "../follow-on.test-support.ts";
+import {
+  appDeploy,
+  followOnRow,
+  INTENT_KEY,
+  PARENT,
+  type AppDeploy,
+} from "../follow-on.test-support.ts";
 
 const insert = (deploy: AppDeploy) =>
   insertOutboxRows(deploy.db, [
@@ -36,12 +42,16 @@ const drain = (deploy: AppDeploy, now: number) =>
 
 const outbox = (deploy: AppDeploy) =>
   deploy.db.sqlite
-    .prepare("select intent_key, state, external_ref, last_error from outbox where kind = 'dispatch.followOn'")
+    .prepare(
+      "select intent_key, state, external_ref, last_error from outbox where kind = 'dispatch.followOn'",
+    )
     .all();
 
 const asReproduction = (deploy: AppDeploy) =>
   deploy.db.sqlite
-    .prepare("update intake_records set placement_constraint = 'reproduction' where execution_id = ?")
+    .prepare(
+      "update intake_records set placement_constraint = 'reproduction' where execution_id = ?",
+    )
     .run(PARENT);
 
 describe("a reproduction execution's outbox rows under a replayed apply", () => {

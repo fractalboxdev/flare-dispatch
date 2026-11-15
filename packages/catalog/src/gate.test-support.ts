@@ -50,6 +50,8 @@ export const fakeExec = (
   const ran: CommandOptions[] = [];
   const ranArgv: ArgvOptions[] = [];
   let workspaces = 0;
+  /** For each `endSetup`, how many shell and argv commands had run before it. */
+  const setupEnded: { readonly run: number; readonly argv: number }[] = [];
   const answer = (text: string) => {
     const hit = script.find((s) => text.includes(s.match));
     return {
@@ -59,6 +61,9 @@ export const fakeExec = (
   };
   const layer = Layer.succeed(GateExec, {
     workspace: Effect.sync(() => `/ws/${++workspaces}`),
+    endSetup: Effect.sync(() => {
+      setupEnded.push({ run: ran.length, argv: ranArgv.length });
+    }),
     run: (options) =>
       Effect.sync(() => {
         ran.push(options);
@@ -78,7 +83,7 @@ export const fakeExec = (
     writeFile: (path) => Effect.fail(new WorkspaceWriteFailed({ path, detail: "read-only" })),
     createReadOnly: (path) => Effect.fail(new WorkspaceWriteFailed({ path, detail: "read-only" })),
   });
-  return { layer, ran, ranArgv, workspaces: () => workspaces };
+  return { layer, ran, ranArgv, setupEnded, workspaces: () => workspaces };
 };
 
 export const fakeArtifacts = (options: { readonly fail?: boolean } = {}) => {

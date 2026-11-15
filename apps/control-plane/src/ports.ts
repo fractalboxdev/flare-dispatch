@@ -5,5 +5,4 @@
 import { composedPorts } from "@fractalboxdev/flare-dispatch-ops";
 import type { ControlPlaneEnv } from "./config.ts";
 
-export const suppliedPorts = (env: ControlPlaneEnv): readonly string[] =>
-  composedPorts(env);
+export const suppliedPorts = (env: ControlPlaneEnv): readonly string[] => composedPorts(env);

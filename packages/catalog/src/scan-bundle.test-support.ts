@@ -26,8 +26,14 @@ export const validPayload = () => ({
   zizmor: { config: "rules: {}\n" },
   scanners: {
     gitleaks: { versions: "^8.18.0", exitMap: { "0": "clean", "1": "finding" } },
-    zizmor: { versions: ">=1.5.0 <2.0.0", exitMap: { "0": "clean", "13": "finding", "14": "finding" } },
-    "osv-scanner": { versions: "~1.9.0", exitMap: { "0": "clean", "1": "finding", "128": "nothing-in-scope" } },
+    zizmor: {
+      versions: ">=1.5.0 <2.0.0",
+      exitMap: { "0": "clean", "13": "finding", "14": "finding" },
+    },
+    "osv-scanner": {
+      versions: "~1.9.0",
+      exitMap: { "0": "clean", "1": "finding", "128": "nothing-in-scope" },
+    },
   },
   suppression: {
     files: [".gitleaksignore", "osv-scanner.toml"],
@@ -45,7 +51,11 @@ export const validPayload = () => ({
 });
 
 /** The versions an image holds that `validPayload` accepts. */
-export const IMAGE_VERSIONS = { gitleaks: "8.18.4", zizmor: "1.6.0", "osv-scanner": "1.9.2" } as const;
+export const IMAGE_VERSIONS = {
+  gitleaks: "8.18.4",
+  zizmor: "1.6.0",
+  "osv-scanner": "1.9.2",
+} as const;
 
 /** A fresh ES256 key: the private JWK that signs and the public JWK a `scan.bundleKeys` entry carries. */
 export const signingKey = async (kid: string) => {
@@ -129,7 +139,9 @@ export const fakeScanImage = (
 export type StoredSnapshot = AdvisorySnapshot | "absent" | "unreadable";
 
 /** An advisory snapshot store over `snapshots` by ecosystem, counting its reads. */
-export const memoryAdvisorySnapshots = (snapshots: ReadonlyMap<string, StoredSnapshot> = new Map()) => {
+export const memoryAdvisorySnapshots = (
+  snapshots: ReadonlyMap<string, StoredSnapshot> = new Map(),
+) => {
   const reads: string[] = [];
   const layer = Layer.succeed(AdvisorySnapshots, {
     read: (ecosystem) =>
@@ -137,7 +149,9 @@ export const memoryAdvisorySnapshots = (snapshots: ReadonlyMap<string, StoredSna
         reads.push(ecosystem);
         const held = snapshots.get(ecosystem) ?? "absent";
         if (held === "unreadable")
-          return Effect.fail(new AdvisorySnapshotUnreadable({ ecosystem, detail: "D1 answered 500" }));
+          return Effect.fail(
+            new AdvisorySnapshotUnreadable({ ecosystem, detail: "D1 answered 500" }),
+          );
         return Effect.succeed(held === "absent" ? null : held);
       }),
   });

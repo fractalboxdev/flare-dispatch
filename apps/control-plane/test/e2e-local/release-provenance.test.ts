@@ -104,7 +104,12 @@ const recordCloudStatement = async (executionId: string, tag: string) => {
           nonce: "n-0123456789abcdef",
           executor_id: "cf-7",
           executor_kind: "cloudflare",
-          run: { name: "release", kind: "build", definition_digest: sha("a"), inputs_digest: sha("b") },
+          run: {
+            name: "release",
+            kind: "build",
+            definition_digest: sha("a"),
+            inputs_digest: sha("b"),
+          },
           repository: WIDGETS,
           ref: `refs/tags/${tag}`,
           commit_sha: "c".repeat(40),
@@ -178,7 +183,9 @@ const insertPublish = async (
 const outboxRowOf = async (executionId: string) => {
   const db = await stack.mf.getD1Database("DB");
   return db
-    .prepare("select state, last_error from outbox where execution_id = ? and kind = 'release.publish'")
+    .prepare(
+      "select state, last_error from outbox where execution_id = ? and kind = 'release.publish'",
+    )
     .bind(executionId)
     .first();
 };
@@ -199,7 +206,9 @@ describe("the release publish gate", () => {
     await expect
       .poll(async () =>
         db
-          .prepare("select integrated_time is not null as logged from provenance_log_appends where envelope_digest = ?")
+          .prepare(
+            "select integrated_time is not null as logged from provenance_log_appends where envelope_digest = ?",
+          )
           .bind(envelopeDigest)
           .first(),
       )

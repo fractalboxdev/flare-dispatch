@@ -54,7 +54,9 @@ const p256 = async () => {
   const pub = (await crypto.subtle.exportKey("jwk", pair.publicKey)) as JsonWebKey;
   const priv = (await crypto.subtle.exportKey("jwk", pair.privateKey)) as JsonWebKey;
   const keyid = await jwkThumbprint(pub);
-  const spki = new Uint8Array((await crypto.subtle.exportKey("spki", pair.publicKey)) as ArrayBuffer);
+  const spki = new Uint8Array(
+    (await crypto.subtle.exportKey("spki", pair.publicKey)) as ArrayBuffer,
+  );
   const json = JSON.stringify({ ...priv, kid: keyid });
   return {
     keyid,

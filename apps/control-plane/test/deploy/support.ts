@@ -16,6 +16,7 @@ import {
 import { makeOperability, repositoryRoot, V2_WORKERS } from "@fractalboxdev/flare-dispatch-ops/cli";
 import { Effect, Layer } from "effect";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "../workerd-bundle.ts";
 import { join } from "node:path";
 import { Miniflare } from "miniflare";
 import type { ControlPlaneEnv } from "../../src/config.ts";
@@ -36,6 +37,7 @@ const script = () =>
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   }).then((b) => b.outputFiles[0]!.text));
@@ -102,6 +104,8 @@ export const account = (
     probes,
     /** The deployed control plane's vars, as the rendered configuration sets them. */
     vars: varsOf,
+    /** The deployed control plane's rendered configuration. */
+    config: () => deployed.get("control-plane")?.config,
     deploy: () => Effect.runPromise(fd.deploy({ overlay: JSON.stringify(overlay), dryRun: false })),
     /**
      * The deployed control plane under Miniflare, on its rendered vars and the account's secrets; `vars` replaces
@@ -109,7 +113,10 @@ export const account = (
      */
     serve: async (vars: Readonly<Record<string, unknown>> = {}) => {
       const mf = new Miniflare({
-        modules: [{ type: "ESModule", path: "worker.js", contents: await script() }],
+        modules: [
+          { type: "ESModule", path: "worker.js", contents: await script() },
+          ...wasmModules(),
+        ],
         compatibilityDate: "2026-05-01",
         d1Databases: { DB: "control-plane" },
         durableObjects: {

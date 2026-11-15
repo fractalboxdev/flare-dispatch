@@ -44,6 +44,7 @@ import {
 import { profileDocument } from "@fractalboxdev/flare-dispatch-profile";
 import { Effect, Exit, Layer } from "effect";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "../../../apps/control-plane/test/workerd-bundle.ts";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -86,7 +87,7 @@ let confidential: Miniflare;
 
 const controlPlane = (script: string, ledger: boolean, devRepository: object = DEV_REPOSITORY) =>
   new Miniflare({
-    modules: [{ type: "ESModule", path: "worker.js", contents: script }],
+    modules: [{ type: "ESModule", path: "worker.js", contents: script }, ...wasmModules()],
     compatibilityDate: "2026-05-01",
     d1Databases: { DB: "control-plane" },
     durableObjects: {
@@ -117,6 +118,7 @@ beforeAll(async () => {
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   });
@@ -135,7 +137,8 @@ afterAll(async () => {
   await team?.close();
 });
 
-const bucket = async (mf: Miniflare = plane) => (await mf.getR2Bucket("CACHE")) as unknown as Bucket;
+const bucket = async (mf: Miniflare = plane) =>
+  (await mf.getR2Bucket("CACHE")) as unknown as Bucket;
 const db = async (mf: Miniflare = plane) => (await mf.getD1Database("DB")) as unknown as D1Database;
 const ledger = async (repo: string) =>
   ledgersOf(
@@ -209,7 +212,9 @@ const leaseOf = async (
     .bind(id)
     .first<{ inputs_json: string }>();
   await d1
-    .prepare("update intake_records set cache_trigger_json = ?, inputs_json = ? where execution_id = ?")
+    .prepare(
+      "update intake_records set cache_trigger_json = ?, inputs_json = ? where execution_id = ?",
+    )
     .bind(JSON.stringify(trigger), JSON.stringify(inputs(JSON.parse(row!.inputs_json))), id)
     .run();
   await d1
@@ -230,7 +235,10 @@ const leaseOf = async (
 const namingNamespaces = (dispatched: unknown) => ({
   ...(dispatched as object),
   cache_namespace: protectedCloud(REPO),
-  cache_namespaces: { read: [protectedCloud(REPO), "pr/other/repo/1"], write: protectedCloud(REPO) },
+  cache_namespaces: {
+    read: [protectedCloud(REPO), "pr/other/repo/1"],
+    write: protectedCloud(REPO),
+  },
 });
 
 const PULL_REQUEST = { _tag: "PullRequest", number: 41 };
@@ -243,128 +251,117 @@ let readLease: Lease | undefined;
 const prLeaseForReads = async () => (readLease ??= await leaseOf(PULL_REQUEST, (d) => d));
 
 describe("the lease the composed control plane grants", () => {
-  it(
-    "[FD-CACHE-002] names only cache, artifact and log prefixes of this execution and epoch, and no checkout, workspace or build output",
-    async () => {
-      const lease = await pullRequestLease();
-      const grant = lease.upload_grant;
-      expect(grantCarriesNoWorkspace(grant, lease.execution_id, lease.epoch)).toBe(true);
-      expect(grant).toMatchObject({
-        cache_prefix: `cache/${PR}/`,
-        artifact_prefix: `artifacts/${lease.execution_id}/${lease.epoch}/`,
-        log_prefix: `logs/${lease.execution_id}/${lease.epoch}/`,
-      });
-      // Every field the control plane adds beside the run's inputs, at any depth.
-      const fields = (value: unknown, path: string): string[] =>
-        value === null || typeof value !== "object"
-          ? []
-          : Object.entries(value).flatMap(([k, v]) => [`${path}${k}`, ...fields(v, `${path}${k}.`)]);
-      const { inputs: _inputs, ...granted } = lease;
-      expect(
-        fields(granted, "").filter((f) => /workspace|checkout|build[_-]?output|source[_-]?executor/i.test(f)),
-      ).toEqual([]);
-      const prefixes = Object.entries(grant).filter(([k]) => k.endsWith("_prefix"));
-      expect(prefixes.map(([k]) => k).sort()).toEqual(["artifact_prefix", "cache_prefix", "log_prefix"]);
-      for (const [, prefix] of prefixes)
-        expect(String(prefix)).toMatch(/^(cache|artifacts|logs)\//);
-    },
-    60_000,
-  );
+  it("[FD-CACHE-002] names only cache, artifact and log prefixes of this execution and epoch, and no checkout, workspace or build output", async () => {
+    const lease = await pullRequestLease();
+    const grant = lease.upload_grant;
+    expect(grantCarriesNoWorkspace(grant, lease.execution_id, lease.epoch)).toBe(true);
+    expect(grant).toMatchObject({
+      cache_prefix: `cache/${PR}/`,
+      artifact_prefix: `artifacts/${lease.execution_id}/${lease.epoch}/`,
+      log_prefix: `logs/${lease.execution_id}/${lease.epoch}/`,
+    });
+    // Every field the control plane adds beside the run's inputs, at any depth.
+    const fields = (value: unknown, path: string): string[] =>
+      value === null || typeof value !== "object"
+        ? []
+        : Object.entries(value).flatMap(([k, v]) => [`${path}${k}`, ...fields(v, `${path}${k}.`)]);
+    const { inputs: _inputs, ...granted } = lease;
+    expect(
+      fields(granted, "").filter((f) =>
+        /workspace|checkout|build[_-]?output|source[_-]?executor/i.test(f),
+      ),
+    ).toEqual([]);
+    const prefixes = Object.entries(grant).filter(([k]) => k.endsWith("_prefix"));
+    expect(prefixes.map(([k]) => k).sort()).toEqual([
+      "artifact_prefix",
+      "cache_prefix",
+      "log_prefix",
+    ]);
+    for (const [, prefix] of prefixes) expect(String(prefix)).toMatch(/^(cache|artifacts|logs)\//);
+  }, 60_000);
 
-  it(
-    "[FD-PROF-062] the profile names cacheNamespaces as the cache_namespaces binding, and the claim grants the lease its answer for the claiming executor's kind",
-    async () => {
-      expect((profileDocument.document as { cache_namespaces?: unknown }).cache_namespaces).toBe(
-        "cacheNamespaces",
-      );
-      const lease = await pullRequestLease();
-      const execution = {
+  it("[FD-PROF-062] the profile names cacheNamespaces as the cache_namespaces binding, and the claim grants the lease its answer for the claiming executor's kind", async () => {
+    expect((profileDocument.document as { cache_namespaces?: unknown }).cache_namespaces).toBe(
+      "cacheNamespaces",
+    );
+    const lease = await pullRequestLease();
+    const execution = {
+      repo: REPO,
+      executionId: lease.execution_id,
+      class: "batch",
+      constraints: [],
+      trigger: { _tag: "PullRequest", number: 41 },
+    } as const;
+    // mameko's claim writes the binding's answer for the device that claimed, which differs from a cloud executor's.
+    expect(lease.cache_namespaces).toEqual(cacheNamespaces(execution, "device"));
+    expect(cacheNamespaces(execution, "cloudflare")).not.toEqual(lease.cache_namespaces);
+  }, 60_000);
+
+  it("[FD-CACHE-016] takes the namespaces from the execution row and the executor's kind, and ignores the namespaces the run inputs and a job name", async () => {
+    const lease = await pullRequestLease();
+    const expected = cacheNamespaces(
+      {
         repo: REPO,
         executionId: lease.execution_id,
         class: "batch",
         constraints: [],
         trigger: { _tag: "PullRequest", number: 41 },
-      } as const;
-      // mameko's claim writes the binding's answer for the device that claimed, which differs from a cloud executor's.
-      expect(lease.cache_namespaces).toEqual(cacheNamespaces(execution, "device"));
-      expect(cacheNamespaces(execution, "cloudflare")).not.toEqual(lease.cache_namespaces);
-    },
-    60_000,
-  );
+      },
+      "device",
+    );
+    expect(lease.cache_namespaces).toEqual(expected);
+    expect(lease.cache_namespaces.write).toBe(PR);
+    expect(lease.cache_namespaces.read).not.toContain("pr/other/repo/1");
+    // The inputs the executor receives still name the namespaces; nothing granted follows them.
+    expect(lease.inputs).toMatchObject({ cache_namespace: protectedCloud(REPO) });
+    expect(lease.upload_grant.cache_prefix).toBe(`cache/${PR}/`);
+    // The compile-cache token carries the lease's namespaces, never the inputs'.
+    const verdict = await verifyCompileCacheToken(
+      SECRET,
+      REPO,
+      lease.upload_grant.compile_cache!.token,
+      Date.now(),
+    );
+    expect(verdict).toMatchObject({
+      ok: true,
+      scope: { read: expected.read, write: PR, epoch: lease.epoch },
+    });
 
-  it(
-    "[FD-CACHE-016] takes the namespaces from the execution row and the executor's kind, and ignores the namespaces the run inputs and a job name",
-    async () => {
-      const lease = await pullRequestLease();
-      const expected = cacheNamespaces(
-        {
-          repo: REPO,
-          executionId: lease.execution_id,
-          class: "batch",
-          constraints: [],
-          trigger: { _tag: "PullRequest", number: 41 },
-        },
-        "device",
-      );
-      expect(lease.cache_namespaces).toEqual(expected);
-      expect(lease.cache_namespaces.write).toBe(PR);
-      expect(lease.cache_namespaces.read).not.toContain("pr/other/repo/1");
-      // The inputs the executor receives still name the namespaces; nothing granted follows them.
-      expect(lease.inputs).toMatchObject({ cache_namespace: protectedCloud(REPO) });
-      expect(lease.upload_grant.cache_prefix).toBe(`cache/${PR}/`);
-      // The compile-cache token carries the lease's namespaces, never the inputs'.
-      const verdict = await verifyCompileCacheToken(
-        SECRET,
-        REPO,
-        lease.upload_grant.compile_cache!.token,
-        Date.now(),
-      );
-      expect(verdict).toMatchObject({
-        ok: true,
-        scope: { read: expected.read, write: PR, epoch: lease.epoch },
-      });
-
-      // The same inputs on an execution whose row records a manual dispatch: it writes nothing.
-      const other = await leaseOf({ _tag: "Other" }, namingNamespaces);
-      expect(other.cache_namespaces.write).toBeNull();
-      expect(other.upload_grant.cache_prefix).toBeNull();
-      expect(other.cache_namespaces.read).not.toContain(PR);
-      expect(other.cache_namespaces.read).not.toContain("pr/other/repo/1");
-    },
-    60_000,
-  );
+    // The same inputs on an execution whose row records a manual dispatch: it writes nothing.
+    const other = await leaseOf({ _tag: "Other" }, namingNamespaces);
+    expect(other.cache_namespaces.write).toBeNull();
+    expect(other.upload_grant.cache_prefix).toBeNull();
+    expect(other.cache_namespaces.read).not.toContain(PR);
+    expect(other.cache_namespaces.read).not.toContain("pr/other/repo/1");
+  }, 60_000);
 });
 
 describe("the compile-cache route's writes on the composed control plane", () => {
-  it(
-    "[FD-CACHE-052] reserves a PUT's declared length in the repository's CacheLedger before it writes, and writes nothing the ledger refuses",
-    async () => {
-      const lease = await pullRequestLease();
-      const { endpoint, token } = lease.upload_grant.compile_cache!;
-      expect(endpoint).toBe(`${ORIGIN}/v1/compile-cache/${REPO}`);
-      const put = (path: string, body: string) =>
-        plane.dispatchFetch(`${endpoint}/${path}`, {
-          method: "PUT",
-          headers: { authorization: `Bearer ${token}`, "content-length": String(body.length) },
-          body,
-        });
-      const repoLedger = await ledger(REPO);
-      const before = await repoLedger.usage();
-      const stored = await put("k052/a", "x".repeat(1234));
-      expect(stored.status).toBe(201);
-      const after = await repoLedger.usage();
-      expect(after.stored + after.pending - (before.stored + before.pending)).toBe(1234);
-      const r2 = await bucket();
-      expect((await r2.head(compileObjectKey(PR, "k052/a")))?.size).toBe(1234);
+  it("[FD-CACHE-052] reserves a PUT's declared length in the repository's CacheLedger before it writes, and writes nothing the ledger refuses", async () => {
+    const lease = await pullRequestLease();
+    const { endpoint, token } = lease.upload_grant.compile_cache!;
+    expect(endpoint).toBe(`${ORIGIN}/v1/compile-cache/${REPO}`);
+    const put = (path: string, body: string) =>
+      plane.dispatchFetch(`${endpoint}/${path}`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${token}`, "content-length": String(body.length) },
+        body,
+      });
+    const repoLedger = await ledger(REPO);
+    const before = await repoLedger.usage();
+    const stored = await put("k052/a", "x".repeat(1234));
+    expect(stored.status).toBe(201);
+    const after = await repoLedger.usage();
+    expect(after.stored + after.pending - (before.stored + before.pending)).toBe(1234);
+    const r2 = await bucket();
+    expect((await r2.head(compileObjectKey(PR, "k052/a")))?.size).toBe(1234);
 
-      // Once the ledger has ended the execution, it refuses every reservation, and the route writes nothing.
-      await repoLedger.end({ executionId: lease.execution_id, expiresAt: Date.now() + 3_600_000 });
-      const refused = await put("k052/b", "y".repeat(10));
-      expect(refused.status).toBe(403);
-      expect(await r2.head(compileObjectKey(PR, "k052/b"))).toBeNull();
-    },
-    60_000,
-  );
+    // Once the ledger has ended the execution, it refuses every reservation, and the route writes nothing.
+    await repoLedger.end({ executionId: lease.execution_id, expiresAt: Date.now() + 3_600_000 });
+    const refused = await put("k052/b", "y".repeat(10));
+    expect(refused.status).toBe(403);
+    expect(await r2.head(compileObjectKey(PR, "k052/b"))).toBeNull();
+  }, 60_000);
 });
 
 describe("the executor's cache reads against the composed control plane", () => {
@@ -378,7 +375,10 @@ describe("the executor's cache reads against the composed control plane", () => 
       "sign",
       "verify",
     ]);
-    const jwk = (await crypto.subtle.exportKey("jwk", (keys as CryptoKeyPair).publicKey)) as JsonWebKey;
+    const jwk = (await crypto.subtle.exportKey(
+      "jwk",
+      (keys as CryptoKeyPair).publicKey,
+    )) as JsonWebKey;
     return openL1({
       disk: broken,
       l2: { fetch: async () => null, upload: async () => undefined },
@@ -388,7 +388,12 @@ describe("the executor's cache reads against the composed control plane", () => 
 
   const proxyFor = async (
     lease: Lease,
-    options: { readonly mf?: Miniflare; readonly token?: string; readonly fetch?: typeof fetch; readonly l1?: Awaited<ReturnType<typeof l1Of>> } = {},
+    options: {
+      readonly mf?: Miniflare;
+      readonly token?: string;
+      readonly fetch?: typeof fetch;
+      readonly l1?: Awaited<ReturnType<typeof l1Of>>;
+    } = {},
   ) => {
     const grant = lease.upload_grant.compile_cache!;
     const proxy = compileCacheProxy({
@@ -401,81 +406,75 @@ describe("the executor's cache reads against the composed control plane", () => 
     return (path: string, method = "GET") => proxy(new Request(`http://proxy/${path}`, { method }));
   };
 
-  it(
-    "[FD-CACHE-011] a compile-cache read the route fails, at the CacheLedger, on a stale token or unreachable, is a miss",
-    async () => {
-      const lease = await prLeaseForReads();
-      await (await bucket()).put(compileObjectKey(PR, "k011/hit"), "cached");
-      // The route serves the object, so each failure below is the failure and not an absent object.
-      const healthy = await proxyFor(lease);
-      expect(await (await healthy("k011/hit")).text()).toBe("cached");
+  it("[FD-CACHE-011] a compile-cache read the route fails, at the CacheLedger, on a stale token or unreachable, is a miss", async () => {
+    const lease = await prLeaseForReads();
+    await (await bucket()).put(compileObjectKey(PR, "k011/hit"), "cached");
+    // The route serves the object, so each failure below is the failure and not an absent object.
+    const healthy = await proxyFor(lease);
+    expect(await (await healthy("k011/hit")).text()).toBe("cached");
 
-      // A deploy that binds no CacheLedger answers 503 for every compile-cache request.
-      const direct = await ledgerless.dispatchFetch(
-        `${lease.upload_grant.compile_cache!.endpoint}/k011/hit`,
-        { headers: { authorization: `Bearer ${lease.upload_grant.compile_cache!.token}` } },
-      );
-      expect(direct.status).toBe(503);
-      const noLedger = await proxyFor(lease, { mf: ledgerless });
-      for (const method of ["GET", "HEAD", "PROPFIND"])
-        expect((await noLedger("k011/hit", method)).status).toBe(404);
+    // A deploy that binds no CacheLedger answers 503 for every compile-cache request.
+    const direct = await ledgerless.dispatchFetch(
+      `${lease.upload_grant.compile_cache!.endpoint}/k011/hit`,
+      { headers: { authorization: `Bearer ${lease.upload_grant.compile_cache!.token}` } },
+    );
+    expect(direct.status).toBe(503);
+    const noLedger = await proxyFor(lease, { mf: ledgerless });
+    for (const method of ["GET", "HEAD", "PROPFIND"])
+      expect((await noLedger("k011/hit", method)).status).toBe(404);
 
-      // A token for an epoch the control plane does not hold is refused with 403.
-      const stale = await signCompileCacheToken(SECRET, {
-        repo: REPO,
-        executionId: lease.execution_id,
-        epoch: lease.epoch + 1,
-        read: lease.cache_namespaces.read,
-        write: lease.cache_namespaces.write,
-        expiresAt: Date.now() + 60_000,
-      });
-      const staleProxy = await proxyFor(lease, { token: stale });
-      for (const method of ["GET", "HEAD", "PROPFIND"])
-        expect((await staleProxy("k011/hit", method)).status).toBe(404);
+    // A token for an epoch the control plane does not hold is refused with 403.
+    const stale = await signCompileCacheToken(SECRET, {
+      repo: REPO,
+      executionId: lease.execution_id,
+      epoch: lease.epoch + 1,
+      read: lease.cache_namespaces.read,
+      write: lease.cache_namespaces.write,
+      expiresAt: Date.now() + 60_000,
+    });
+    const staleProxy = await proxyFor(lease, { token: stale });
+    for (const method of ["GET", "HEAD", "PROPFIND"])
+      expect((await staleProxy("k011/hit", method)).status).toBe(404);
 
-      const down = await proxyFor(lease, {
-        fetch: (async () => Promise.reject(new TypeError("network down"))) as typeof fetch,
-      });
-      expect((await down("k011/hit")).status).toBe(404);
-    },
-    60_000,
-  );
+    const down = await proxyFor(lease, {
+      fetch: (async () => Promise.reject(new TypeError("network down"))) as typeof fetch,
+    });
+    expect((await down("k011/hit")).status).toBe(404);
+  }, 60_000);
 
-  it(
-    "[FD-CACHE-011] an L1 read that fails falls through to the route, and an L2 manifest read that fails is a miss",
-    async () => {
-      const lease = await prLeaseForReads();
-      const r2 = await bucket();
-      await r2.put(compileObjectKey(PR, "k011/l1"), "from-route");
-      const l1 = await l1Of(true);
-      // L1 indexes an object under the proxy's key for the path, so the proxy reads the failing disk first.
-      const l1Key = createHash("sha256").update("compile-cache/k011/l1").digest("hex");
-      expect(await Effect.runPromise(l1.keep(PR, l1Key, new TextEncoder().encode("unreadable")))).toBe(true);
-      const proxy = await proxyFor(lease, { l1 });
-      const answer = await proxy("k011/l1");
-      expect(answer.status).toBe(200);
-      expect(await answer.text()).toBe("from-route");
+  it("[FD-CACHE-011] an L1 read that fails falls through to the route, and an L2 manifest read that fails is a miss", async () => {
+    const lease = await prLeaseForReads();
+    const r2 = await bucket();
+    await r2.put(compileObjectKey(PR, "k011/l1"), "from-route");
+    const l1 = await l1Of(true);
+    // L1 indexes an object under the proxy's key for the path, so the proxy reads the failing disk first.
+    const l1Key = createHash("sha256").update("compile-cache/k011/l1").digest("hex");
+    expect(
+      await Effect.runPromise(l1.keep(PR, l1Key, new TextEncoder().encode("unreadable"))),
+    ).toBe(true);
+    const proxy = await proxyFor(lease, { l1 });
+    const answer = await proxy("k011/l1");
+    expect(answer.status).toBe(200);
+    expect(await answer.text()).toBe("from-route");
 
-      // An unreadable manifest in the control plane's bucket, and a bucket read that fails, are each a miss.
-      const key = "b".repeat(64);
-      await r2.put(manifestPath(PR, key), "{not json");
-      const reader = {
-        namespaces: lease.cache_namespaces,
-        class: "batch",
-        constraints: [],
-        executorKind: "device" as const,
-      };
-      const keys = { controlPlane: {} as JsonWebKey, device: () => null };
-      const fromBucket = (b: Bucket) => (namespace: string, k: string) =>
-        Effect.runPromise(readManifest(b, namespace, k)).then((read) => read?.manifest ?? null);
-      expect(await Effect.runPromise(lookupEntry(reader, key, fromBucket(r2), keys))).toBeNull();
-      const failing = {
-        get: async () => Promise.reject(new Error("R2 unavailable")),
-      } as unknown as Bucket;
-      expect(await Effect.runPromise(lookupEntry(reader, key, fromBucket(failing), keys))).toBeNull();
-    },
-    60_000,
-  );
+    // An unreadable manifest in the control plane's bucket, and a bucket read that fails, are each a miss.
+    const key = "b".repeat(64);
+    await r2.put(manifestPath(PR, key), "{not json");
+    const reader = {
+      namespaces: lease.cache_namespaces,
+      class: "batch",
+      constraints: [],
+      executorKind: "device" as const,
+    };
+    const keys = { controlPlane: {} as JsonWebKey, device: () => null };
+    const fromBucket = (b: Bucket) => (namespace: string, k: string) =>
+      Effect.runPromise(readManifest(b, namespace, k)).then((read) => read?.manifest ?? null);
+    expect(await Effect.runPromise(lookupEntry(reader, key, fromBucket(r2), keys))).toBeNull();
+    const failing = {
+      get: async () => Promise.reject(new Error("R2 unavailable")),
+    } as unknown as Bucket;
+    expect(await Effect.runPromise(lookupEntry(reader, key, fromBucket(failing), keys))).toBeNull();
+  }, 60_000);
 });
 
 describe("a confidential-compute repository on the composed control plane", () => {
@@ -483,56 +482,50 @@ describe("a confidential-compute repository on the composed control plane", () =
   const confidentialPullRequest = async () =>
     (confidentialLease ??= await leaseOf(PULL_REQUEST, namingNamespaces, confidential));
 
-  it(
-    "[FD-CACHE-008] the lease names no L2 namespace, no cache prefix and no compile-cache endpoint, whatever the run inputs name",
-    async () => {
-      const lease = await confidentialPullRequest();
-      expect(lease.cache_namespaces).toEqual({ read: [], write: null });
-      expect(lease.upload_grant.cache_prefix).toBeNull();
-      expect(lease.upload_grant.compile_cache).toBeNull();
-      // The inputs still name a namespace; nothing granted follows them.
-      expect(lease.inputs).toMatchObject({ cache_namespace: protectedCloud(REPO) });
-      // The same pull request on a repository that is not confidential reads and writes L2.
-      const open = await pullRequestLease();
-      expect(open.cache_namespaces.write).toBe(PR);
-      expect(open.upload_grant.compile_cache).not.toBeNull();
-    },
-    60_000,
-  );
+  it("[FD-CACHE-008] the lease names no L2 namespace, no cache prefix and no compile-cache endpoint, whatever the run inputs name", async () => {
+    const lease = await confidentialPullRequest();
+    expect(lease.cache_namespaces).toEqual({ read: [], write: null });
+    expect(lease.upload_grant.cache_prefix).toBeNull();
+    expect(lease.upload_grant.compile_cache).toBeNull();
+    // The inputs still name a namespace; nothing granted follows them.
+    expect(lease.inputs).toMatchObject({ cache_namespace: protectedCloud(REPO) });
+    // The same pull request on a repository that is not confidential reads and writes L2.
+    const open = await pullRequestLease();
+    expect(open.cache_namespaces.write).toBe(PR);
+    expect(open.upload_grant.compile_cache).not.toBeNull();
+  }, 60_000);
 
-  it(
-    "[FD-CACHE-088] the log viewer shows the executor id and execution id as a pointer and fetches no log content",
-    async () => {
-      /** Writes one log segment of the lease's execution to a deploy's bucket and reads the viewer as an operator. */
-      const viewerOf = async (mf: Miniflare, lease: Lease) => {
-        const name = await logObjectName({
-          executionId: lease.execution_id,
-          epoch: lease.epoch,
-          journalName: "step:build",
-          stream: "stdout",
-          start: 0,
-          end: 1,
-        });
-        await (await bucket(mf)).put(name!, `${JSON.stringify({ line: "confidential build output" })}\n`, {
-          customMetadata: { executor_id: "device", executor_kind: "device" },
-        });
-        const read = await mf.dispatchFetch(
-          `${ORIGIN}/v1/executions/${lease.execution_id}/logs?format=html`,
-          { headers: { "cf-access-jwt-assertion": await team.jwt(OPERATOR) } },
-        );
-        expect(read.status).toBe(200);
-        return read.text();
-      };
-      const lease = await confidentialPullRequest();
-      const pointer = await viewerOf(confidential, lease);
-      expect(pointer).toContain(`"executionId":"${lease.execution_id}"`);
-      expect(pointer).toContain(`"executorId":"${lease.executor}"`);
-      expect(pointer).not.toContain("confidential build output");
-      // A repository that is not confidential shows the log content its executor uploaded.
-      expect(await viewerOf(plane, await prLeaseForReads())).toContain("confidential build output");
-    },
-    60_000,
-  );
+  it("[FD-CACHE-088] the log viewer shows the executor id and execution id as a pointer and fetches no log content", async () => {
+    /** Writes one log segment of the lease's execution to a deploy's bucket and reads the viewer as an operator. */
+    const viewerOf = async (mf: Miniflare, lease: Lease) => {
+      const name = await logObjectName({
+        executionId: lease.execution_id,
+        epoch: lease.epoch,
+        journalName: "step:build",
+        stream: "stdout",
+        start: 0,
+        end: 1,
+      });
+      await (
+        await bucket(mf)
+      ).put(name!, `${JSON.stringify({ line: "confidential build output" })}\n`, {
+        customMetadata: { executor_id: "device", executor_kind: "device" },
+      });
+      const read = await mf.dispatchFetch(
+        `${ORIGIN}/v1/executions/${lease.execution_id}/logs?format=html`,
+        { headers: { "cf-access-jwt-assertion": await team.jwt(OPERATOR) } },
+      );
+      expect(read.status).toBe(200);
+      return read.text();
+    };
+    const lease = await confidentialPullRequest();
+    const pointer = await viewerOf(confidential, lease);
+    expect(pointer).toContain(`"executionId":"${lease.execution_id}"`);
+    expect(pointer).toContain(`"executorId":"${lease.executor}"`);
+    expect(pointer).not.toContain("confidential build output");
+    // A repository that is not confidential shows the log content its executor uploaded.
+    expect(await viewerOf(plane, await prLeaseForReads())).toContain("confidential build output");
+  }, 60_000);
 });
 
 // ---- FD-CACHE-041: create-only manifests, on the control plane's bucket and on a real R2 bucket ------------------
@@ -662,7 +655,9 @@ describe("the manifest commit on the control plane's bucket", () => {
 });
 
 describe.skipIf(!realR2)("the manifest commit on a real R2 bucket", () => {
-  let session: { readonly remoteProxyConnectionString: unknown; dispose(): Promise<void> } | undefined;
+  let session:
+    | { readonly remoteProxyConnectionString: unknown; dispose(): Promise<void> }
+    | undefined;
   let remote: Miniflare | undefined;
 
   beforeAll(async () => {

@@ -234,35 +234,37 @@ const branchOf = (ref: string) =>
  * it scans the same range. No dispatch starts it.
  */
 export const securityGateDecoder = () =>
-  webhook(
-    (d): Option.Option<SecurityGateInput> =>
-      Match.value(d).pipe(
-        Match.when({ event: "pull_request" }, (d: Delivery<"pull_request">) =>
-          (GATE_PR_ACTIONS as readonly string[]).includes(d.action)
-            ? Option.some({
-                repo: d.repository.cloneUrl,
-                sha: d.pullRequest.headSha,
-                ref: `refs/pull/${d.pullRequest.number}/head`,
-                scope: d.repository.fullName,
-                base: { _tag: "TargetBranch", branch: d.pullRequest.baseRef } satisfies SecurityGateBase,
-              })
-            : Option.none(),
-        ),
-        Match.when({ event: "merge_group" }, (d: Delivery<"merge_group">) =>
-          d.action === "checks_requested"
-            ? Option.some({
-                repo: d.repository.cloneUrl,
-                sha: d.headSha,
-                ref: d.headRef,
-                scope: d.repository.fullName,
-                base: (d.baseSha === undefined
-                  ? { _tag: "TargetBranch", branch: branchOf(d.baseRef) }
-                  : { _tag: "MergeGroup", baseSha: d.baseSha }) satisfies SecurityGateBase,
-              })
-            : Option.none(),
-        ),
-        Match.orElse(() => Option.none()),
+  webhook((d): Option.Option<SecurityGateInput> =>
+    Match.value(d).pipe(
+      Match.when({ event: "pull_request" }, (d: Delivery<"pull_request">) =>
+        (GATE_PR_ACTIONS as readonly string[]).includes(d.action)
+          ? Option.some({
+              repo: d.repository.cloneUrl,
+              sha: d.pullRequest.headSha,
+              ref: `refs/pull/${d.pullRequest.number}/head`,
+              scope: d.repository.fullName,
+              base: {
+                _tag: "TargetBranch",
+                branch: d.pullRequest.baseRef,
+              } satisfies SecurityGateBase,
+            })
+          : Option.none(),
       ),
+      Match.when({ event: "merge_group" }, (d: Delivery<"merge_group">) =>
+        d.action === "checks_requested"
+          ? Option.some({
+              repo: d.repository.cloneUrl,
+              sha: d.headSha,
+              ref: d.headRef,
+              scope: d.repository.fullName,
+              base: (d.baseSha === undefined
+                ? { _tag: "TargetBranch", branch: branchOf(d.baseRef) }
+                : { _tag: "MergeGroup", baseSha: d.baseSha }) satisfies SecurityGateBase,
+            })
+          : Option.none(),
+      ),
+      Match.orElse(() => Option.none()),
+    ),
   );
 
 /**

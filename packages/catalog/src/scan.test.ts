@@ -2,7 +2,16 @@
 // verdict the scan results conclude. Subprocesses answer from a script, except where a suite runs a real checkout or a
 // real process to show what the scope and the argv hold.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect, Schema } from "effect";
@@ -38,7 +47,10 @@ const payload = (): ScanBundlePayload =>
   Schema.decodeUnknownSync(ScanBundlePayload)({
     ...validPayload(),
     scanners: {
-      gitleaks: { versions: "^8.18.0", exitMap: { "0": "clean", "42": "finding", "1": "tool-error" } },
+      gitleaks: {
+        versions: "^8.18.0",
+        exitMap: { "0": "clean", "42": "finding", "1": "tool-error" },
+      },
       zizmor: {
         versions: ">=1.5.0 <2.0.0",
         exitMap: {
@@ -78,7 +90,11 @@ const payload = (): ScanBundlePayload =>
 const prepared = (p: ScanBundlePayload = payload()): PreparedScan => ({
   bundle: {
     digest: "d".repeat(64),
-    envelope: { payloadType: "application/vnd.flare-dispatch.scan-bundle.v1+json", payload: "", signatures: [] },
+    envelope: {
+      payloadType: "application/vnd.flare-dispatch.scan-bundle.v1+json",
+      payload: "",
+      signatures: [],
+    },
     payload: p,
   },
   versions: { gitleaks: "8.18.4", zizmor: "1.6.0", "osv-scanner": "1.9.2" },
@@ -86,7 +102,9 @@ const prepared = (p: ScanBundlePayload = payload()): PreparedScan => ({
 });
 
 /** A range whose every scanner has input: commits, a workflow and a lockfile. */
-const fullRange = (scannable: readonly string[] = [".github/workflows/ci.yml", "pnpm-lock.yaml"]): ScanRange => ({
+const fullRange = (
+  scannable: readonly string[] = [".github/workflows/ci.yml", "pnpm-lock.yaml"],
+): ScanRange => ({
   base: BASE,
   head: HEAD,
   commits: [HEAD],
@@ -97,7 +115,11 @@ const fullRange = (scannable: readonly string[] = [".github/workflows/ci.yml", "
 const exited = (code: number) => CommandExit.Exited({ code });
 
 /** Runs the scan with each tool's exit scripted by its argv's first words. */
-const scan = (script: readonly Scripted[], range: ScanRange = fullRange(), p?: ScanBundlePayload) => {
+const scan = (
+  script: readonly Scripted[],
+  range: ScanRange = fullRange(),
+  p?: ScanBundlePayload,
+) => {
   const exec = fakeExec(script);
   return Effect.runPromise(
     runScanTools({ ctx, prepared: prepared(p), checkout: { dir: DIR, range }, files: FILES }).pipe(
@@ -159,7 +181,13 @@ describe("security-gate scanner invocations", () => {
   });
 
   it("[FD-GATE-095] runs OSV-Scanner offline on each changed lockfile with the snapshot as its local database", async () => {
-    const changed = ["pnpm-lock.yaml", "svc/Cargo.lock", "svc/osv-scanner.toml", "go.sum", "package.json"];
+    const changed = [
+      "pnpm-lock.yaml",
+      "svc/Cargo.lock",
+      "svc/osv-scanner.toml",
+      "go.sum",
+      "package.json",
+    ];
     const { exec } = await scan([], fullRange(changed));
     const osv = exec.ranArgv.find((r) => r.argv[0] === "osv-scanner")!;
     expect(osv.argv).toEqual([
@@ -182,7 +210,10 @@ describe("security-gate scanner invocations", () => {
   });
 
   it("[FD-GATE-095] runs every scanner as an argv with no shell", async () => {
-    const { exec } = await scan([], fullRange(["pnpm-lock.yaml", ".github/workflows/$(touch x).yml"]));
+    const { exec } = await scan(
+      [],
+      fullRange(["pnpm-lock.yaml", ".github/workflows/$(touch x).yml"]),
+    );
     expect(exec.ran).toEqual([]);
     expect(exec.ranArgv.find((r) => r.argv[0] === "zizmor")!.argv.at(-1)).toBe(
       ".github/workflows/$(touch x).yml",
@@ -251,7 +282,10 @@ describe("security-gate scan scope from a real checkout", () => {
     const range = await rangeOf(sha["code"]!);
     expect(range.scannable).toEqual(["src/a.ts"]);
     const { steps, ran, outcome } = await scan([], range);
-    expect(byId(steps)).toMatchObject({ zizmor: "nothing-in-scope", "osv-scanner": "nothing-in-scope" });
+    expect(byId(steps)).toMatchObject({
+      zizmor: "nothing-in-scope",
+      "osv-scanner": "nothing-in-scope",
+    });
     expect(steps.find((s) => s.id === "zizmor")!.invocation).toBeUndefined();
     expect(ran).toEqual(["gitleaks", "semgrep", "conftest"]);
     expect(outcome).toEqual(Outcome.success());
@@ -266,7 +300,13 @@ describe("security-gate scan scope from a real checkout", () => {
       zizmor: "nothing-in-scope",
       "osv-scanner": "nothing-in-scope",
     });
-    expect(steps.map((s) => s.exit)).toEqual([undefined, undefined, undefined, exited(0), exited(0)]);
+    expect(steps.map((s) => s.exit)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      exited(0),
+      exited(0),
+    ]);
     expect(ran).toEqual(["semgrep", "conftest"]);
   });
 });
@@ -296,14 +336,23 @@ describe("security-gate baseline checks", () => {
       const custom: ScanBundlePayload = {
         ...p,
         baselineChecks: [
-          { controlId: "CM-7", rule: "argv", tool: "node", argv: ["node", "-e", script, ...args], exitMap: { "0": "clean" } },
+          {
+            controlId: "CM-7",
+            rule: "argv",
+            tool: "node",
+            argv: ["node", "-e", script, ...args],
+            exitMap: { "0": "clean" },
+          },
         ],
       };
       const empty: ScanRange = { base: BASE, head: BASE, commits: [], changed: [], scannable: [] };
       const report = await Effect.runPromise(
-        runScanTools({ ctx, prepared: prepared(custom), checkout: { dir, range: empty }, files: FILES }).pipe(
-          Effect.provide(processGateExec),
-        ),
+        runScanTools({
+          ctx,
+          prepared: prepared(custom),
+          checkout: { dir, range: empty },
+          files: FILES,
+        }).pipe(Effect.provide(processGateExec)),
       );
       expect(JSON.parse(readFileSync(join(dir, "argv.json"), "utf8"))).toEqual(args);
       expect(existsSync(join(dir, "pwned"))).toBe(false);
@@ -365,7 +414,12 @@ describe("security-gate scan verdict", () => {
       Outcome.failure("scan-error: SC-28 exit 3"),
     );
     expect(
-      (await scan([{ match: "conftest", exit: exited(2) }, { match: "zizmor", exit: exited(14) }])).outcome,
+      (
+        await scan([
+          { match: "conftest", exit: exited(2) },
+          { match: "zizmor", exit: exited(14) },
+        ])
+      ).outcome,
     ).toEqual(Outcome.failure("scan-error: AC-6 exit 2"));
   });
 

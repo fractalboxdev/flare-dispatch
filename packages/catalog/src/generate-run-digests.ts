@@ -12,10 +12,13 @@ export const RUN_DIGESTS_PATH = fileURLToPath(new URL("./run-digests.json", impo
 /** Each catalogue run's name and run-definition digest, sorted by name, as the committed file holds them. */
 export const runDigestsText = async (): Promise<string> => {
   const entries = await Promise.all(
-    registry.map(async (run) => [run.spec.name, await runDefinitionDigest(run.definition)] as const),
+    registry.map(
+      async (run) => [run.spec.name, await runDefinitionDigest(run.definition)] as const,
+    ),
   );
   entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return `${JSON.stringify(Object.fromEntries(entries), null, 2)}\n`;
 };
 
-if (import.meta.url === `file://${process.argv[1]}`) writeFileSync(RUN_DIGESTS_PATH, await runDigestsText());
+if (import.meta.url === `file://${process.argv[1]}`)
+  writeFileSync(RUN_DIGESTS_PATH, await runDigestsText());

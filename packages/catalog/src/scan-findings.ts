@@ -187,7 +187,10 @@ const decode = <A>(
   return Exit.isSuccess(exit)
     ? Effect.succeed(exit.value)
     : Effect.fail(
-        new ScanReportUnreadable({ scanner, detail: `report does not match the ${scanner} schema` }),
+        new ScanReportUnreadable({
+          scanner,
+          detail: `report does not match the ${scanner} schema`,
+        }),
       );
 };
 
@@ -237,21 +240,19 @@ const osvFindings = (json: unknown, dir: string) =>
       (report.results ?? []).flatMap((result) => {
         const lockfile = checkoutPath(result.source.path, dir);
         return (result.packages ?? []).flatMap((p) =>
-          (p.vulnerabilities ?? []).map(
-            (v): Unfingerprinted => ({
+          (p.vulnerabilities ?? []).map((v): Unfingerprinted => ({
+            scanner: "osv-scanner",
+            ruleId: v.id,
+            path: lockfile,
+            startLine: 1,
+            level: "failure",
+            locator: fingerprintLocator({
               scanner: "osv-scanner",
-              ruleId: v.id,
-              path: lockfile,
-              startLine: 1,
-              level: "failure",
-              locator: fingerprintLocator({
-                scanner: "osv-scanner",
-                lockfile,
-                package: p.package.name,
-                version: p.package.version,
-              }),
+              lockfile,
+              package: p.package.name,
+              version: p.package.version,
             }),
-          ),
+          })),
         );
       }),
     ),
@@ -325,7 +326,8 @@ export const scanLog = (output: string): string =>
   redactLog(
     redactValues(output, matchedValues(output)).replace(
       MATCHED_MEMBER,
-      (_match, member: string, before: string, after: string) => `"${member}"${before}:${after}"REDACTED"`,
+      (_match, member: string, before: string, after: string) =>
+        `"${member}"${before}:${after}"REDACTED"`,
     ),
   );
 

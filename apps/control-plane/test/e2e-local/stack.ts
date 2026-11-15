@@ -19,6 +19,7 @@ import { decodeOverlay, type OverlayValues } from "@fractalboxdev/flare-dispatch
 import { renderTemplate, stripJsonc } from "@fractalboxdev/flare-dispatch-ops/render";
 import { Effect } from "effect";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "../workerd-bundle.ts";
 import {
   fetch as mfFetch,
   Miniflare,
@@ -118,6 +119,7 @@ const workerScript = () =>
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   }).then((out) => out.outputFiles[0]!.text));
@@ -256,7 +258,10 @@ export const startStack = async (options: StackOptions = {}): Promise<Stack> => 
     Object.entries(config.vars).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]),
   );
   const mf = new Miniflare({
-    modules: [{ type: "ESModule", path: "worker.js", contents: await workerScript() }],
+    modules: [
+      { type: "ESModule", path: "worker.js", contents: await workerScript() },
+      ...wasmModules(),
+    ],
     compatibilityDate: config.compatibility_date,
     host: "127.0.0.1",
     port: 0,

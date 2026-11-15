@@ -24,7 +24,9 @@ import { FlareDispatchLivenessMonitor } from "@fractalboxdev/flare-dispatch-ops/
 import {
   ExecutionEngine as MamekoExecutionEngine,
   ExecutorChannel as MamekoExecutorChannel,
+  PoolController as MamekoPoolController,
   type ClaimedLease,
+  type PoolControllerEnv,
 } from "@fractalboxdev/mameko-host-cloudflare";
 import type { ExecutorKind } from "@fractalboxdev/mameko-kernel";
 import { type ExecutionRecord, ObjectStorePresigner } from "@fractalboxdev/mameko-ports";
@@ -36,6 +38,7 @@ import { leaseCache } from "./cache.ts";
 import { leaseCacheAt } from "./cache-execution.ts";
 import { type ChannelSocket, cloudStatementOnFrame } from "./provenance.ts";
 import { imageDigestOf, invalidateLeaseNonce, leaseNonce, requestLeaseFields } from "./lease.ts";
+import { launchKeysOf, poolSettings } from "./pools.ts";
 import {
   channelConfig,
   deployment,
@@ -55,69 +58,59 @@ type EngineEnv = ControlPlaneEnv & {
 /** A lease's progress timeout, from `defineRun`'s default. */
 const PROGRESS_TIMEOUT_MS = 300_000;
 
-export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
-  /** The Worker's bindings as the isolate received them, which its services are built over once. */
-  private readonly bindings: ControlPlaneEnv;
-
-  constructor(ctx: DurableObjectState, env: ControlPlaneEnv) {
-    super(ctx, {
-      ...env,
-      MAMEKO_CHANNEL_CONFIG: channelConfig(profileOf(env)),
-    });
-    this.bindings = env;
-  }
-
+/**
+ * The FlareDispatch hooks of mameko's channel, which `ExecutorChannel` and `PoolController` share: the cloud-builder
+ * statement after an accepted result, the presigner, the cache namespaces, the lease fields and the nonce revoke.
+ */
+const channelHooks = (bindings: ControlPlaneEnv) => ({
   /**
-   * Each frame goes through mameko's channel first. An `exec.result` that the accept compare-and-set accepted from a
-   * cloud executor then gets its cloud-builder statement, signed with the provenance key and queued for the
-   * transparency log (FD-PROV-008, FD-PROV-009); the placement row, not the frame, decides whether it was accepted.
+   * An `exec.result` that the accept compare-and-set accepted from a cloud executor gets its cloud-builder statement,
+   * signed with the provenance key and queued for the transparency log (FD-PROV-008, FD-PROV-009); the placement row,
+   * not the frame, decides whether it was accepted.
    */
-  override async webSocketMessage(ws: unknown, message: string | ArrayBuffer): Promise<void> {
-    await super.webSocketMessage(ws, message);
-    await cloudStatementOnFrame(this.bindings, ws as ChannelSocket, message, Date.now());
-  }
+  afterFrame: (ws: unknown, message: string | ArrayBuffer) =>
+    cloudStatementOnFrame(bindings, ws as ChannelSocket, message, Date.now()),
 
   /**
    * Signs each `exec.presign` URL with the object-store presigner over the presign token, on the bucket's S3 endpoint
    * (MAMEKO-HOST-051, FD-CACHE-091). A deploy without the presign token, the account id or the bucket name signs none,
    * so mameko answers the request `refused`.
    */
-  protected override presign(
+  presign: (
     key: string,
     method: "GET" | "PUT",
     length: number | null,
     expiresAt: number,
-  ): Promise<{ readonly url: string; readonly expiresAt: number } | null> {
-    if (presignerConfigOf(this.bindings) === undefined) return Promise.resolve(null);
+  ): Promise<{ readonly url: string; readonly expiresAt: number } | null> => {
+    if (presignerConfigOf(bindings) === undefined) return Promise.resolve(null);
     return Effect.runPromise(
       ObjectStorePresigner.use((p) => p.presign(key, method, length, expiresAt)).pipe(
-        Effect.provide(presignerLayer(this.bindings)),
+        Effect.provide(presignerLayer(bindings)),
       ),
     );
-  }
+  },
 
   /**
-   * The profile's `cache_namespaces` binding for a claim (MAMEKO-LEASE-088): the namespaces of the execution's repository
-   * and run for the claiming executor's kind, computed from the execution and intake's record and never from the run
-   * inputs (FD-CACHE-016), and none for a `confidential-compute` repository or a sealed-sandbox run (FD-CACHE-008).
-   * mameko writes the answer onto the lease's `cache_namespaces` inside the claim.
+   * The profile's `cache_namespaces` binding for a claim (MAMEKO-LEASE-088): the namespaces of the execution's
+   * repository and run for the claiming executor's kind, computed from the execution and intake's record and never
+   * from the run inputs (FD-CACHE-016), and none for a `confidential-compute` repository or a sealed-sandbox run
+   * (FD-CACHE-008). mameko writes the answer onto the lease's `cache_namespaces` inside the claim.
    */
-  protected override cacheNamespaces(
+  cacheNamespaces: (
     execution: ExecutionRecord,
     executorKind: string,
-  ): Promise<{ readonly read: readonly string[]; readonly write: string | null } | null> {
-    const env = this.env;
-    return Effect.runPromise(
+  ): Promise<{ readonly read: readonly string[]; readonly write: string | null } | null> =>
+    Effect.runPromise(
       Effect.gen(function* () {
         const record = yield* (yield* IntakeStore).get(execution.executionId);
         if (record === null) return null;
-        const entry = Match.value(lookupRun(deployment(env), execution.run)).pipe(
+        const entry = Match.value(lookupRun(deployment(bindings), execution.run)).pipe(
           Match.tag("Available", ({ entry }) => entry),
           Match.orElse(() => null),
         );
         const fields = yield* Effect.promise(() =>
           leaseCacheAt(
-            env,
+            bindings,
             record,
             { epoch: 0, kind: executorKind as ExecutorKind },
             execution.deadlineAt ?? 0,
@@ -125,9 +118,8 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
           ),
         );
         return fields.cache_namespaces;
-      }).pipe(Effect.provide(d1IntakeStore(env.DB))),
-    );
-  }
+      }).pipe(Effect.provide(d1IntakeStore(bindings.DB))),
+    ),
 
   /**
    * The inputs and request context intake recorded for a won claim, the run registry's run and workflow versions
@@ -135,14 +127,13 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
    * input carries as its `deadlineAt` (FD-GATE-007). A payload that carries a write credential fails the grant
    * (FD-AGT-008). The nonce is 128 random bits bound to the execution and the placement's epoch (FD-PROV-010).
    */
-  protected override leaseFields(executionId: string): Promise<ClaimedLease> {
-    const env = this.env;
-    return Effect.runPromise(
+  leaseFields: (executionId: string): Promise<ClaimedLease> =>
+    Effect.runPromise(
       Effect.gen(function* () {
         const record = yield* (yield* IntakeStore).get(executionId);
         if (record === null) return yield* new ExecutionInputsMissing({ executionId });
         const { results } = yield* Effect.promise(() =>
-          env.DB.prepare(
+          bindings.DB.prepare(
             `select e.run, e.scope_id, e.deadline_at, p.epoch, x.kind from executions e
              left join placements p on p.execution_id = e.id
              left join executors x on x.executor_id = p.executor_id where e.id = ?`,
@@ -157,30 +148,128 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
           epoch: number;
           kind: string | null;
         };
-        const entry = Match.value(lookupRun(deployment(env), row.run)).pipe(
+        const entry = Match.value(lookupRun(deployment(bindings), row.run)).pipe(
           Match.tag("Available", ({ entry }) => entry),
           Match.orElse(() => null),
         );
-        return yield* guardLease(env, {
+        return yield* guardLease(bindings, {
           run: row.run,
           ...requestLeaseFields(entry, record, row),
-          image_digest: yield* imageDigestOf(entry, row.kind ?? "device", env.GATE_IMAGE_DIGEST),
+          image_digest: yield* imageDigestOf(
+            entry,
+            row.kind ?? "device",
+            bindings.GATE_IMAGE_DIGEST,
+          ),
           deadline_at: row.deadline_at,
           server_now: Date.now(),
           progress_timeout_ms: PROGRESS_TIMEOUT_MS,
           credentials: {},
           ...(yield* Effect.promise(() =>
-            leaseCache(env, record, row.deadline_at, entry?.sealedSandbox === true),
+            leaseCache(bindings, record, row.deadline_at, entry?.sealedSandbox === true),
           )),
-          nonce: yield* leaseNonce(env.DB, executionId, row.epoch, Date.now()),
+          nonce: yield* leaseNonce(bindings.DB, executionId, row.epoch, Date.now()),
         } satisfies ClaimedLease);
-      }).pipe(Effect.provide(d1IntakeStore(env.DB))),
-    );
-  }
+      }).pipe(Effect.provide(d1IntakeStore(bindings.DB))),
+    ),
 
   /** A reclaim through the channel invalidates the reclaimed epoch's nonce before it frees the placement (FD-PROV-011). */
+  revokeCredentials: (executionId: string, epoch: number): Promise<void> =>
+    Effect.runPromise(invalidateLeaseNonce(bindings.DB, executionId, epoch, Date.now())),
+});
+
+/** The channel of the device executors, with FlareDispatch's hooks. */
+export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
+  private readonly hooks: ReturnType<typeof channelHooks>;
+
+  constructor(ctx: DurableObjectState, env: ControlPlaneEnv) {
+    super(ctx, {
+      ...env,
+      MAMEKO_CHANNEL_CONFIG: channelConfig(profileOf(env)),
+    });
+    this.hooks = channelHooks(env);
+  }
+
+  override async webSocketMessage(ws: unknown, message: string | ArrayBuffer): Promise<void> {
+    await super.webSocketMessage(ws, message);
+    await this.hooks.afterFrame(ws, message);
+  }
+
+  protected override presign(
+    key: string,
+    method: "GET" | "PUT",
+    length: number | null,
+    expiresAt: number,
+  ): Promise<{ readonly url: string; readonly expiresAt: number } | null> {
+    return this.hooks.presign(key, method, length, expiresAt);
+  }
+
+  protected override cacheNamespaces(
+    execution: ExecutionRecord,
+    executorKind: string,
+  ): Promise<{ readonly read: readonly string[]; readonly write: string | null } | null> {
+    return this.hooks.cacheNamespaces(execution, executorKind);
+  }
+
+  protected override leaseFields(executionId: string): Promise<ClaimedLease> {
+    return this.hooks.leaseFields(executionId);
+  }
+
   protected override revokeCredentials(executionId: string, epoch: number): Promise<void> {
-    return Effect.runPromise(invalidateLeaseNonce(this.env.DB, executionId, epoch, Date.now()));
+    return this.hooks.revokeCredentials(executionId, epoch);
+  }
+}
+
+type PoolEnv = ChannelEnv & PoolControllerEnv;
+
+/**
+ * One per Container pool, addressed by the pool's name (MAMEKO-HOST-059): mameko's pool controller, with the same
+ * hooks as `ExecutorChannel` and the settings `poolSettings` derives from the profile. Without a launch signing key it
+ * is given no pool, so it claims nothing and starts no Container.
+ */
+export class PoolController extends MamekoPoolController<PoolEnv> {
+  private readonly hooks: ReturnType<typeof channelHooks>;
+
+  constructor(ctx: DurableObjectState, env: ControlPlaneEnv) {
+    const profile = profileOf(env);
+    const keys = launchKeysOf(env);
+    const settings = poolSettings(env, profile);
+    super(ctx, {
+      ...env,
+      MAMEKO_CHANNEL_CONFIG: channelConfig(profile),
+      MAMEKO_POOL_CONFIG: keys === null ? { ...settings, pools: {} } : settings,
+      MAMEKO_LAUNCH_SIGNING_KEY: keys?.signing ?? ({} as PoolEnv["MAMEKO_LAUNCH_SIGNING_KEY"]),
+      ...(keys === null ? {} : { MAMEKO_LAUNCH_KEY: keys.verify }),
+    } as PoolEnv);
+    this.hooks = channelHooks(env);
+  }
+
+  override async webSocketMessage(ws: unknown, message: string | ArrayBuffer): Promise<void> {
+    await super.webSocketMessage(ws, message);
+    await this.hooks.afterFrame(ws, message);
+  }
+
+  protected override presign(
+    key: string,
+    method: "GET" | "PUT",
+    length: number | null,
+    expiresAt: number,
+  ): Promise<{ readonly url: string; readonly expiresAt: number } | null> {
+    return this.hooks.presign(key, method, length, expiresAt);
+  }
+
+  protected override cacheNamespaces(
+    execution: ExecutionRecord,
+    executorKind: string,
+  ): Promise<{ readonly read: readonly string[]; readonly write: string | null } | null> {
+    return this.hooks.cacheNamespaces(execution, executorKind);
+  }
+
+  protected override leaseFields(executionId: string): Promise<ClaimedLease> {
+    return this.hooks.leaseFields(executionId);
+  }
+
+  protected override revokeCredentials(executionId: string, epoch: number): Promise<void> {
+    return this.hooks.revokeCredentials(executionId, epoch);
   }
 }
 

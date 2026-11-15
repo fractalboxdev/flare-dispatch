@@ -89,6 +89,11 @@ export class GateExec extends Context.Service<
       path: string,
       bytes: Uint8Array,
     ) => Effect.Effect<void, WorkspaceWriteFailed>;
+    /**
+     * Ends the job's setup egress phase: every later command runs under the run's `agent` grants and reaches no `setup`
+     * grant again (MAMEKO-ISO-025). It returns once the switch holds.
+     */
+    readonly endSetup: Effect.Effect<void>;
   }
 >()("@fractalboxdev/flare-dispatch-catalog/GateExec") {}
 
@@ -211,6 +216,8 @@ const workspace: Effect.Effect<string, never, Scope.Scope> = Effect.acquireRelea
 /** `GateExec` over this host's processes and file system. */
 export const processGateExec: Layer.Layer<GateExec> = Layer.succeed(GateExec, {
   workspace,
+  // A device's job runtime serves no grant in either phase, so the setup phase ends at once (MAMEKO-EXEC-054).
+  endSetup: Effect.void,
   run: runCommand,
   runArgv,
   readFile: (path) =>

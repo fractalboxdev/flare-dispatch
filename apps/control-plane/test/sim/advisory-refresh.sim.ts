@@ -85,7 +85,10 @@ export const simulateAdvisoryRefresh = async (seed: number): Promise<AdvisoryRef
                   ? {
                       bytes,
                       lastModified,
-                      next: { bytes: archive(`${e} v${version.get(e)} later`), lastModified: lastModified + 1000 },
+                      next: {
+                        bytes: archive(`${e} v${version.get(e)} later`),
+                        lastModified: lastModified + 1000,
+                      },
                     }
                   : { bytes, lastModified };
         return [e, p];
@@ -102,8 +105,14 @@ export const simulateAdvisoryRefresh = async (seed: number): Promise<AdvisoryRef
       sha256: nodeSha256,
       bucket: {
         head: bucket.bucket.head,
-        put: (key: string, body: ReadableStream<Uint8Array>, expected: { length: number; sha256: string }) =>
-          refusedKeys.has(key) ? Promise.reject(new Error("R2 answered 500")) : bucket.bucket.put(key, body, expected),
+        put: (
+          key: string,
+          body: ReadableStream<Uint8Array>,
+          expected: { length: number; sha256: string },
+        ) =>
+          refusedKeys.has(key)
+            ? Promise.reject(new Error("R2 answered 500"))
+            : bucket.bucket.put(key, body, expected),
       },
     };
 
@@ -111,7 +120,9 @@ export const simulateAdvisoryRefresh = async (seed: number): Promise<AdvisoryRef
     for (const e of ECOSYSTEMS) before.set(e, await readSnapshotRecord(DB, e));
     const exit = await Effect.runPromiseExit(advisoryRefreshStep(env, now, () => ports).effect);
     const failed = Exit.isFailure(exit)
-      ? ((Cause.squash(exit.cause) as { failed?: { ecosystem: string }[] }).failed ?? []).map((f) => f.ecosystem)
+      ? ((Cause.squash(exit.cause) as { failed?: { ecosystem: string }[] }).failed ?? []).map(
+          (f) => f.ecosystem,
+        )
       : [];
     const refreshed = Exit.isSuccess(exit)
       ? (exit.value as { refreshed: string[] }).refreshed
@@ -130,7 +141,10 @@ export const simulateAdvisoryRefresh = async (seed: number): Promise<AdvisoryRef
             message: `seed ${seed} at ${now}: ${e}'s failed refresh (${faults.get(e)}) changed its snapshot from ${JSON.stringify(before.get(e))} to ${JSON.stringify(after)}`,
           });
         if (faults.get(e) === "none")
-          violations.push({ id: "FD-OPS-102", message: `seed ${seed} at ${now}: ${e} failed with no fault` });
+          violations.push({
+            id: "FD-OPS-102",
+            message: `seed ${seed} at ${now}: ${e} failed with no fault`,
+          });
       }
       if (refreshed.includes(e)) {
         count("refreshed");
@@ -142,12 +156,18 @@ export const simulateAdvisoryRefresh = async (seed: number): Promise<AdvisoryRef
           });
         const days = stored.get(e) ?? [];
         if (days.includes(utcDayOf(now)))
-          violations.push({ id: "FD-OPS-102", message: `seed ${seed} at ${now}: ${e} stored twice in one UTC day` });
+          violations.push({
+            id: "FD-OPS-102",
+            message: `seed ${seed} at ${now}: ${e} stored twice in one UTC day`,
+          });
         stored.set(e, [...days, utcDayOf(now)]);
       }
       if (after !== null) {
         const object = bucket.objects.get(`cas/${after.digest}`);
-        if (object === undefined || createHash("sha256").update(object).digest("hex") !== after.digest)
+        if (
+          object === undefined ||
+          createHash("sha256").update(object).digest("hex") !== after.digest
+        )
           violations.push({
             id: "FD-OPS-102",
             message: `seed ${seed} at ${now}: ${e}'s snapshot names cas/${after.digest}, which the bucket does not hold`,

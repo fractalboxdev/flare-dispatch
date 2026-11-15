@@ -87,7 +87,9 @@ describe("the security gate recipes in the catalogue", () => {
     expect(entryOf("security-gate").defaultClass).toBe("required");
     expect(entryOf("security-rescan").defaultClass).toBe("batch");
     expect(RUNS.map((r) => entryOf(r).spec.limits.maxDurationSec)).toEqual([1800, 1800]);
-    expect(Schema.decodeUnknownSync(GateManifest)({ securityGate: {} })).toEqual({ securityGate: {} });
+    expect(Schema.decodeUnknownSync(GateManifest)({ securityGate: {} })).toEqual({
+      securityGate: {},
+    });
   });
 
   it("[FD-GATE-083] serves both recipes on the cloud executor that supplies the scan Layers, and on no device", () => {
@@ -133,7 +135,13 @@ describe("the security gate recipes in the catalogue", () => {
       "_tag",
       "baseSha",
     ]);
-    expect(fieldNames(SecurityRescanInput.ast)).toEqual(["repo", "sha", "ref", "scope", "deadlineAt"]);
+    expect(fieldNames(SecurityRescanInput.ast)).toEqual([
+      "repo",
+      "sha",
+      "ref",
+      "scope",
+      "deadlineAt",
+    ]);
     for (const input of [SecurityGateInput, SecurityRescanInput]) {
       expect(commandInputsOf(input.ast)).toEqual([]);
       // The gate context's skip facts are what every other gate reads; neither scan input carries them.
@@ -152,13 +160,16 @@ describe("the security gate recipes in the catalogue", () => {
     expect(Object.keys(decoded).sort()).toEqual(["ref", "repo", "sha"]);
   });
 
-  it("[FD-GATE-110] declares no grant in either egress phase and seals the job sandbox of both recipes", () => {
+  it("[FD-GATE-110] declares the git host as the only setup grant and none for the agent phase, and seals the job sandbox of both recipes", () => {
     for (const name of RUNS) {
       const entry = entryOf(name);
-      expect(entry.spec.grants).toEqual({ setup: [], agent: [] });
+      expect(entry.spec.grants).toEqual({ setup: ["git-remote"], agent: [] });
       expect(entry.sealedSandbox).toBe(true);
       expect(entry.appCapabilities).toEqual([]);
-      expect(registry.find((r) => r.spec.name === name)!.spec.grants).toEqual({ setup: [], agent: [] });
+      expect(registry.find((r) => r.spec.name === name)!.spec.grants).toEqual({
+        setup: ["git-remote"],
+        agent: [],
+      });
     }
     // The manifest entry carries no grants field either, unlike `workerDeploy`.
     expect(
@@ -276,10 +287,16 @@ describe("the security gate request decoders", () => {
 
   it("[FD-GATE-111] starts security-rescan from a dispatch alone", () => {
     const decode = securityRescanDecoder();
-    const inputs = { repo: "https://github.com/o/r.git", sha: "a".repeat(40), ref: "refs/heads/main" };
+    const inputs = {
+      repo: "https://github.com/o/r.git",
+      sha: "a".repeat(40),
+      ref: "refs/heads/main",
+    };
     expect(Option.getOrThrow(decode(dispatch("security-rescan", inputs)))).toEqual(inputs);
     expect(
-      Option.getOrThrow(decode({ ...dispatch("security-rescan", inputs), _tag: "mcp" } as DispatchEvent)),
+      Option.getOrThrow(
+        decode({ ...dispatch("security-rescan", inputs), _tag: "mcp" } as DispatchEvent),
+      ),
     ).toEqual(inputs);
     expect(Option.isNone(decode(dispatch("security-gate", inputs)))).toBe(true);
     expect(Option.isNone(decode(pullRequest("opened", { draft: false, author: "octocat" })))).toBe(
@@ -362,8 +379,14 @@ describe("the security gate run bodies over a real git remote", () => {
     const payload = {
       ...validPayload(),
       scanners: {
-        gitleaks: { versions: "^8.18.0", exitMap: { "0": "clean", "42": "finding", "1": "tool-error" } },
-        zizmor: { versions: ">=1.5.0 <2.0.0", exitMap: { "0": "clean", "11": "finding", "1": "tool-error" } },
+        gitleaks: {
+          versions: "^8.18.0",
+          exitMap: { "0": "clean", "42": "finding", "1": "tool-error" },
+        },
+        zizmor: {
+          versions: ">=1.5.0 <2.0.0",
+          exitMap: { "0": "clean", "11": "finding", "1": "tool-error" },
+        },
         "osv-scanner": {
           versions: "~1.9.0",
           exitMap: { "0": "clean", "1": "finding", "127": "tool-error", "128": "nothing-in-scope" },
@@ -392,19 +415,27 @@ describe("the security gate run bodies over a real git remote", () => {
   }
 
   /** Runs `body` with git as the recipe runs it and the scanners answering from `world.exits`. */
-  const run = async <A>(
-    body: Effect.Effect<Outcome, never, A>,
-    world: World = {},
-  ) => {
+  const run = async <A>(body: Effect.Effect<Outcome, never, A>, world: World = {}) => {
     const ran: ArgvOptions[] = [];
+    /** Every shell command's first word, every argv command's program and each `endSetup`, in order. */
+    const events: string[] = [];
     const exec = Layer.effect(
       GateExec,
       Effect.gen(function* () {
         const real = yield* GateExec;
         return {
           ...real,
+          run: (options) =>
+            Effect.suspend(() => {
+              events.push(options.command.trim().split(/\s+/)[0]!);
+              return real.run(options);
+            }),
+          endSetup: Effect.sync(() => void events.push("endSetup")).pipe(
+            Effect.andThen(real.endSetup),
+          ),
           runArgv: (options: ArgvOptions) =>
             Effect.sync(() => {
+              events.push(options.argv[0]!);
               ran.push(options);
               world.onArgv?.(options);
               return {
@@ -441,22 +472,43 @@ describe("the security gate run bodies over a real git remote", () => {
     const summary = intents.emitted.find((i) => i.kind === "check.summary")?.payload as
       | { name: string; head_sha: string; title: string; markdown: string }
       | undefined;
-    return { outcome, ran, summary, tools: ran.map((r) => r.argv[0]) };
+    return { outcome, ran, events, summary, tools: ran.map((r) => r.argv[0]) };
   };
 
-  const gate = (head: string, base: SecurityGateInput["base"] = { _tag: "TargetBranch", branch: "main" }) =>
-    runSecurityGate({ repo: origin, sha: head, ref: "refs/pull/7/head", base });
+  const gate = (
+    head: string,
+    base: SecurityGateInput["base"] = { _tag: "TargetBranch", branch: "main" },
+  ) => runSecurityGate({ repo: origin, sha: head, ref: "refs/pull/7/head", base });
   const rescan = (head: string, ref = "refs/heads/feature") =>
     runSecurityRescan({ repo: origin, sha: head, ref });
   const logOpts = (ran: readonly ArgvOptions[]) =>
     ran.find((r) => r.argv[0] === "gitleaks")?.argv.find((a) => a.startsWith("--log-opts="));
 
   it("[FD-GATE-085] scans a draft pull request from dependabot[bot], running every scanner", async () => {
-    const event = pullRequest("opened", { draft: true, author: "dependabot[bot]" }, origin, sha["feature"]);
+    const event = pullRequest(
+      "opened",
+      { draft: true, author: "dependabot[bot]" },
+      origin,
+      sha["feature"],
+    );
     const input = Option.getOrThrow(securityGateDecoder()(event));
     const { outcome, tools } = await run(runSecurityGate(input));
     expect(tools).toEqual(["gitleaks", "osv-scanner", "semgrep"]);
     expect(outcome).toEqual(Outcome.success());
+  });
+
+  it("[FD-GATE-110] ends the setup egress phase once, after the checkout's last git command and before the first scanner, in both recipes", async () => {
+    for (const body of [gate(sha["feature"]!), rescan(sha["feature"]!)]) {
+      const { events, outcome } = await run(body);
+      expect(outcome).toEqual(Outcome.success());
+      expect(events.filter((e) => e === "endSetup")).toHaveLength(1);
+      expect(events).toContain("git");
+      const ended = events.indexOf("endSetup");
+      expect(events.lastIndexOf("git")).toBeLessThan(ended);
+      const scanners = events.filter((e) => ["gitleaks", "osv-scanner", "semgrep"].includes(e));
+      expect(scanners.length).toBeGreaterThan(0);
+      for (const scanner of scanners) expect(events.indexOf(scanner)).toBeGreaterThan(ended);
+    }
   });
 
   it("[FD-GATE-086] concludes success or failure on every path, never skipped", async () => {
@@ -476,7 +528,11 @@ describe("the security gate run bodies over a real git remote", () => {
       await run(rescan(sha["mainHead"]!, "refs/heads/main")),
       await run(rescan(sha["feature"]!), { pin: null }),
       await run(
-        runSecurityRescan({ repo: join(root, "absent"), sha: sha["feature"]!, ref: "refs/heads/x" }),
+        runSecurityRescan({
+          repo: join(root, "absent"),
+          sha: sha["feature"]!,
+          ref: "refs/heads/x",
+        }),
       ),
     ].map((r) => r.outcome);
     expect(outcomes.map((o) => o._tag)).toEqual([
@@ -517,7 +573,9 @@ describe("the security gate run bodies over a real git remote", () => {
     const md = summary!.markdown;
     expect(summary!.title).toBe("security-gate: failure: scan: SC-28");
     expect(md).toContain(`Version \`${validPayload().version}\`, digest \`sha256:${PIN.digest}\``);
-    expect(md).toContain(`| npm | \`sha256:${"e".repeat(64)}\` | ${new Date(fresh).toUTCString()} |`);
+    expect(md).toContain(
+      `| npm | \`sha256:${"e".repeat(64)}\` | ${new Date(fresh).toUTCString()} |`,
+    );
     for (const [scanner, version] of Object.entries(IMAGE_VERSIONS))
       expect(md).toContain(`| ${scanner} | \`${version}\` |`);
     expect(md).toContain("| gitleaks | clean |");
@@ -656,7 +714,11 @@ describe("the scan's report for the verdict record", () => {
       exit: undefined,
       findings: StepFindings.Read({ findings: Array.from({ length: n }, (_, i) => found(i)) }),
     });
-    const many = scanReport({ outcome: Outcome.failure("scan: gitleaks"), prepared: undefined, steps: [step(250)] });
+    const many = scanReport({
+      outcome: Outcome.failure("scan: gitleaks"),
+      prepared: undefined,
+      steps: [step(250)],
+    });
     expect(many.findings).toHaveLength(REPORTED_FINDINGS_MAX);
     expect(many.findings?.[0]).toEqual({
       ruleId: "generic-api-key",
@@ -667,7 +729,11 @@ describe("the scan's report for the verdict record", () => {
       level: "failure",
     });
     expect(many.findingsTruncated).toBe(true);
-    const exactly = scanReport({ outcome: Outcome.failure("scan: gitleaks"), prepared: undefined, steps: [step(200)] });
+    const exactly = scanReport({
+      outcome: Outcome.failure("scan: gitleaks"),
+      prepared: undefined,
+      steps: [step(200)],
+    });
     expect(exactly.findings).toHaveLength(200);
     expect(exactly.findingsTruncated).toBe(false);
     // The report decodes as the control plane reads it.

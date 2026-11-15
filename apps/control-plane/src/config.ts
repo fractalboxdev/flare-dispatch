@@ -79,6 +79,18 @@ export interface ControlPlaneEnv extends CacheEnv {
     idFromName(name: string): unknown;
     get(id: unknown): QuotaObject;
   };
+  /** One `PoolController` object per Container pool, by `idFromName(<pool name>)` (MAMEKO-HOST-059). */
+  readonly POOL_CONTROLLER: {
+    idFromName(name: string): unknown;
+    get(id: unknown): { wake(pool?: string): Promise<void> };
+  };
+  /**
+   * The ES256 private JWK (a Worker secret) that signs each Container's launch credential; unset, no Container pool
+   * claims or launches (MAMEKO-HOST-052).
+   */
+  readonly LAUNCH_SIGNING_KEY?: string;
+  /** The Cloudflare API token (a Worker secret) the `cf-api` grant attaches to a job's API request (FD-GATE-066). */
+  readonly DEPLOY_API_TOKEN?: string;
   /** `alerts.sink`; without it every alarm delivery fails and the alarm stays active. */
   readonly ALERT_SINK?: string;
   /** The rendered `{{spend}}`: the overlay's spend values in USD, each it leaves out at its default (FD-PROF-054). */

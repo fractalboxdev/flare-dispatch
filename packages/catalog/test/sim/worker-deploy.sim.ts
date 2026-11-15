@@ -124,6 +124,7 @@ export const runScenario = async (seed: number): Promise<Observation> => {
     let workspaces = 0;
     const exec = Layer.succeed(GateExec, {
       workspace: Effect.sync(() => `/ws/${epoch}/${++workspaces}`),
+      endSetup: Effect.void,
       run: (options) =>
         Effect.gen(function* () {
           const deploy = options.command === DEPLOY;

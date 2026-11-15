@@ -25,6 +25,7 @@ import {
   type ExecutionPayload,
 } from "@fractalboxdev/mameko-coordinator";
 import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
+import { wakePools } from "./pools.ts";
 import { d1ExecutionStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import type { ActuatorRateLimit, Actuators } from "@fractalboxdev/mameko-ports";
 import { Cause, Effect, Exit, Layer, Schema } from "effect";
@@ -142,8 +143,17 @@ export const startSweeps = (env: ControlPlaneEnv, now: number): readonly TickSte
         catalogue: profile.classes,
         deferredClasses,
         start,
+        // The sweep wakes the device executors' standing claims and the controllers of the pools serving the class.
         wake: (placement) =>
-          Effect.promise(() => wakeStandingClaims(env.DB, env.CHANNEL, placement)),
+          Effect.promise(() => wakeStandingClaims(env.DB, env.CHANNEL, placement)).pipe(
+            Effect.andThen(
+              Effect.tryPromise(() => wakePools(env, profile, placement)).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("pool wake failed in the admission sweep", { cause }),
+                ),
+              ),
+            ),
+          ),
       }).pipe(Effect.provide(store)),
     },
   ];

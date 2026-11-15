@@ -7,10 +7,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { decodeOverlay } from "@fractalboxdev/flare-dispatch-ops/overlay";
-import {
-  renderTemplate,
-  stripJsonc,
-} from "@fractalboxdev/flare-dispatch-ops/render";
+import { renderTemplate, stripJsonc } from "@fractalboxdev/flare-dispatch-ops/render";
 import { deviceSlotDefaults } from "@fractalboxdev/flare-dispatch-profile";
 import {
   CONNECT_HEADERS,
@@ -30,10 +27,7 @@ import { Effect } from "effect";
 import { build } from "esbuild";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  profileOf,
-  type ControlPlaneEnv,
-} from "../../../apps/control-plane/src/config.ts";
+import { profileOf, type ControlPlaneEnv } from "../../../apps/control-plane/src/config.ts";
 import {
   AUD,
   newDevice,
@@ -78,11 +72,8 @@ const renderedPlaneId = (team: AccessTeam, planeId: string): unknown => {
     ),
   );
   const template = readFileSync(join(APP, "wrangler.jsonc"), "utf8");
-  const rendered = Effect.runSync(
-    renderTemplate("control-plane", template, overlay),
-  );
-  return (JSON.parse(stripJsonc(rendered)) as { vars: Record<string, unknown> })
-    .vars["PLANE_ID"];
+  const rendered = Effect.runSync(renderTemplate("control-plane", template, overlay));
+  return (JSON.parse(stripJsonc(rendered)) as { vars: Record<string, unknown> }).vars["PLANE_ID"];
 };
 
 interface Plane {
@@ -134,10 +125,7 @@ beforeAll(async () => {
       },
     }),
   });
-  planes = [
-    deploy("development", "plane-north"),
-    deploy("production", "plane-south"),
-  ];
+  planes = [deploy("development", "plane-north"), deploy("production", "plane-south")];
   scratch = new Miniflare({
     modules: true,
     script: "export default { fetch() { return new Response(''); } }",
@@ -148,15 +136,11 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await Promise.all([
-    ...(planes ?? []).map((p) => p.mf.dispose()),
-    scratch?.dispose(),
-  ]);
+  await Promise.all([...(planes ?? []).map((p) => p.mf.dispose()), scratch?.dispose()]);
   await team?.close();
 });
 
-const dbOf = async (mf: Miniflare) =>
-  (await mf.getD1Database("DB")) as unknown as D1Like;
+const dbOf = async (mf: Miniflare) => (await mf.getD1Database("DB")) as unknown as D1Like;
 
 const accessHeaders = async (): Promise<Record<string, string>> => ({
   "cf-access-jwt-assertion": await team.jwt(OPERATOR),
@@ -257,9 +241,7 @@ const executorRow = async (db: D1Like, executorId: string) =>
 /** A host-cloudflare database at mameko's migrations, with no executor row: one of the scratch Worker's D1 bindings. */
 let references = 0;
 const referenceDb = async (): Promise<D1Like> => {
-  const db = (await scratch.getD1Database(
-    `REF${references++}`,
-  )) as unknown as D1Like;
+  const db = (await scratch.getD1Database(`REF${references++}`)) as unknown as D1Like;
   await runD1Migrations(db);
   return db;
 };
@@ -320,20 +302,12 @@ describe("the executor connect route", () => {
       }[] = [
         {
           name: "signed for the overlay's plane",
-          headers: await signedHeaders(
-            "verdict-device",
-            device.keys,
-            plane.planeId,
-          ),
+          headers: await signedHeaders("verdict-device", device.keys, plane.planeId),
           verdict: "Accepted",
         },
         {
           name: "signed for the other deploy's plane",
-          headers: await signedHeaders(
-            "verdict-device",
-            device.keys,
-            other.planeId,
-          ),
+          headers: await signedHeaders("verdict-device", device.keys, other.planeId),
           verdict: "signature",
         },
         {
@@ -348,20 +322,12 @@ describe("the executor connect route", () => {
         },
         {
           name: "signed by a key the registry does not hold",
-          headers: await signedHeaders(
-            "verdict-device",
-            stranger.keys,
-            plane.planeId,
-          ),
+          headers: await signedHeaders("verdict-device", stranger.keys, plane.planeId),
           verdict: "signature",
         },
         {
           name: "signed for an executor id with no row",
-          headers: await signedHeaders(
-            "never-enrolled",
-            device.keys,
-            plane.planeId,
-          ),
+          headers: await signedHeaders("never-enrolled", device.keys, plane.planeId),
           verdict: "unknown",
         },
         {
@@ -388,8 +354,7 @@ describe("the executor connect route", () => {
       ];
       for (const c of cases) {
         const verdict = await mamekoVerdict(db, c.headers, plane.planeId);
-        const expected =
-          verdict._tag === "Accepted" ? "Accepted" : verdict.reason;
+        const expected = verdict._tag === "Accepted" ? "Accepted" : verdict.reason;
         expect(expected, c.name).toBe(c.verdict);
         const answer = await workerAnswer(plane.mf, c.headers);
         if (verdict._tag === "Accepted")
@@ -422,11 +387,7 @@ describe("the executor connect route", () => {
       ["quarantined-device", quarantined, "quarantined"],
       ["revoked-device", revoked, "revoked"],
     ] as const) {
-      const headers = await signedHeaders(
-        executorId,
-        device.keys,
-        plane.planeId,
-      );
+      const headers = await signedHeaders(executorId, device.keys, plane.planeId);
       expect(await mamekoVerdict(db, headers, plane.planeId)).toMatchObject({
         reason,
       });
@@ -445,10 +406,7 @@ describe("device enrollment", () => {
       const plane = planes[index]!;
       const { identity } = await newDevice();
       // `runner:separated` comes only from a pool registration; registerDevice drops a device's claim to it.
-      const body = registration("parity-device", identity, [
-        "isolation:none",
-        "runner:separated",
-      ]);
+      const body = registration("parity-device", identity, ["isolation:none", "runner:separated"]);
       const r = await register(plane.mf, body);
       expect(r.status).toBe(201);
       const reference = await referenceDb();
@@ -467,9 +425,7 @@ describe("device enrollment", () => {
       const expected = await executorRow(reference, "parity-device");
       expect(expected).not.toBeNull();
       expect(written).toEqual(expected);
-      expect(JSON.parse(String(written!["labels_json"]))).toEqual([
-        "isolation:none",
-      ]);
+      expect(JSON.parse(String(written!["labels_json"]))).toEqual(["isolation:none"]);
       expect(written).toMatchObject({
         kind: "device",
         key_store: "software",
@@ -506,10 +462,7 @@ describe("device enrollment", () => {
         expect(answer.message).toBe(
           `registration refused: ${result._tag === "Refused" ? result.reason : ""}`,
         );
-        expect(
-          await executorRow(await dbOf(plane.mf), executorId),
-          executorId,
-        ).toBeNull();
+        expect(await executorRow(await dbOf(plane.mf), executorId), executorId).toBeNull();
         expect(await executorRow(reference, executorId), executorId).toBeNull();
       }
     });

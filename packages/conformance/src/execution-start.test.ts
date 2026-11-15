@@ -92,7 +92,9 @@ const engineOf = async (id: string) => {
 };
 
 const executionRow = async (id: string) =>
-  (await (await db())
+  (await (
+    await db()
+  )
     .prepare("select class, status, started_at, engine_started_at from executions where id = ?")
     .bind(id)
     .first<{
@@ -103,82 +105,80 @@ const executionRow = async (id: string) =>
     }>())!;
 
 describe("a deferred class's workflow start on the composed control plane", () => {
-  it(
-    "[FD-ARCH-019] the executor channel starts a batch execution's workflow in its DO-SQLite ExecutionEngine at the winning claim, before it grants the lease",
-    async () => {
-      const executorId = "conf-start-1";
-      const device = await newDevice();
-      const headers = {
-        "content-type": "application/json",
-        "cf-access-jwt-assertion": await team.jwt(OPERATOR),
-      };
-      const enrolled = await plane.dispatchFetch("http://x/v1/executors/register", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(registration(executorId, device.identity)),
-      });
-      expect(enrolled.status).toBe(201);
-      const sha = "d".repeat(40);
-      const admitted = await plane.dispatchFetch("http://x/v1/dispatch/check", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          repository: REPO,
+  it("[FD-ARCH-019] the executor channel starts a batch execution's workflow in its DO-SQLite ExecutionEngine at the winning claim, before it grants the lease", async () => {
+    const executorId = "conf-start-1";
+    const device = await newDevice();
+    const headers = {
+      "content-type": "application/json",
+      "cf-access-jwt-assertion": await team.jwt(OPERATOR),
+    };
+    const enrolled = await plane.dispatchFetch("http://x/v1/executors/register", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(registration(executorId, device.identity)),
+    });
+    expect(enrolled.status).toBe(201);
+    const sha = "d".repeat(40);
+    const admitted = await plane.dispatchFetch("http://x/v1/dispatch/check", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        repository: REPO,
+        sha,
+        inputs: {
+          repo: `https://github.com/${REPO}`,
           sha,
-          inputs: {
-            repo: `https://github.com/${REPO}`,
-            sha,
-            ref: "main",
-            steps: [{ label: "test", command: "pnpm test" }],
-          },
+          ref: "main",
+          steps: [{ label: "test", command: "pnpm test" }],
+        },
+      }),
+    });
+    expect(admitted.status).toBe(202);
+    const { execution_id: id } = (await admitted.json()) as { execution_id: string };
+    await (
+      await db()
+    )
+      .prepare("update executions set deadline_at = ? where id = ?")
+      .bind(Date.now() + 3_600_000, id)
+      .run();
+
+    // Admission leaves a batch execution's workflow unstarted.
+    expect(await executionRow(id)).toMatchObject({
+      class: "batch",
+      status: "pending",
+      engine_started_at: null,
+    });
+    expect(await engineOf(id)).toEqual({ calls: [], journaled: 0 });
+
+    const socket = await connect(plane, executorId, device.keys);
+    socket.send(hello(executorId));
+    await socket.next("session.welcome");
+    socket.send({ type: "exec.claim", id: "c1", free: { batch: 1 } });
+    const lease = (await socket.next("exec.lease")) as unknown as {
+      readonly execution_id: string;
+      readonly epoch: number;
+    };
+    expect(lease.execution_id).toBe(id);
+    await endStandingClaim(socket);
+
+    // The claim started the workflow in the execution's object, then granted the lease there.
+    const engine = await engineOf(id);
+    expect(engine.calls.map((c) => c.call)).toEqual(["start", "grantLease"]);
+    expect(engine.calls[0]!.detail).toMatchObject({
+      executionId: id,
+      className: "batch",
+      deadlineOutcome: "deferred",
+    });
+    expect(engine.calls[1]!.detail).toMatchObject({ epoch: lease.epoch, executorId });
+    expect(engine.journaled).toBe(1);
+    // The workflow on the object's journal takes the lease and moves the execution to `running` on D1.
+    await vi.waitFor(
+      async () =>
+        expect(await executionRow(id)).toMatchObject({
+          status: "running",
+          started_at: expect.any(Number),
         }),
-      });
-      expect(admitted.status).toBe(202);
-      const { execution_id: id } = (await admitted.json()) as { execution_id: string };
-      await (await db())
-        .prepare("update executions set deadline_at = ? where id = ?")
-        .bind(Date.now() + 3_600_000, id)
-        .run();
-
-      // Admission leaves a batch execution's workflow unstarted.
-      expect(await executionRow(id)).toMatchObject({
-        class: "batch",
-        status: "pending",
-        engine_started_at: null,
-      });
-      expect(await engineOf(id)).toEqual({ calls: [], journaled: 0 });
-
-      const socket = await connect(plane, executorId, device.keys);
-      socket.send(hello(executorId));
-      await socket.next("session.welcome");
-      socket.send({ type: "exec.claim", id: "c1", free: { batch: 1 } });
-      const lease = (await socket.next("exec.lease")) as unknown as {
-        readonly execution_id: string;
-        readonly epoch: number;
-      };
-      expect(lease.execution_id).toBe(id);
-      await endStandingClaim(socket);
-
-      // The claim started the workflow in the execution's object, then granted the lease there.
-      const engine = await engineOf(id);
-      expect(engine.calls.map((c) => c.call)).toEqual(["start", "grantLease"]);
-      expect(engine.calls[0]!.detail).toMatchObject({
-        executionId: id,
-        className: "batch",
-        deadlineOutcome: "deferred",
-      });
-      expect(engine.calls[1]!.detail).toMatchObject({ epoch: lease.epoch, executorId });
-      expect(engine.journaled).toBe(1);
-      // The workflow on the object's journal takes the lease and moves the execution to `running` on D1.
-      await vi.waitFor(
-        async () =>
-          expect(await executionRow(id)).toMatchObject({
-            status: "running",
-            started_at: expect.any(Number),
-          }),
-        { timeout: 10_000 },
-      );
-    },
-    60_000,
-  );
+      { timeout: 10_000 },
+    );
+  }, 60_000);
 });

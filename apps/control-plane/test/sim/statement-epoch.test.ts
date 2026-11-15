@@ -18,6 +18,7 @@ import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { ResultAcceptanceCheck } from "@fractalboxdev/mameko-ports";
 import { type Context, Effect } from "effect";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "../workerd-bundle.ts";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isolateServices } from "../../src/composition.ts";
@@ -62,11 +63,15 @@ beforeAll(async () => {
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   });
   mf = new Miniflare({
-    modules: [{ type: "ESModule", path: "worker.js", contents: bundle.outputFiles[0]!.text }],
+    modules: [
+      { type: "ESModule", path: "worker.js", contents: bundle.outputFiles[0]!.text },
+      ...wasmModules(),
+    ],
     compatibilityDate: "2026-05-01",
     d1Databases: { DB: "control-plane" },
     durableObjects: {
@@ -145,7 +150,9 @@ const enroll = async (executorId: string) => {
     body: JSON.stringify(registration(executorId, device.identity)),
   });
   expect(registered.status).toBeLessThan(300);
-  await (await database())
+  await (
+    await database()
+  )
     .prepare("update executors set attested_at = ?, code_hash = ? where executor_id = ?")
     .bind(Date.now() - 3_600_000, CODE_HASH, executorId)
     .run();
@@ -224,7 +231,9 @@ const submission = (lease: Lease, executorId: string) => ({
 
 const quarantined = async (executorId: string) =>
   (
-    await (await database())
+    await (
+      await database()
+    )
       .prepare("select quarantine from executors where executor_id = ?")
       .bind(executorId)
       .first<{ quarantine: number }>()
@@ -277,7 +286,9 @@ describe("a device statement across a reclaim", () => {
     const b = await enroll("mac-stale-b");
     const second = await claimLease(b.socket, className, id);
     expect(second.epoch).toBeGreaterThan(first.epoch);
-    const { results: nonces } = await (await database())
+    const { results: nonces } = await (
+      await database()
+    )
       .prepare(
         "select epoch, nonce, invalidated_at is not null as invalidated from lease_nonces where execution_id = ? order by epoch",
       )

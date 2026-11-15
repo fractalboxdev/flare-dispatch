@@ -1,7 +1,15 @@
 // The security gate's checkout against real git repositories: an origin with a target branch that moved after the
 // pull request branched, and a pull request whose commits edit suppression files and add suppression markers.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync, existsSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+  existsSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
@@ -64,13 +72,13 @@ beforeAll(() => {
   git(origin, "init", "-q", "-b", "main");
   put(".gitleaksignore", "base-fingerprint\n");
   put("nested/.gitleaksignore", "nested-base\n");
-  put("svc/osv-scanner.toml", "[[IgnoredVulns]]\nid = \"GHSA-base\"\n");
+  put("svc/osv-scanner.toml", '[[IgnoredVulns]]\nid = "GHSA-base"\n');
   put(".github/workflows/ci.yml", BASE_WORKFLOW);
   put("crlf.txt", "first\r\n");
   commit("base");
   git(origin, "checkout", "-q", "-b", "feature");
   put(".gitleaksignore", "base-fingerprint\nhead-fingerprint\n");
-  put("pkg/osv-scanner.toml", "[[IgnoredVulns]]\nid = \"GHSA-head\"\n");
+  put("pkg/osv-scanner.toml", '[[IgnoredVulns]]\nid = "GHSA-head"\n');
   commit("suppress");
   unlinkSync(join(origin, "svc/osv-scanner.toml"));
   put("notes.gitleaksignore", "not a suppression file\n");
@@ -84,7 +92,10 @@ beforeAll(() => {
   );
   put("crlf.txt", "first\r\nsecond # zizmor: ignore[x]\r\n");
   put("bom.yml", "\uFEFFkey: v # zizmor: ignore[z]\n");
-  put("latin1.txt", Uint8Array.from([0xe9, 0x20, ...new TextEncoder().encode("# zizmor: ignore[y]"), 0x0a]));
+  put(
+    "latin1.txt",
+    Uint8Array.from([0xe9, 0x20, ...new TextEncoder().encode("# zizmor: ignore[y]"), 0x0a]),
+  );
   commit("markers");
   git(origin, "checkout", "-q", "main");
   put("main-only.txt", "the target branch moved\n");
@@ -101,9 +112,9 @@ const ctx = () => ({ repo: origin, sha: commits["markers"]!, ref: "refs/pull/1/h
 /** Prepares the checkout, then runs `inspect` on it while its workspace still exists. */
 const prepared = <A>(base: ScanBase, inspect: (checkout: ScanCheckout) => A) =>
   Effect.runPromise(
-    Effect.scoped(
-      prepareScanCheckout(ctx(), base, SUPPRESSION).pipe(Effect.map(inspect)),
-    ).pipe(Effect.provide(processGateExec)),
+    Effect.scoped(prepareScanCheckout(ctx(), base, SUPPRESSION).pipe(Effect.map(inspect))).pipe(
+      Effect.provide(processGateExec),
+    ),
   );
 
 const pullRequest = ScanBase.TargetBranch({ branch: "main" });
@@ -119,7 +130,11 @@ describe("security-gate scan checkout", () => {
     }));
     expect(seen.range.base).toBe(commits["base"]);
     expect(seen.range.head).toBe(commits["markers"]);
-    expect(seen.range.commits).toEqual([commits["suppress"], commits["delete"], commits["markers"]]);
+    expect(seen.range.commits).toEqual([
+      commits["suppress"],
+      commits["delete"],
+      commits["markers"],
+    ]);
     expect(seen.revList).toEqual(seen.range.commits);
     expect(seen.present).toEqual(["commit", "commit", "commit"]);
     expect(seen.shallow).toBe("false");
@@ -183,9 +198,15 @@ describe("security-gate scan checkout", () => {
   });
 
   it("[FD-GATE-094] reads the head lines each hunk of a zero-context patch adds", () => {
-    const patch = ["@@ -3,0 +4,2 @@", "+a", "+b", "@@ -9 +11 @@", "-c", "+d", "@@ -20,2 +21,0 @@"].join(
-      "\n",
-    );
+    const patch = [
+      "@@ -3,0 +4,2 @@",
+      "+a",
+      "+b",
+      "@@ -9 +11 @@",
+      "-c",
+      "+d",
+      "@@ -20,2 +21,0 @@",
+    ].join("\n");
     expect(addedLineNumbers(patch)).toEqual([4, 5, 11]);
   });
 });

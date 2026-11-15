@@ -115,7 +115,11 @@ const controlPlane = async () => {
 const sha = (n: number) => n.toString(16).padStart(40, "c");
 
 const INPUTS: Readonly<Record<string, (s: string) => unknown>> = {
-  "security-rescan": (s) => ({ repo: `https://github.com/${REPO}.git`, sha: s, ref: "refs/heads/main" }),
+  "security-rescan": (s) => ({
+    repo: `https://github.com/${REPO}.git`,
+    sha: s,
+    ref: "refs/heads/main",
+  }),
   check: (s) => ({
     repo: `https://github.com/${REPO}.git`,
     sha: s,
@@ -155,7 +159,8 @@ const start = async (
       },
       body,
     });
-    if (delivered.status !== 202) throw new Error(`${run}: ${delivered.status} ${await delivered.text()}`);
+    if (delivered.status !== 202)
+      throw new Error(`${run}: ${delivered.status} ${await delivered.text()}`);
     const { executions } = (await delivered.json()) as { executions: string[] };
     expect(executions).toHaveLength(1);
     return executions[0]!;
@@ -172,7 +177,8 @@ const start = async (
       inputs: INPUTS[run]!(commit),
     }),
   });
-  if (admitted.status !== 202) throw new Error(`${run}: ${admitted.status} ${await admitted.text()}`);
+  if (admitted.status !== 202)
+    throw new Error(`${run}: ${admitted.status} ${await admitted.text()}`);
   return ((await admitted.json()) as { execution_id: string }).execution_id;
 };
 
@@ -249,7 +255,9 @@ describe("the lease of a security scan's job sandbox on the composed control pla
     }
     // A `check` lease on the same deploy reaches the compile cache's host with a token.
     const check = await leaseOf("check", ++n);
-    expect(JSON.stringify(check["upload_grant"])).toContain(`https://${ORIGIN_HOST}/v1/compile-cache/`);
+    expect(JSON.stringify(check["upload_grant"])).toContain(
+      `https://${ORIGIN_HOST}/v1/compile-cache/`,
+    );
     expect(JSON.stringify(check["upload_grant"])).toMatch(/cc3\./);
   }, 120_000);
 

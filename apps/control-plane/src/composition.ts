@@ -50,6 +50,7 @@ import {
 } from "./config.ts";
 import { repositoryConfidentiality } from "./dev-repository.ts";
 import { policyRulesOf } from "./policy.ts";
+import { wakePools } from "./pools.ts";
 import { resultAcceptanceLayer } from "./provenance-records.ts";
 import {
   gitData,
@@ -107,19 +108,30 @@ export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
 };
 
 /**
- * A queued admission wakes the standing claims of the class's device executors (MAMEKO-ARCH-037). The execution is
- * already admitted, so a wake that fails, such as a grant the channel refuses, is logged and the request still answers
- * with the execution it admitted.
+ * A queued admission wakes the standing claims of the class's device executors (MAMEKO-ARCH-037) and the controllers
+ * of the Container pools that serve the class (MAMEKO-HOST-054). The execution is already admitted, so a wake that
+ * fails, such as a grant the channel refuses, is logged and the request still answers with the execution it admitted.
  */
 const wake = (env: ControlPlaneEnv) => (className: string) =>
-  Effect.tryPromise(() =>
-    wakeStandingClaims(env.DB, env.CHANNEL, { className, eligibleKinds: ["device"] }),
-  ).pipe(
-    Effect.asVoid,
-    Effect.catchCause((cause) =>
-      Effect.logWarning("standing claim wake failed after admission", { className, cause }),
-    ),
-  );
+  Effect.all(
+    [
+      Effect.tryPromise(() =>
+        wakeStandingClaims(env.DB, env.CHANNEL, { className, eligibleKinds: ["device"] }),
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("standing claim wake failed after admission", { className, cause }),
+        ),
+      ),
+      Effect.tryPromise(() =>
+        wakePools(env, profileOf(env), { className, eligibleKinds: ["cloudflare"] }),
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("pool wake failed after admission", { className, cause }),
+        ),
+      ),
+    ],
+    { concurrency: "unbounded" },
+  ).pipe(Effect.asVoid);
 
 /**
  * The `ExecutionEngine` start of an admitted execution whose class does not defer its workflow (MAMEKO-ADM-029). A

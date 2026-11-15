@@ -16,6 +16,7 @@ import {
 import { makeOperability, repositoryRoot, V2_WORKERS } from "@fractalboxdev/flare-dispatch-ops/cli";
 import { Effect, Layer } from "effect";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "../workerd-bundle.ts";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -80,7 +81,7 @@ const workers: Miniflare[] = [];
 /** The deployed Worker, run with the deployed vars and the webhook secret the account holds. */
 const deployedWorker = async (vars: Record<string, unknown>) => {
   const mf = new Miniflare({
-    modules: [{ type: "ESModule", path: "worker.js", contents: script }],
+    modules: [{ type: "ESModule", path: "worker.js", contents: script }, ...wasmModules()],
     compatibilityDate: "2026-05-01",
     d1Databases: { DB: "control-plane" },
     durableObjects: {
@@ -123,6 +124,7 @@ beforeAll(async () => {
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   });

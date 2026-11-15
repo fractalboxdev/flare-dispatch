@@ -12,6 +12,7 @@
     "test:e2e-local-device": "vitest run --config vitest.e2e-device.config.ts"
   },
   "dependencies": {
+    "@cloudflare/containers": "0.3.7",
     "@fractalboxdev/flare-dispatch-agentic": "workspace:*",
     "@fractalboxdev/flare-dispatch-api": "workspace:*",
     "@fractalboxdev/flare-dispatch-cache": "workspace:*",
@@ -21,6 +22,7 @@
     "@fractalboxdev/flare-dispatch-ops": "workspace:*",
     "@fractalboxdev/flare-dispatch-profile": "workspace:*",
     "@fractalboxdev/mameko-coordinator": "workspace:*",
+    "@fractalboxdev/mameko-egress": "workspace:*",
     "@fractalboxdev/mameko-host-cloudflare": "workspace:*",
     "@fractalboxdev/mameko-kernel": "workspace:*",
     "@fractalboxdev/mameko-ports": "workspace:*",

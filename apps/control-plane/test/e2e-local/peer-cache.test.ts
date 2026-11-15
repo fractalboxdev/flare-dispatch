@@ -6,14 +6,7 @@
 // entry's bytes and another's manifest on that disk, so the first device serves them as they are.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,7 +51,9 @@ const committed = async (k: string, body: string): Promise<L2Entry> => {
       execution_id: "01JDZ8Q6V3M2K9T4WXYZ5ABCDE",
       epoch: 1,
     },
-    objects: [{ path, size: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") }],
+    objects: [
+      { path, size: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") },
+    ],
     created_at: 1_700_000_000_000,
   };
   const manifest: Manifest = {
@@ -137,14 +132,20 @@ const startDevice = async (
   const child = spawn(
     process.execPath,
     ["--experimental-strip-types", "--no-warnings", EXTENSION_MAIN, `plane-${name}`, l1],
-    { stdio: ["ignore", "inherit", "pipe", theirs], env: { ...process.env, FD_PEER_CACHE: setting } },
+    {
+      stdio: ["ignore", "inherit", "pipe", theirs],
+      env: { ...process.env, FD_PEER_CACHE: setting },
+    },
   );
   children.push(child);
   const stderr = lines(child.stderr!);
   const listening = /peer cache on 127\.0\.0\.1:(\d+)$/.exec(await stderr());
   expect(listening).not.toBeNull();
   const next = lines(ours);
-  expect(JSON.parse(await next())).toMatchObject({ type: "extension.hello", plane_id: `plane-${name}` });
+  expect(JSON.parse(await next())).toMatchObject({
+    type: "extension.hello",
+    plane_id: `plane-${name}`,
+  });
   return {
     l1,
     port: Number(listening![1]),
