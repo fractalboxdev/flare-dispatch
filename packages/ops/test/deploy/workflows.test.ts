@@ -501,6 +501,8 @@ describe("every deploy path renders through the one renderer", () => {
         "secrets.FD_OPERATOR_OVERLAY": OVERLAY_TEXT,
         "secrets.CLOUDFLARE_API_TOKEN": "cf-token",
         "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
+        "secrets.FD_ACCESS_CLIENT_ID": "fd-deploy.access",
+        "secrets.FD_ACCESS_CLIENT_SECRET": "service-token-secret",
         "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
       },
       (step) => void played.push(step.uses!),
@@ -848,6 +850,8 @@ describe("the deploy workflow over GitHub's rules", () => {
     "secrets.FD_OPERATOR_OVERLAY": overlay,
     "secrets.CLOUDFLARE_API_TOKEN": "cf-token",
     "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
+    "secrets.FD_ACCESS_CLIENT_ID": "fd-deploy.access",
+    "secrets.FD_ACCESS_CLIENT_SECRET": "service-token-secret",
     "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
   });
 
@@ -944,6 +948,8 @@ describe("the deploy workflow over GitHub's rules", () => {
         "secrets.FD_OPERATOR_OVERLAY": OVERLAY_TEXT,
         "secrets.CLOUDFLARE_API_TOKEN": "cf-token",
         "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
+        "secrets.FD_ACCESS_CLIENT_ID": "fd-deploy.access",
+        "secrets.FD_ACCESS_CLIENT_SECRET": "service-token-secret",
         "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
       },
       () => {},
@@ -973,6 +979,8 @@ describe("the deploy workflow over GitHub's rules", () => {
         "secrets.FD_OPERATOR_OVERLAY": PLACEHOLDER_OVERLAY,
         "secrets.CLOUDFLARE_API_TOKEN": "cf-token",
         "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
+        "secrets.FD_ACCESS_CLIENT_ID": "fd-deploy.access",
+        "secrets.FD_ACCESS_CLIENT_SECRET": "service-token-secret",
         "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
       },
       () => {},
@@ -1028,6 +1036,8 @@ describe("the deploy workflow's AWS credentials", () => {
     "secrets.FD_OPERATOR_OVERLAY": OVERLAY_TEXT,
     "secrets.CLOUDFLARE_API_TOKEN": "cf-token",
     "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
+    "secrets.FD_ACCESS_CLIENT_ID": "fd-deploy.access",
+    "secrets.FD_ACCESS_CLIENT_SECRET": "service-token-secret",
     "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
   };
 

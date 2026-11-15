@@ -46,11 +46,11 @@ export const ARTIFACT_SCHEMA = [
 ] as const;
 
 /**
- * Moves an `artifacts` table of this store's shape, from a deploy that predates the `fd_artifacts` name, out of the way
- * of mameko's own `artifacts` table, which its migration 33 creates under that name. The table is renamed to
- * `fd_artifacts` with its rows, and its two indexes are dropped, since mameko creates an `artifacts_execution` index
- * too; `ARTIFACT_SCHEMA` recreates them under their `fd_` names. It runs before mameko's migrations. A database with no
- * such table, or with mameko's, is left as it is.
+ * Moves an `artifacts` table of this store's shape, from a deploy that predates the `fd_artifacts` name, to
+ * `fd_artifacts` with its rows, so the store reads the rows it wrote. Its two indexes are dropped, and
+ * `ARTIFACT_SCHEMA` recreates them under their `fd_` names. It runs before mameko's store migrations, whose adoption of
+ * an unprefixed store renames only the tables a recorded mameko migration created (MAMEKO-HOST-024), so this table
+ * stays the application's. A database with no such table, or with mameko's unprefixed `artifacts`, is left as it is.
  */
 export const moveLegacyArtifactsTable = async (
   db: Pick<D1Database, "prepare">,

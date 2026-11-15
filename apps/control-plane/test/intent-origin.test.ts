@@ -16,7 +16,7 @@ const leasedExecution = async () => {
   const db = await migratedD1();
   await seedExecution(db, "exec-1");
   db.sqlite.exec(
-    "insert into placements (execution_id, state, epoch, executor_id) values ('exec-1', 'leased', 1, 'dev1')",
+    "insert into mameko_placements (execution_id, state, epoch, executor_id) values ('exec-1', 'leased', 1, 'dev1')",
   );
   return db;
 };
@@ -46,8 +46,8 @@ it("[FD-AGT-034] [FD-GH-080] refuses an executor's forged pr.propose without sta
       }),
     );
     expect(result).toEqual({ _tag: "Rejected", reason: "undeclared kind" });
-    expect(db.sqlite.prepare("select kind from staged_intents").all()).toEqual([]);
-    expect(db.sqlite.prepare("select kind from outbox").all()).toEqual([]);
+    expect(db.sqlite.prepare("select kind from mameko_staged_intents").all()).toEqual([]);
+    expect(db.sqlite.prepare("select kind from mameko_outbox").all()).toEqual([]);
   } finally {
     db.sqlite.close();
   }
@@ -75,7 +75,7 @@ it("[FD-GH-008] refuses a checkpoint that forges the control plane's check concl
       }),
     );
     expect(result).toEqual({ _tag: "Rejected", reason: "kind not applied for any outcome" });
-    expect(db.sqlite.prepare("select kind from outbox").all()).toEqual([]);
+    expect(db.sqlite.prepare("select kind from mameko_outbox").all()).toEqual([]);
   } finally {
     db.sqlite.close();
   }
@@ -99,7 +99,7 @@ it("[FD-GATE-056] still stages and publishes a run-authored release intent on su
       ),
     ).toEqual({ _tag: "Staged" });
     db.sqlite.exec(
-      "update placements set state = 'accepted', accepted_epoch = 1 where execution_id = 'exec-1'",
+      "update mameko_placements set state = 'accepted', accepted_epoch = 1 where execution_id = 'exec-1'",
     );
     await Effect.runPromise(
       ExecutionSteps.use((s) => s.applyOutbox("exec-1", { _tag: "Success", epoch: 1 }, 1)).pipe(
@@ -113,7 +113,7 @@ it("[FD-GATE-056] still stages and publishes a run-authored release intent on su
     );
     expect(
       db.sqlite
-        .prepare("select kind, payload_json from outbox where intent_key = 'run:release'")
+        .prepare("select kind, payload_json from mameko_outbox where intent_key = 'run:release'")
         .get(),
     ).toEqual({ kind: "release.draft", payload_json: JSON.stringify(payload) });
   } finally {

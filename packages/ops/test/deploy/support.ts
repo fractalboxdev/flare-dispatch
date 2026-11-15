@@ -132,6 +132,24 @@ const PEM = generateKeyPairSync("rsa", { modulusLength: 2048 })
   .privateKey.export({ type: "pkcs1", format: "pem" })
   .toString();
 
+/** The operator's Access service token, whose common name the overlay lists among `operators`. */
+export const SERVICE_TOKEN = {
+  clientId: "fd-deploy.access",
+  clientSecret: "service-token-secret",
+} as const;
+
+/** The gate image digest the control plane's Container pools run. */
+export const GATE_DIGEST = `sha256:${"d".repeat(64)}`;
+
+/** The floor canary's execution the control plane admits for a deploy. */
+export const CANARY_EXECUTION = "01KCANARY0000000000000000A";
+
+/** A floor canary verdict as `GET /v1/ops/floor-canary/:id` answers it. */
+export type CanaryVerdict =
+  | { readonly verdict: "running" | "passed" }
+  | { readonly verdict: "failed"; readonly stage: string; readonly detail: string }
+  | { readonly verdict: "inconclusive"; readonly detail: string };
+
 /** The AWS account the fake AWS endpoints answer for, and the credentials they accept. */
 export const AWS_ACCOUNT = "111122223333";
 export const AWS_CREDENTIALS: AwsCredentials = {
@@ -226,6 +244,11 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     awsPolicyTypes: Record<string, string>;
     /** ListParents answers, keyed by child; tests can inject incomplete or cyclic ancestry. */
     awsParents: Record<string, Record<string, unknown>>;
+    /**
+     * The verdicts the control plane's `GET /v1/ops/floor-canary/:id` answers in turn, the last one for every later
+     * read; the deployed control plane admits the canary on `POST /v1/ops/floor-canary`.
+     */
+    canaryVerdicts: CanaryVerdict[];
   } = {
     health: 200,
     deploys: 0,
@@ -249,6 +272,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     awsRootsReadFails: false,
     awsPolicyTypes: {},
     awsParents: { [AWS_ACCOUNT]: { Parents: [{ Id: "r-abcd", Type: "ROOT" }] } },
+    canaryVerdicts: [{ verdict: "running" }, { verdict: "passed" }],
   };
 
   /**
@@ -688,6 +712,29 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     );
   };
 
+  /**
+   * The deployed control plane's floor canary routes: the admission answers the canary's execution on the gate image,
+   * and each verdict read answers the next of `state.canaryVerdicts`.
+   */
+  let canaryReads = 0;
+  const floorCanary = (method: string, path: string): Response => {
+    if (method === "POST" && path === "/v1/ops/floor-canary")
+      return Response.json(
+        { execution_id: CANARY_EXECUTION, pool: "agent", image_digest: GATE_DIGEST },
+        { status: 202 },
+      );
+    if (method === "GET" && path === `/v1/ops/floor-canary/${CANARY_EXECUTION}`) {
+      const v = state.canaryVerdicts[Math.min(canaryReads++, state.canaryVerdicts.length - 1)]!;
+      return Response.json({
+        execution_id: CANARY_EXECUTION,
+        verdict: v.verdict,
+        stage: "stage" in v ? v.stage : null,
+        detail: "detail" in v ? v.detail : null,
+      });
+    }
+    return Response.json({ error: "not_found", message: "no such route" }, { status: 404 });
+  };
+
   const fetcher = (async (input: string, init?: RequestInit) => {
     const url = new URL(input);
     const method = init?.method ?? "GET";
@@ -706,13 +753,19 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
       alarms.push(JSON.parse(body) as Record<string, unknown>);
       return new Response(null, { status: 204 });
     }
-    if (url.host === "dispatch.example.com")
-      return behindAccess(url.host, url.pathname)
-        ? new Response(null, {
-            status: 302,
-            headers: { location: "https://example.cloudflareaccess.com/cdn-cgi/access/login" },
-          })
-        : new Response("ok", { status: state.health });
+    if (url.host === "dispatch.example.com") {
+      const headers = new Headers(init?.headers);
+      const serviceToken =
+        headers.get("cf-access-client-id") === SERVICE_TOKEN.clientId &&
+        headers.get("cf-access-client-secret") === SERVICE_TOKEN.clientSecret;
+      if (behindAccess(url.host, url.pathname) && !serviceToken)
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://example.cloudflareaccess.com/cdn-cgi/access/login" },
+        });
+      if (url.pathname.startsWith("/v1/ops/floor-canary")) return floorCanary(method, url.pathname);
+      return new Response("ok", { status: state.health });
+    }
     if (url.host === "docs.example.com") return new Response("ok");
     return new Response(null, { status: 599 });
   }) as unknown as typeof fetch;
@@ -753,9 +806,10 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
 export type World = ReturnType<typeof world>;
 
 /**
- * The live target on the fakes. The live floor canary fails for every Container class until mameko's coordinator
- * exposes one to run (MAMEKO-OPS-012, FD-OPS-050), and the control-plane template carries five; a suite that reaches
- * the record stage passes `canary: "passes"`, which answers the canary passed on the deployed digest.
+ * The live target on the fakes. Under `canary: "live"` the floor canary runs through the deployed control plane's
+ * `/v1/ops/floor-canary` routes on the dispatcher hostname under the operator's service token, which answer
+ * `state.canaryVerdicts` (MAMEKO-OPS-012, FD-OPS-050); `canary: "passes"` answers the canary passed on the deployed
+ * digest without those routes, for a suite about another stage.
  */
 export const targetOn =
   (w: World, canary: "live" | "passes") =>
@@ -770,6 +824,8 @@ export const targetOn =
       appPrivateKey: PEM,
       repository: "acme/fd",
       ...(w.state.awsCredentials ? { aws: AWS_CREDENTIALS } : {}),
+      access: SERVICE_TOKEN,
+      floorCanaryPoll: { intervalMs: 0, timeoutMs: 60_000 },
       fetch: w.fetcher,
       writeFile: (path, text) => void w.files.set(path, text),
       removeFile: (path) => void w.files.delete(path),

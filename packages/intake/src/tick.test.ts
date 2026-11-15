@@ -69,7 +69,7 @@ describe("scheduled runs", () => {
     const result = await h.run(runTickUnit(unit));
     expect(result.next).toBeNull();
     expect(h.records().map((r) => [r.run, r.trigger, r.sha])).toEqual([["nightly", "cron", BASE]]);
-    expect(h.rows("select canonical from dedup_keys").map((r) => r.canonical)).toEqual([
+    expect(h.rows("select canonical from mameko_dedup_keys").map((r) => r.canonical)).toEqual([
       `nightly:${REPO}:cron:2026-11-04T03:00:00.000Z`,
     ]);
     const quiet = await h.run(runTickUnit({ ...unit, scheduledAt: at(3, 1) }));
@@ -189,7 +189,7 @@ describe("improve-pr schedules", () => {
         },
       ],
     ]);
-    expect(h.rows("select canonical from dedup_keys order by canonical")).toEqual([
+    expect(h.rows("select canonical from mameko_dedup_keys order by canonical")).toEqual([
       { canonical: `improve-pr:lint:${REPO}:cron:2026-11-04T03:00:00.000Z` },
       { canonical: `improve-pr:size:${REPO}:cron:2026-11-04T03:00:00.000Z` },
     ]);

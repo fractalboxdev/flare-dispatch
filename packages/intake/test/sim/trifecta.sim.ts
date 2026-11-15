@@ -119,8 +119,8 @@ const deliver = async (h: Harness, payload: unknown, delivery: string) => {
 const recordsOf = (h: Harness, run: RunName, head: string) =>
   h.rows(
     `select r.execution_id, r.not_before, e.status, e.reason,
-       (select count(*) from placements p where p.execution_id = r.execution_id) as placed
-     from intake_records r left join executions e on e.id = r.execution_id
+       (select count(*) from mameko_placements p where p.execution_id = r.execution_id) as placed
+     from intake_records r left join mameko_executions e on e.id = r.execution_id
      where r.run = ? and r.sha = ?`,
     run,
     head,

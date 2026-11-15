@@ -16,13 +16,14 @@ describe("simulation: gate job infrastructure errors", () => {
       for (const [k, n] of Object.entries(r.reached)) reached[k] = (reached[k] ?? 0) + n;
     }
     expect(violations.slice(0, 5)).toEqual([]);
-    // The seeds reach every infrastructure error outlasting a release job's retries and another class's, and jobs
-    // whose retries outlast their errors.
+    // The seeds reach every infrastructure error outlasting a release job's retries and another class's, jobs whose
+    // retries outlast their errors, and jobs the control plane's requeue carries through an `infra:` result.
     if (count >= 100) {
       for (const tag of ["checkout", "exec", "start", "no-verdict"])
         for (const side of ["release", "other"])
           expect(reached[`${side}-outlasted ${tag}`], `${side} ${tag}`).toBeGreaterThan(0);
       expect(reached["retried-through"]).toBeGreaterThan(0);
+      expect(reached["requeued-through"]).toBeGreaterThan(0);
     }
   }, 120_000);
 

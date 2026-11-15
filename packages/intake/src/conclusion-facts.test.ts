@@ -26,20 +26,20 @@ describe("the conclusion facts of an execution", () => {
     const id = await admitCheck(h);
     exec(
       h,
-      `update placements set leased_kind = 'device', accepted_kind = 'device', executor_id = 'mac-mini-7', cloud_won = 0,
+      `update mameko_placements set leased_kind = 'device', accepted_kind = 'device', executor_id = 'mac-mini-7', cloud_won = 0,
        claim_latency_ms = 4000 where execution_id = ?`,
       id,
     );
     exec(
       h,
-      `insert into reservations (execution_id, class, hold_micro_usd, state, metered_micro_usd, updated_at)
+      `insert into mameko_reservations (execution_id, class, hold_micro_usd, state, metered_micro_usd, updated_at)
        values (?, 'required', 20000, 'settled', 12000, ?)`,
       id,
       NOW,
     );
     exec(
       h,
-      "update executions set status = 'failure', reason = 'lint: 3 errors', finished_at = ? where id = ?",
+      "update mameko_executions set status = 'failure', reason = 'lint: 3 errors', finished_at = ? where id = ?",
       NOW + 60_000,
       id,
     );
@@ -84,7 +84,7 @@ describe("the conclusion facts of an execution", () => {
     const record = (await h.run(IntakeStore.use((s) => s.get(first))))!;
     exec(
       h,
-      `insert into executions (id, scope_id, run, class, status, enqueued_at) values ('retry-2', ?, 'check', 'required', 'success', ?)`,
+      `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at) values ('retry-2', ?, 'check', 'required', 'success', ?)`,
       record.repo,
       NOW,
     );

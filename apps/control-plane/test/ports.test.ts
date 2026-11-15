@@ -1,4 +1,4 @@
-// The application ports the composition supplies against mameko's configuration validation (MAMEKO-HOST-046), and the
+// The application ports the composition supplies against mameko's configuration validation (MAMEKO-HOST-048), and the
 // object-store presigner the isolate's services carry (FD-CACHE-091).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -25,7 +25,7 @@ const env = (extra: Partial<ControlPlaneEnv>) =>
   ({ PLANE_ID: "flare-dispatch", ...extra }) as unknown as ControlPlaneEnv;
 
 describe("the composition's application ports", () => {
-  it("[FD-ARCH-039] MAMEKO-HOST-046 a deploy with the GitHub App supplies every port the phase 0 profile uses", () => {
+  it("[FD-ARCH-039] MAMEKO-HOST-048 a deploy with the GitHub App supplies every port the phase 0 profile uses", () => {
     const withApp = env({
       GITHUB_APP_ID: "1",
       GITHUB_APP_SLUG: "flare-dispatch-test",
@@ -48,7 +48,7 @@ describe("the composition's application ports", () => {
     expect(suppliedPorts(env({}))).not.toContain("credential-minter");
   });
 
-  it("[FD-ARCH-039] MAMEKO-HOST-046 names the applier ports a deploy without the App lacks", () => {
+  it("[FD-ARCH-039] MAMEKO-HOST-048 names the applier ports a deploy without the App lacks", () => {
     expect(missingPorts(buildProfile("production"), suppliedPorts(env({})))).toEqual([
       "actuator",
       "actuator-rate-limit",

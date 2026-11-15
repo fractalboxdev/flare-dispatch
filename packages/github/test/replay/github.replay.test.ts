@@ -47,7 +47,7 @@ describe("an execution's GitHub and side outputs under a replayed workflow", () 
       // The outcome-first execution's check.open adopts the run its conclusion created.
       expect(
         p.rows(
-          "select execution_id, intent_key, state, external_ref from outbox where kind like 'check.%' order by execution_id, intent_key",
+          "select execution_id, intent_key, state, external_ref from mameko_outbox where kind like 'check.%' order by execution_id, intent_key",
         ),
       ).toEqual([
         {
@@ -93,7 +93,7 @@ describe("an execution's GitHub and side outputs under a replayed workflow", () 
       ]);
       expect(
         p.rows(
-          "select intent_key, kind, scope_id, state, sends, external_ref from outbox where kind not like 'check.%' order by intent_key",
+          "select intent_key, kind, scope_id, state, sends, external_ref from mameko_outbox where kind not like 'check.%' order by intent_key",
         ),
       ).toEqual([
         {

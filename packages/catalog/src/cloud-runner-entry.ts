@@ -1,5 +1,5 @@
 // The run catalogue of a Container pool's device executor, the module `scripts/build-pool-catalog.ts` bundles with the
-// runner (MAMEKO-EXEC-144). It exports `runs`: every run whose catalogue entry lists `cloud` and that is no host
+// runner (MAMEKO-EXEC-153). It exports `runs`: every run whose catalogue entry lists `cloud` and that is no host
 // execution, with the Container as the job sandbox.
 //
 // - The cloud gate runs, `worker-deploy` and `sandbox-image`, take the device's Layers for processes, artifacts and

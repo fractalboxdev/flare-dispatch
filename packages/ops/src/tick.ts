@@ -7,7 +7,12 @@
 import type { Profile } from "@fractalboxdev/flare-dispatch-profile";
 import { actuatorBindings, drainOnce } from "@fractalboxdev/mameko-coordinator";
 import { d1OutboxStore, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
-import type { ActuatorRateLimit, Actuators, AlarmPort } from "@fractalboxdev/mameko-ports";
+import type {
+  ActuatorRateLimit,
+  Actuators,
+  AlarmPort,
+  FreezeKeyBinding,
+} from "@fractalboxdev/mameko-ports";
 import { Cause, Effect, Layer } from "effect";
 import { checkAdvisorySnapshotsStale, type AdvisoryWatch } from "./advisory.ts";
 import { KILL_LINE_INTERVAL_MS, killLineMonitor } from "./kill-lines.ts";
@@ -51,6 +56,11 @@ export interface TickDeps {
    * rate limit; without them the tick drains nothing.
    */
   readonly appliers?: Layer.Layer<Actuators | ActuatorRateLimit>;
+  /**
+   * The delivery's freeze key binding, which the drainer reads once per row before its first claim (MAMEKO-OUT-068);
+   * without it every row's freeze key stays null.
+   */
+  readonly delivery?: { readonly freezeKey: FreezeKeyBinding };
   /** The App-JWT reads; without them the installation and delivery probes do not run. */
   readonly githubReads?: Layer.Layer<GithubAppReads>;
   /**
@@ -170,6 +180,7 @@ export const minuteTick = (env: TickEnv, deps: TickDeps, now: number) =>
               token: () => crypto.randomUUID(),
               random: Math.random,
               actuatorOf: actuatorBindings(deps.profile.intent_kinds),
+              ...(deps.delivery === undefined ? {} : { freezeKey: deps.delivery.freezeKey }),
             }).pipe(Effect.provide(Layer.merge(d1OutboxStore(db), deps.appliers))),
           ),
     );

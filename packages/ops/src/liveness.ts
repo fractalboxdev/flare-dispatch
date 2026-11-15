@@ -192,15 +192,15 @@ const age = (now: number, at: number | null | undefined) =>
 export const livenessReport = async (db: D1Like, now: number): Promise<LivenessReport> => {
   const tick = await lastTick(db);
   const { results: hb } = await db
-    .prepare("select executor_id, last_heartbeat_at from executor_heartbeats order by executor_id")
+    .prepare("select executor_id, last_heartbeat_at from mameko_executor_heartbeats order by executor_id")
     .all();
   const { results: depth } = await db
     .prepare(
-      "select count(*) as n from outbox where state in ('gated', 'pending', 'in_flight', 'ambiguous')",
+      "select count(*) as n from mameko_outbox where state in ('gated', 'pending', 'in_flight', 'ambiguous')",
     )
     .all();
   const { results: oldest } = await db
-    .prepare("select min(enqueued_at) as at from executions where status in ('pending', 'running')")
+    .prepare("select min(enqueued_at) as at from mameko_executions where status in ('pending', 'running')")
     .all();
   return {
     tick_age_ms: age(now, tick),

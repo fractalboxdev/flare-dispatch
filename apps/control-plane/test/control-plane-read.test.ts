@@ -4,6 +4,8 @@
 import { join } from "node:path";
 import { executionsApiReadLayer, ExecutionsRead } from "@fractalboxdev/flare-dispatch-agentic";
 import { lookupRun, type CatalogEntry } from "@fractalboxdev/flare-dispatch-catalog";
+import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
+import { launchGrants, mintGrants } from "@fractalboxdev/mameko-host-cloudflare";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import { Effect } from "effect";
 import { build } from "esbuild";
@@ -15,7 +17,10 @@ import {
   signControlPlaneReadToken,
   verifyControlPlaneRead,
 } from "../src/control-plane-read.ts";
+import type { ControlPlaneEnv } from "../src/config.ts";
 import { router } from "../src/http.ts";
+import { revokeLeaseCredentials } from "../src/lease.ts";
+import { mintPoolCredential, poolSettings } from "../src/pools.ts";
 import { signModelLeaseToken } from "../src/model-gateway.ts";
 import { AUD, OPERATOR, PLANE, startAccessTeam, type AccessTeam } from "./support.ts";
 import { wasmModules, workerdBuild } from "./workerd-bundle.ts";
@@ -45,7 +50,7 @@ const insertExecution = async (
   const d = await db();
   await d
     .prepare(
-      `insert into executions (id, scope_id, run, class, status, reason, enqueued_at, deadline_at, finished_at)
+      `insert into mameko_executions (id, scope_id, run, class, status, reason, enqueued_at, deadline_at, finished_at)
        values (?, ?, ?, 'batch', ?, ?, ?, ?, ?)`,
     )
     .bind(
@@ -61,7 +66,7 @@ const insertExecution = async (
     .run();
   await d
     .prepare(
-      "insert into placements (execution_id, state, epoch, executor_id) values (?, 'leased', 1, null)",
+      "insert into mameko_placements (execution_id, state, epoch, executor_id) values (?, 'leased', 1, null)",
     )
     .bind(id)
     .run();
@@ -311,14 +316,14 @@ describe("a lease's control-plane read token", () => {
     const d1 = await migratedD1();
     await d1
       .prepare(
-        `insert into executions (id, scope_id, run, class, status, enqueued_at, deadline_at)
+        `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at, deadline_at)
          values (?, ?, 'ci-triage-pr', 'batch', 'running', ?, ?)`,
       )
       .bind(LEASE, REPO, NOW, DEADLINE)
       .run();
     await d1
       .prepare(
-        "insert into placements (execution_id, state, epoch, executor_id) values (?, 'leased', 3, null)",
+        "insert into mameko_placements (execution_id, state, epoch, executor_id) values (?, 'leased', 3, null)",
       )
       .bind(LEASE)
       .run();
@@ -338,6 +343,54 @@ describe("a lease's control-plane read token", () => {
       Effect.result(verifyControlPlaneRead({ DB: d1 }, bearer, NOW)),
     );
     expect(unset).toMatchObject({ _tag: "Failure", failure: { error: "unauthenticated" } });
+  });
+
+  it("[FD-IFC-102] MAMEKO-HOST-050 MAMEKO-HOST-052 a ci-triage-pr Container launch carries the lease's read token as the control-plane-read grant's credential, which verifies until the lease's end revokes it", async () => {
+    const d1 = await migratedD1();
+    await d1
+      .prepare(
+        `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at, deadline_at)
+         values (?, ?, 'ci-triage-pr', 'batch', 'running', ?, ?)`,
+      )
+      .bind(LEASE, REPO, NOW, DEADLINE)
+      .run();
+    await d1
+      .prepare(
+        "insert into mameko_placements (execution_id, state, epoch, executor_id) values (?, 'leased', 2, 'ci-1')",
+      )
+      .bind(LEASE)
+      .run();
+    const deploy = {
+      PUBLIC_ORIGIN: "https://ci.example.com",
+      CONTROL_PLANE_READ_SECRET: SECRET,
+      R2_ACCOUNT_ID: "0123abcd",
+    } as unknown as ControlPlaneEnv;
+    const settings = poolSettings(deploy, buildProfile("production"));
+    expect(settings.mintedGrants).toEqual([CONTROL_PLANE_READ_CREDENTIAL]);
+    // The launch's grants as mameko's controller builds them, each minted grant through the controller's minter.
+    const grants = await mintGrants(
+      launchGrants(settings, "ci-triage-pr"),
+      settings.mintedGrants ?? [],
+      DEADLINE,
+      (grant) =>
+        mintPoolCredential(deploy)(grant, { executionId: LEASE, epoch: 2, deadlineAt: DEADLINE }),
+    );
+    const read = grants.agent.find((g) => g.name === CONTROL_PLANE_READ_CREDENTIAL);
+    expect(read?.credential).toBe(`Bearer ${await token({ epoch: 2 })}`);
+    const bearer = read!.credential!.slice("Bearer ".length);
+    const env = { DB: d1, CONTROL_PLANE_READ_SECRET: SECRET };
+    expect(await Effect.runPromise(verifyControlPlaneRead(env, bearer, NOW))).toMatchObject({
+      executionId: LEASE,
+      epoch: 2,
+      repository: REPO,
+    });
+    await Effect.runPromise(revokeLeaseCredentials(d1, LEASE, 2, NOW));
+    expect(
+      await Effect.runPromise(Effect.result(verifyControlPlaneRead(env, bearer, NOW))),
+    ).toMatchObject({
+      _tag: "Failure",
+      failure: { error: "lease_stale", message: "token revoked" },
+    });
   });
 
   it("[FD-IFC-102] the token is refused on every write route, and on every read but the executions list and the log aggregate", async () => {

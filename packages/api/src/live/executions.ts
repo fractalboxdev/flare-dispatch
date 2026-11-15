@@ -32,11 +32,11 @@ interface Row {
 const SELECT = `select e.id, e.run, e.scope_id, e.class, e.status, e.reason, e.enqueued_at, e.finished_at,
     p.state as placement, p.epoch, p.accepted_epoch, p.executor_id, x.kind as executor_kind,
     r.hold_micro_usd, r.metered_micro_usd, r.state as hold_state, o.identity as dispatched_by,
-    exists (select 1 from dedup_keys d where d.execution_id = e.id and d.canonical like 'local:%') as local
-  from executions e
-  left join placements p on p.execution_id = e.id
-  left join executors x on x.executor_id = p.executor_id
-  left join reservations r on r.execution_id = e.id
+    exists (select 1 from mameko_dedup_keys d where d.execution_id = e.id and d.canonical like 'local:%') as local
+  from mameko_executions e
+  left join mameko_placements p on p.execution_id = e.id
+  left join mameko_executors x on x.executor_id = p.executor_id
+  left join mameko_reservations r on r.execution_id = e.id
   left join execution_origins o on o.execution_id = e.id`;
 
 /** mameko's `executions.status` as the API reports it (specs/interfaces.md § Execution status as the API reports it). */

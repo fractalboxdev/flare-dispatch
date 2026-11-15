@@ -57,6 +57,11 @@ export interface IntakeSettings {
   /** The operator policy: whether a repository may run a run at all (FD-INT-015). */
   readonly allows: (repo: string, run: string) => boolean;
   /**
+   * The fixture repository the operator overlay names (`github.fixtureRepo`), whose canary-branch push is the canary
+   * webhook (FD-OPS-038, FD-OPS-039). Unset, no push admits a canary.
+   */
+  readonly canaryRepo?: string;
+  /**
    * A repository's confidentiality mode, which the placement's isolation reads (MAMEKO-LEASE-084): the mode its synced
    * policy rules set (FD-PROF-025), else `unclassified`, mameko's fail-closed default, for every repository the
    * deployment does not know to be `non-confidential`.
@@ -134,6 +139,16 @@ export interface IntakeAdmitInput {
    * (MAMEKO-ADM-005). Null or absent admits the request.
    */
   readonly refusal?: string | null;
+  /**
+   * An ops run, charged against the ops line rather than its class's (MAMEKO-SPD-038, MAMEKO-SPD-065). The control
+   * plane sets it for its own canaries; a request from outside never carries it. Absent admits a class-line run.
+   */
+  readonly opsRun?: boolean;
+  /**
+   * The run's declared `retries`. Admission records them only for a class whose retry bound is `run` (`release`), which
+   * the control plane takes as the execution's infrastructure retries (FD-PROF-009, MAMEKO-ADM-083). Absent counts as 0.
+   */
+  readonly runRetries?: number;
 }
 
 /** Admission did not answer: the store transaction failed, and nothing was written. */
@@ -353,6 +368,7 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
           grants: input.grants,
           source: input.source ?? null,
           requiresWorkspace: input.requiresWorkspace ?? false,
+          ...(input.opsRun === true ? { opsRun: true } : {}),
           intents: {
             ...admittedIntents(profile, input),
             ...(limitKey === undefined
@@ -361,6 +377,9 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
           },
           supersessionKey: input.supersessionKey ?? null,
           serialKey: input.serialKey ?? null,
+          ...(cls?.retries === "run" && input.runRetries !== undefined
+            ? { runRetries: input.runRetries }
+            : {}),
           ...(ports.cancelExecution === undefined
             ? {}
             : { cancelExecution: ports.cancelExecution }),

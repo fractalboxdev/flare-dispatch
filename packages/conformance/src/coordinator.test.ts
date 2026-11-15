@@ -114,7 +114,7 @@ describe("mameko's coordinator suite on host-cloudflare in FlareDispatch's contr
         // The claim of a serial group member's first lease takes the group (MAMEKO-ADM-072).
         takeGroup: async (executionId, at) => {
           await db
-            .prepare("update executions set serial_held_at = ? where id = ?")
+            .prepare("update mameko_executions set serial_held_at = ? where id = ?")
             .bind(at, executionId)
             .run();
         },
@@ -292,7 +292,7 @@ const startingPlane = async () => {
     (
       (
         await db
-          .prepare("select engine_started_at as at from executions where id = ?")
+          .prepare("select engine_started_at as at from mameko_executions where id = ?")
           .bind(id)
           .all()
       ).results[0] as { readonly at: number | null }

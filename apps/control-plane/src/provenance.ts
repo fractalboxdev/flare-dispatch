@@ -147,7 +147,7 @@ export const cloudBuilderPlacement = (
         .prepare(
           `select p.state, p.epoch, p.accepted_epoch, p.executor_id, p.accepted_kind as executor_kind, e.scope_id, e.run,
              e.class
-           from placements p join executions e on e.id = p.execution_id
+           from mameko_placements p join mameko_executions e on e.id = p.execution_id
            where p.execution_id = ?`,
         )
         .bind(accepted.executionId)
@@ -440,7 +440,7 @@ export const writeAcceptedDeviceStatement = (
         return results as readonly Row[];
       });
     const [placement] = yield* query<{ readonly scope_id: string }>(
-      `select e.scope_id from placements p join executions e on e.id = p.execution_id
+      `select e.scope_id from mameko_placements p join mameko_executions e on e.id = p.execution_id
        where p.execution_id = ? and p.state = 'accepted' and p.accepted_epoch = ? and p.epoch = ?
          and p.executor_id = ? and p.accepted_kind = 'device'`,
       accepted.executionId,

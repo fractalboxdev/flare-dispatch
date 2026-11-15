@@ -97,7 +97,7 @@ const drain = (db: TestD1, gh: ReturnType<typeof fakeGithub>, now: number) =>
 const outbox = (db: TestD1) =>
   db.sqlite
     .prepare(
-      "select execution_id, intent_key, kind, payload_json, state, external_ref from outbox order by id",
+      "select execution_id, intent_key, kind, payload_json, state, external_ref from mameko_outbox order by id",
     )
     .all();
 

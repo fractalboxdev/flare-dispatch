@@ -76,7 +76,7 @@ const tick = async () => {
 const outboxRowOf = async (executionId: string) => {
   const db = await stack.mf.getD1Database("DB");
   return db
-    .prepare("select kind, state, sends, attempts from outbox where execution_id = ?")
+    .prepare("select kind, state, sends, attempts from mameko_outbox where execution_id = ?")
     .bind(executionId)
     .first();
 };

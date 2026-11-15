@@ -1,5 +1,5 @@
 // The services one isolate builds once and every request and tick reads: the GitHub services, intake's Layers and the
-// application ports mameko's validation counts (MAMEKO-HOST-046). A cache or token held here outlives one request.
+// application ports mameko's validation counts (MAMEKO-HOST-048). A cache or token held here outlives one request.
 import {
   CacheClock,
   isReproduction,
@@ -104,12 +104,16 @@ export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
     confidentiality: repositoryConfidentiality(env),
     policyRules: policyRulesFor(env),
     writeCredentialIn: writeCredentialIn(env),
+    // The fixture repository whose canary-branch push admits the canary (FD-OPS-039).
+    ...((env.GITHUB_FIXTURE_REPO?.trim() ?? "") === ""
+      ? {}
+      : { canaryRepo: env.GITHUB_FIXTURE_REPO!.trim() }),
   };
 };
 
 /**
  * A queued admission wakes the standing claims of the class's device executors (MAMEKO-ARCH-037) and the controllers
- * of the Container pools that serve the class (MAMEKO-HOST-054). The execution is already admitted, so a wake that
+ * of the Container pools that serve the class (MAMEKO-HOST-056). The execution is already admitted, so a wake that
  * fails, such as a grant the channel refuses, is logged and the request still answers with the execution it admitted.
  */
 const wake = (env: ControlPlaneEnv) => (className: string) =>
@@ -306,7 +310,7 @@ const presignerUnconfigured = (missing: ReadonlyArray<string>) => {
 };
 
 /**
- * The object-store presigner (MAMEKO-HOST-051): the cache package's signer over the presign token, on the bucket's S3
+ * The object-store presigner (MAMEKO-HOST-053): the cache package's signer over the presign token, on the bucket's S3
  * endpoint `<account_id>.r2.cloudflarestorage.com` and never a custom domain (FD-CACHE-091).
  */
 export const presignerLayer = (env: ControlPlaneEnv) => {

@@ -3,13 +3,13 @@
 //
 // - The route accepts only a model-lease token the control plane minted for the execution at its current epoch,
 //   expiring at its `deadline_at`, under the `MODEL_LEASE_SECRET` Worker secret (`lease-token.ts`). It checks the token
-//   before it reads the body (MAMEKO-MDL-041), and a token for an epoch that is not the execution's current one, or for
-//   an execution that has ended, is `lease_stale` (MAMEKO-MDL-040, MAMEKO-ISO-054). A reclaim or a conclusion therefore
-//   revokes the token at once (MAMEKO-ISO-053).
+//   before it reads the body (MAMEKO-MDL-041), and a token for an epoch that is not the execution's current one, for
+//   an execution that has ended, or for a lease whose credentials were revoked is `lease_stale` (MAMEKO-MDL-040,
+//   MAMEKO-ISO-054). A lease's end revokes its token at once (MAMEKO-ISO-053, MAMEKO-HOST-052).
 // - The token is minted into the lease's `credentials` under the grant name `model-gateway`, the credential the egress
-//   proxy attaches to a request to this route (FD-AGT-010); the run's input holds none. mameko's executors read no lease
-//   credential but `source-read`, and a Container's outbound handler attaches only a grant's one value for every lease,
-//   so a job's model call reaches the route without the token and is answered `unauthenticated`.
+//   proxy attaches to a request to this route (FD-AGT-010); the run's input holds none. A Container pool's controller
+//   mints it for each launch as the `model-gateway` grant's credential, which the Container's outbound handler sends as
+//   the request's `authorization` (MAMEKO-ISO-052, MAMEKO-HOST-050).
 // - A call routes by the repository's confidentiality mode: a scope that is not `non-confidential` reaches no hosted
 //   model (MAMEKO-MDL-008), so the call is `model_route_refused`. A hosted call goes to the first entry of the provider
 //   registry that serves its tier on a route kind this deploy holds: `workers-ai` through the `AI` binding, and
@@ -49,7 +49,13 @@ import { Effect, Match, Option, Schema } from "effect";
 import { MODEL_COMPLETIONS_PATH } from "./cloud-lease.ts";
 import { deployment } from "./config.ts";
 import { repositoryConfidentiality, type ConfidentialityEnv } from "./dev-repository.ts";
-import { bearerOf, signLeaseToken, verifyLeaseToken, type LeaseTokenScope } from "./lease-token.ts";
+import {
+  bearerOf,
+  leaseTokensRevoked,
+  signLeaseToken,
+  verifyLeaseToken,
+  type LeaseTokenScope,
+} from "./lease-token.ts";
 
 /** The largest model request the route reads, and the `model-gateway` grant passes. */
 export const MODEL_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
@@ -97,6 +103,24 @@ export const leaseModelCredentials = async (
   if (entry?.agentic?.declaration.needsModel !== true || secret === undefined || secret === "")
     return {};
   return { [MODEL_LEASE_CREDENTIAL]: await signModelLeaseToken(secret, lease) };
+};
+
+/**
+ * The `model-gateway` grant's credential for one Container launch: the lease's model-lease token as a bearer
+ * credential, expiring at the lease's `deadline_at` (MAMEKO-HOST-050, MAMEKO-HOST-051). A deploy without the secret
+ * names no minted grant, so the controller never asks it for one.
+ */
+export const mintModelLeaseCredential = async (
+  env: Pick<ModelGatewayEnv, "MODEL_LEASE_SECRET">,
+  lease: LeaseTokenScope,
+): Promise<{ readonly credential: string; readonly expiresAt: number }> => {
+  const secret = env.MODEL_LEASE_SECRET;
+  if (secret === undefined || secret === "")
+    throw new Error("model-gateway: this deploy holds no model-lease secret");
+  return {
+    credential: `Bearer ${await signModelLeaseToken(secret, lease)}`,
+    expiresAt: lease.expiresAt,
+  };
 };
 
 /** One provider registry entry as the `MODEL_REGISTRY` var carries it (MAMEKO-MDL-020). */
@@ -241,8 +265,8 @@ const executionOf = async (db: D1Like, executionId: string) =>
   (
     await db
       .prepare(
-        `select e.status, e.run, e.scope_id, p.epoch from executions e
-         left join placements p on p.execution_id = e.id where e.id = ?`,
+        `select e.status, e.run, e.scope_id, p.epoch from mameko_executions e
+         left join mameko_placements p on p.execution_id = e.id where e.id = ?`,
       )
       .bind(executionId)
       .all()
@@ -274,8 +298,8 @@ const failedCall = (reason: string) =>
 
 /**
  * Serves `POST /v1/model/completions`, or answers null for a path outside the model route. A request without a valid
- * model-lease token is `401` before its body is read; a token whose epoch is not the execution's current one, or whose
- * execution has ended, is `401 lease_stale`.
+ * model-lease token is `401` before its body is read; a token whose epoch is not the execution's current one, whose
+ * execution has ended, or whose lease's credentials were revoked is `401 lease_stale`.
  */
 export const modelGatewayFetch = async (
   request: Request,
@@ -298,6 +322,8 @@ export const modelGatewayFetch = async (
     return refuse("lease_stale", "token epoch is not current");
   if (execution.status !== "pending" && execution.status !== "running")
     return refuse("lease_stale", "execution is terminal");
+  if (await leaseTokensRevoked(env.DB, executionId, epoch))
+    return refuse("lease_stale", "token revoked");
 
   const length = Number(request.headers.get("content-length") ?? "0");
   if (length > MODEL_REQUEST_MAX_BYTES)

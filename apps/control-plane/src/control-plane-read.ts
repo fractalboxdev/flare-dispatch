@@ -6,8 +6,8 @@
 //   expiring at its `deadline_at`, under the `CONTROL_PLANE_READ_SECRET` Worker secret, into the lease's `credentials`
 //   under the grant name `control-plane-read`, the credential the egress proxy attaches to a request to those routes.
 //   The run's input holds none.
-// - The router's gate verifies the token: an execution whose epoch is not the token's, or that has ended, is
-//   `lease_stale`, so a reclaim or a conclusion revokes the token at once. The token identifies the lease and the
+// - The router's gate verifies the token: an execution whose epoch is not the token's, that has ended, or whose lease's
+//   tokens were revoked is `lease_stale`, so a lease's end revokes the token at once. The token identifies the lease and the
 //   execution's repository, and the routes answer it that repository's executions and logs alone. It is a bearer on
 //   `GET` routes only; every other route reads no lease token.
 import {
@@ -19,7 +19,12 @@ import {
 import type { CatalogEntry } from "@fractalboxdev/flare-dispatch-catalog";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Effect, Layer } from "effect";
-import { signLeaseToken, verifyLeaseToken, type LeaseTokenScope } from "./lease-token.ts";
+import {
+  leaseTokensRevoked,
+  signLeaseToken,
+  verifyLeaseToken,
+  type LeaseTokenScope,
+} from "./lease-token.ts";
 
 /** The lease credential's name: the grant whose requests the egress proxy attaches it to. */
 export const CONTROL_PLANE_READ_CREDENTIAL = "control-plane-read";
@@ -62,8 +67,8 @@ const executionOf = async (db: D1Like, executionId: string) =>
   (
     await db
       .prepare(
-        `select e.status, e.run, e.scope_id, p.epoch from executions e
-         left join placements p on p.execution_id = e.id where e.id = ?`,
+        `select e.status, e.run, e.scope_id, p.epoch from mameko_executions e
+         left join mameko_placements p on p.execution_id = e.id where e.id = ?`,
       )
       .bind(executionId)
       .all()
@@ -77,9 +82,28 @@ const executionOf = async (db: D1Like, executionId: string) =>
     | undefined;
 
 /**
+ * The `control-plane-read` grant's credential for one Container launch: the lease's control-plane read token as a
+ * bearer credential, expiring at the lease's `deadline_at` (MAMEKO-HOST-050, MAMEKO-HOST-051). A deploy without the
+ * secret names no such minted grant, so the controller never asks it for one.
+ */
+export const mintControlPlaneReadCredential = async (
+  env: Pick<ControlPlaneReadEnv, "CONTROL_PLANE_READ_SECRET">,
+  lease: LeaseTokenScope,
+): Promise<{ readonly credential: string; readonly expiresAt: number }> => {
+  const secret = env.CONTROL_PLANE_READ_SECRET;
+  if (secret === undefined || secret === "")
+    throw new Error("control-plane-read: this deploy holds no control-plane read secret");
+  return {
+    credential: `Bearer ${await signControlPlaneReadToken(secret, lease)}`,
+    expiresAt: lease.expiresAt,
+  };
+};
+
+/**
  * Verifies a control-plane read token at `now`: the lease it names, with the execution's repository. A token that does
  * not verify or has passed its `deadline_at` is `unauthenticated`; one whose epoch is not the execution's current one,
- * or whose execution has ended, `lease_stale`; one whose run reads no executions, `forbidden`.
+ * whose execution has ended or whose lease's tokens were revoked, `lease_stale`; one whose run reads no executions,
+ * `forbidden`.
  */
 export const verifyControlPlaneRead = (
   env: ControlPlaneReadEnv,
@@ -103,6 +127,11 @@ export const verifyControlPlaneRead = (
       return yield* apiError("lease_stale", "token epoch is not current");
     if (execution.status !== "pending" && execution.status !== "running")
       return yield* apiError("lease_stale", "execution is terminal");
+    const revoked = yield* Effect.tryPromise({
+      try: () => leaseTokensRevoked(env.DB, executionId, epoch),
+      catch: (cause) => apiError("unavailable", `revocations: ${String(cause)}`),
+    });
+    if (revoked) return yield* apiError("lease_stale", "token revoked");
     if (!CONTROL_PLANE_READERS.has(execution.run))
       return yield* apiError("forbidden", `the run ${execution.run} reads no executions`);
     return {

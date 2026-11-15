@@ -1,6 +1,14 @@
 // The catalogue's Worker-safe surface: declarations, inputs, request decoders, outcomes and the egress decision. The
 // run bodies and the registry live behind `./runs`, which holds Node process code.
 export {
+  CANARY_BRANCH,
+  CANARY_CLASS,
+  CANARY_RUN,
+  CanaryInput,
+  canaryEntry,
+  canarySpec,
+} from "./canary.ts";
+export {
   CHECK_MAX_DURATION_SEC,
   CheckInput,
   CheckStep,
@@ -11,6 +19,8 @@ export {
   DEFAULT_STEP_TIMEOUT_SEC,
   deploymentOf,
   deploySmokeSpec,
+  FLOOR_CANARY_CLASS,
+  floorCanary,
   gateJobSpec,
   isReadOnlyScanRun,
   lookupRun,

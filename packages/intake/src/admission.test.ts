@@ -73,7 +73,7 @@ const check = (cls?: string) => ({
 });
 
 const executionRow = (h: Harness, id: string) =>
-  h.rows("select status, reason, engine_started_at from executions where id = ?", id)[0] as {
+  h.rows("select status, reason, engine_started_at from mameko_executions where id = ?", id)[0] as {
     status: string;
     reason: string | null;
     engine_started_at: number | null;
@@ -83,7 +83,7 @@ const recordKinds = (h: Harness, id: string) =>
   h.rows("select eligible_kinds from intake_records where execution_id = ?", id)[0]?.eligible_kinds;
 
 const placementKinds = (h: Harness, id: string) =>
-  h.rows("select eligible_kinds from placements where execution_id = ?", id)[0]?.eligible_kinds;
+  h.rows("select eligible_kinds from mameko_placements where execution_id = ?", id)[0]?.eligible_kinds;
 
 describe("the workflow start at admission", () => {
   it.each(["required", "interactive"])(
@@ -94,7 +94,7 @@ describe("the workflow start at admission", () => {
         resolve: requested,
         startExecution: (payload) =>
           Effect.sync(() => {
-            committed = h.rows("select status from executions where id = ?", payload.executionId);
+            committed = h.rows("select status from mameko_executions where id = ?", payload.executionId);
           }),
       });
       const { executionId: id, className } = await dispatch(h, "check", check(cls));
@@ -146,6 +146,30 @@ describe("the workflow start at admission", () => {
     );
     expect(swept).toEqual([id]);
     expect(executionRow(h, id).engine_started_at).toBe(NOW + 60_000);
+  });
+});
+
+describe("a run's declared retries at admission", () => {
+  it("[FD-PROF-009] MAMEKO-ADM-083 records the run's declared retries on a release execution, whose class takes them, and none on a required one", async () => {
+    const h = await harness({
+      resolve: requested,
+      settings: {
+        catalog: (name) =>
+          name === "check" ? { ...CATALOG["check"]!, retries: 2 } : CATALOG[name],
+      },
+    });
+    const runRetries = (id: string) =>
+      h.rows("select run_retries from mameko_executions where id = ?", id)[0]?.run_retries;
+    const release = await dispatch(h, "check", check("release"));
+    expect(release.className).toBe("release");
+    expect(runRetries(release.executionId)).toBe(2);
+    const required = await dispatch(h, "check", {
+      ...check("required"),
+      sha: "e".repeat(40),
+      inputs: { sha: "e".repeat(40) },
+    });
+    expect(required.className).toBe("required");
+    expect(runRetries(required.executionId)).toBe(0);
   });
 });
 
@@ -246,7 +270,7 @@ describe("an idempotent retry inside a cooldown window", () => {
       executionId: first.executionId,
     });
     // Admission stores the digest of the body's canonical JSON, the value intake compares on the held path.
-    expect(h.rows("select request_digest from dedup_keys")).toEqual([
+    expect(h.rows("select request_digest from mameko_dedup_keys")).toEqual([
       { request_digest: createHash("sha256").update(canonicalJson(lint)).digest("hex") },
     ]);
     expect(h.rows("select count(*) as n from intake_held")[0]!.n).toBe(0);
@@ -262,7 +286,7 @@ describe("a held request's release", () => {
     expect(h.rows("select execution_id from intake_held")).toEqual([{ execution_id: id }]);
     const first = h.records()[0]!.execution_id as string;
     // The first `lint` has finished, so the class's per-repository queue bound has room.
-    h.db.sqlite.prepare("update executions set status = 'success' where id = ?").run(first);
+    h.db.sqlite.prepare("update mameko_executions set status = 'success' where id = ?").run(first);
     await h.adjust(50_000);
     return { h, id };
   };
@@ -361,7 +385,7 @@ describe("supersession and serial groups at admission", () => {
 
   const groupRows = (h: Harness, run: string) =>
     h.rows(
-      `select e.status, e.reason, e.supersession_key as key, r.sha from executions e
+      `select e.status, e.reason, e.supersession_key as key, r.sha from mameko_executions e
        join intake_records r on r.execution_id = e.id where e.run = ? order by e.enqueued_at`,
       run,
     );
@@ -383,7 +407,7 @@ describe("supersession and serial groups at admission", () => {
       { status: "pending", reason: null, key: `${REPO}:12:check:ci`, sha: second },
     ]);
     // The superseded member's workflow is cancelled with the cause its row records (MAMEKO-ADM-064).
-    const cancelledId = h.rows("select id from executions where status = 'cancelled'")[0]!.id;
+    const cancelledId = h.rows("select id from mameko_executions where status = 'cancelled'")[0]!.id;
     expect(h.recorded.workflowCancels).toEqual([{ executionId: cancelledId, cause: "superseded" }]);
   });
 
@@ -456,7 +480,7 @@ describe("supersession and serial groups at admission", () => {
       ),
     );
     const rows = h.rows(
-      "select id, status, reason, supersession_key as key from executions order by supersession_key",
+      "select id, status, reason, supersession_key as key from mameko_executions order by supersession_key",
     );
     expect(rows.map(({ id: _id, ...r }) => r)).toEqual([
       { status: "cancelled", reason: "pr-closed", key: `${REPO}:12:check:e2e` },
@@ -496,7 +520,7 @@ describe("supersession and serial groups at admission", () => {
       },
     });
     await webhook(h, "push", pushPayload("refs/heads/main", HEAD), "d-1");
-    expect(h.rows("select run, serial_key, supersession_key from executions")).toEqual([
+    expect(h.rows("select run, serial_key, supersession_key from mameko_executions")).toEqual([
       {
         run: "worker-deploy",
         serial_key: `worker-deploy:${REPO}@main:api`,
@@ -512,7 +536,7 @@ describe("the execution's source", () => {
 
   const sourceRows = (h: Harness) =>
     h.rows(
-      "select run, source_remote, source_commit, source_base from executions order by run",
+      "select run, source_remote, source_commit, source_base from mameko_executions order by run",
     ) as { run: string; source_remote: string | null; source_commit: string | null }[];
 
   /** The test catalogue with `check` requiring `Workspace`; `lint` requires none. */
@@ -574,8 +598,8 @@ describe("the execution's source", () => {
       status: 400,
       code: "invalid_inputs",
     });
-    expect(h.rows("select id from executions")).toEqual([]);
-    expect(h.rows("select reason from shed")).toEqual([
+    expect(h.rows("select id from mameko_executions")).toEqual([]);
+    expect(h.rows("select reason from mameko_shed")).toEqual([
       { reason: "invalid source: source.commit" },
     ]);
   });

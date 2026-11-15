@@ -9,6 +9,7 @@ import {
   LivenessMonitor as MamekoLivenessMonitor,
   PoolController as MamekoPoolController,
 } from "@fractalboxdev/mameko-host-cloudflare";
+import { ControlPool } from "@fractalboxdev/mameko-host-cloudflare";
 import { PoolContainer } from "@fractalboxdev/mameko-host-cloudflare/containers";
 import { describe, expect, it } from "vitest";
 import { POOL_DECLARATIONS } from "../../src/pools.ts";
@@ -75,8 +76,22 @@ describe("fd deploy and the control plane's components", () => {
         )?.bindings ?? []
       ).map((b) => [b.name, b.class_name]),
     );
-    expect(Object.keys(POOL_DECLARATIONS).sort()).toEqual(["agent", "browser", "lean", "release"]);
+    expect(Object.keys(POOL_DECLARATIONS).sort()).toEqual([
+      "agent",
+      "browser",
+      "control",
+      "lean",
+      "release",
+    ]);
+    // The `control` pool's container is the pool controller's own binding, a mameko `ControlPool` with no Container
+    // class (MAMEKO-EXEC-057).
+    expect(doBindings[POOL_DECLARATIONS["control"]!.container]).toBe("PoolController");
+    expect(containers).not.toContain("PoolController");
+    expect(
+      (exported["PoolController"] as { prototype: object }).prototype instanceof ControlPool,
+    ).toBe(true);
     for (const [pool, declaration] of Object.entries(POOL_DECLARATIONS)) {
+      if (pool === "control") continue;
       const className = doBindings[declaration.container]!;
       expect(containers, pool).toContain(className);
       expect(declaration.max_instances, pool).toBe(instances[className]);
@@ -89,7 +104,7 @@ describe("fd deploy and the control plane's components", () => {
     expect(typeof exported["ContainerProxy"]).toBe("function");
   });
 
-  it("[FD-ARCH-001] the deployed Worker registers each Container pool as a cloudflare executor once it holds the launch signing key, and none without it", async () => {
+  it("[FD-ARCH-001] the deployed Worker registers each Container pool as a cloudflare executor once it holds the launch signing key, and the control pool alone without it", async () => {
     const withKey = account({ ...SECRETS, LAUNCH_SIGNING_KEY: await launchSigningKey() });
     expect((await withKey.deploy()).ok).toBe(true);
     const mf = await withKey.serve();
@@ -97,7 +112,9 @@ describe("fd deploy and the control plane's components", () => {
       await (await mf.dispatchFetch("https://control-plane.example/")).arrayBuffer();
       const db = await mf.getD1Database("DB");
       const { results } = await db
-        .prepare("select executor_id, kind, slots_json from executors where kind = 'cloudflare'")
+        .prepare(
+          "select executor_id, kind, slots_json from mameko_executors where kind = 'cloudflare'",
+        )
         .all<{ executor_id: string; kind: string; slots_json: string }>();
       expect(
         Object.fromEntries(results.map((r) => [r.executor_id, JSON.parse(r.slots_json).total])),
@@ -117,9 +134,9 @@ describe("fd deploy and the control plane's components", () => {
       await (await bare.dispatchFetch("https://control-plane.example/")).arrayBuffer();
       const db = await bare.getD1Database("DB");
       const { results } = await db
-        .prepare("select executor_id from executors where kind = 'cloudflare'")
+        .prepare("select executor_id from mameko_executors where kind = 'cloudflare'")
         .all();
-      expect(results).toEqual([]);
+      expect(results).toEqual([{ executor_id: "control" }]);
     } finally {
       await bare.dispose();
     }

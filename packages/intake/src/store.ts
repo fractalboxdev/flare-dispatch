@@ -390,9 +390,9 @@ const FACTS = `select r.run, r.label, r.sha, r.attempt, r.class, e.status, e.rea
     p.executor_id, p.cloud_won,
     s.execution_id is not null as reserved, s.hold_micro_usd, s.state as reservation_state, s.metered_micro_usd
   from intake_records r
-  join executions e on e.id = r.execution_id
-  left join placements p on p.execution_id = r.execution_id
-  left join reservations s on s.execution_id = r.execution_id
+  join mameko_executions e on e.id = r.execution_id
+  left join mameko_placements p on p.execution_id = r.execution_id
+  left join mameko_reservations s on s.execution_id = r.execution_id
   where r.execution_id = ?`;
 
 const factsOfRow = (f: FactsRow): ExecutionRecordFacts => ({
@@ -469,7 +469,7 @@ const fromRow = (r: Row): RecordWithStatus => ({
 const SELECT = `select r.*,
     coalesce(e.status, case when h.execution_id is not null then '${HELD_STATUS}' end) as status
   from intake_records r
-  left join executions e on e.id = r.execution_id
+  left join mameko_executions e on e.id = r.execution_id
   left join intake_held h on h.execution_id = r.execution_id`;
 
 const RECORD_COLUMNS = `execution_id, trigger, run, label, repo, sha, ref, inputs_json,
@@ -549,7 +549,7 @@ export const d1IntakeStore = (db: D1Like) =>
     hold: (r, held) =>
       query(async () => {
         const { sha256, requestDigest } = held.admit.dedup;
-        const known = `exists (select 1 from dedup_keys where sha256 = ?)`;
+        const known = `exists (select 1 from mameko_dedup_keys where sha256 = ?)`;
         // One batch, which D1 runs atomically: the held row goes in only while no admitted or held execution has the
         // key, and the record only when its held row did.
         const results = await db.batch([
@@ -576,7 +576,7 @@ export const d1IntakeStore = (db: D1Like) =>
             .bind(...recordValues(r), r.executionId),
           db
             .prepare(
-              `select execution_id, request_digest from dedup_keys where sha256 = ?
+              `select execution_id, request_digest from mameko_dedup_keys where sha256 = ?
                union all
                select execution_id, request_digest from intake_held where sha256 = ?`,
             )
@@ -629,9 +629,9 @@ export const d1IntakeStore = (db: D1Like) =>
         db
           .prepare(
             `update intake_records set eligible_kinds =
-               coalesce((select eligible_kinds from placements where execution_id = ?), '[]')
+               coalesce((select eligible_kinds from mameko_placements where execution_id = ?), '[]')
              where execution_id = ?
-             returning exists (select 1 from placements where execution_id = ?) as placed`,
+             returning exists (select 1 from mameko_placements where execution_id = ?) as placed`,
           )
           .bind(id, id, id)
           .all(),
@@ -671,7 +671,7 @@ export const d1IntakeStore = (db: D1Like) =>
       query(() =>
         db
           .prepare(
-            `select distinct supersession_key as key from executions
+            `select distinct supersession_key as key from mameko_executions
              where scope_id = ? and status in ('pending', 'running')
                and substr(supersession_key, 1, length(?)) = ?
              order by supersession_key`,
@@ -686,8 +686,8 @@ export const d1IntakeStore = (db: D1Like) =>
             `select
                coalesce(sum(case when s.state = 'settled' then coalesce(s.metered_micro_usd, 0)
                                  when s.state in ('held', 'unresolved') then s.hold_micro_usd else 0 end), 0) as spent,
-               (select hold_micro_usd from reservations where execution_id = ?) as first_hold
-             from intake_records r join reservations s on s.execution_id = r.execution_id
+               (select hold_micro_usd from mameko_reservations where execution_id = ?) as first_hold
+             from intake_records r join mameko_reservations s on s.execution_id = r.execution_id
              where r.family_root = ?`,
           )
           .bind(root, root)

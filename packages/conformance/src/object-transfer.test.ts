@@ -1,7 +1,7 @@
 // How cache and artifact bytes move on the composed control plane: the control plane Worker under workerd through
 // Miniflare, on a deploy that holds the object-store presign token. A device holds a pull request execution's lease over
 // a signed socket and asks the `ExecutorChannel` for URLs with `exec.presign`; the channel signs each object it allows
-// with FlareDispatch's object-store presigner (MAMEKO-HOST-051), so the bytes go between the executor and R2's S3
+// with FlareDispatch's object-store presigner (MAMEKO-HOST-053), so the bytes go between the executor and R2's S3
 // endpoint. The Worker's own routes take no artifact, cache or log bytes but the compile-cache route's, which streams
 // an object of at most 100 MiB into R2 (specs/cache-artifacts.md FD-CACHE-047, FD-CACHE-053, FD-CACHE-056).
 import { createHash, createHmac } from "node:crypto";
@@ -172,7 +172,7 @@ const pullRequestLease = async (): Promise<Lease> => {
     .bind(JSON.stringify({ _tag: "PullRequest", number: 47 }), id)
     .run();
   await d1
-    .prepare("update executions set deadline_at = ? where id = ?")
+    .prepare("update mameko_executions set deadline_at = ? where id = ?")
     .bind(Date.now() + 3_600_000, id)
     .run();
   const socket = await connect(plane, executorId, device.keys);

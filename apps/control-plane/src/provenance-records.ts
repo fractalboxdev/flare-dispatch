@@ -120,7 +120,7 @@ export const d1StatementRecords = (db: D1Like): Layer.Layer<StatementRecords> =>
     deviceKey: (keyid) =>
       Effect.gen(function* () {
         const devices = yield* rows<ExecutorRow>(
-          `select executor_id, device_public_key, code_hash, attested_at, revoked_at from executors
+          `select executor_id, device_public_key, code_hash, attested_at, revoked_at from mameko_executors
            where kind = 'device' and device_public_key is not null`,
         );
         for (const row of devices) {
@@ -139,10 +139,10 @@ export const d1StatementRecords = (db: D1Like): Layer.Layer<StatementRecords> =>
     issued: (executionId, epoch) =>
       Effect.map(
         rows<{ readonly executor_id: string }>(
-          `select executor_id from placements
+          `select executor_id from mameko_placements
              where execution_id = ?1 and epoch = ?2 and state in ('leased', 'accepted') and executor_id is not null
            union all
-           select executor_id from lease_records where execution_id = ?1 and epoch = ?2
+           select executor_id from mameko_lease_records where execution_id = ?1 and epoch = ?2
            union all
            select executor_id from fd_local_registrations where execution_id = ?1 and epoch = ?2
            limit 1`,
@@ -154,7 +154,7 @@ export const d1StatementRecords = (db: D1Like): Layer.Layer<StatementRecords> =>
     currentEpoch: (executionId) =>
       Effect.map(
         rows<{ readonly source: string; readonly epoch: number; readonly leases: number }>(
-          `select 'placement' as source, epoch, leases from placements where execution_id = ?1
+          `select 'placement' as source, epoch, leases from mameko_placements where execution_id = ?1
            union all
            select 'registration' as source, epoch, 0 as leases from fd_local_registrations where execution_id = ?1`,
           executionId,

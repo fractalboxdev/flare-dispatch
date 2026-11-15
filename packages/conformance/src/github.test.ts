@@ -104,7 +104,7 @@ describe("the installation quota's key", () => {
     const rows = async () =>
       (
         await db
-          .prepare("select kind, limit_key, state from outbox where execution_id = ?")
+          .prepare("select kind, limit_key, state from mameko_outbox where execution_id = ?")
           .bind(executionId)
           .all<{ kind: string; limit_key: string; state: string }>()
       ).results;

@@ -2,14 +2,16 @@
 // executions of `spec-drift-pr` are leased at epoch 1 to one cloud executor: a `success` whose staged-write manifest
 // is in the artifact store at that epoch, a `success` that staged nothing, and a `failure` whose manifest is stored.
 // For each, the executor channel's accept compare-and-set handles the `exec.result` (mameko's channel over D1's
-// placement store), the control plane's channel step `prProposeOnResult` runs on the same frame, and the `Execution`
-// workflow's `apply-outbox` stage writes the outcome. A second run sends every frame again and repeats both steps over
-// the same D1, as a redelivered result and an engine that lost its journal entries run them.
+// placement store) with the rows generated `on: accepted` as the channel builds them, from the control plane's
+// `acceptedPayload` over the staged write read before the accept, so the row is inserted in the accept's transaction;
+// then the `Execution` workflow's `apply-outbox` stage writes the outcome. A second run sends every frame again and
+// repeats both steps over the same D1, as a redelivered result and an engine that lost its journal entries run them.
 import { STAGED_WRITE_MANIFEST, type Manifest } from "@fractalboxdev/flare-dispatch-agentic";
 import { artifactPath } from "@fractalboxdev/flare-dispatch-cache";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
 import {
+  acceptedIntentRows,
   ExecutionSteps,
   handleExecutorMessageWith,
   type ChannelReply,
@@ -23,8 +25,8 @@ import type {
   ReplayEffect,
   ReplayWorkflow,
 } from "../../../../packages/ops/src/verification/harness.ts";
-import { executionConfig } from "../../src/config.ts";
-import { prProposeOnResult, type PrProposeStores } from "../../src/pr-propose.ts";
+import { channelConfig, executionConfig } from "../../src/config.ts";
+import { AcceptedPayloads, type PrProposeStores } from "../../src/pr-propose.ts";
 
 type TestD1 = Awaited<ReturnType<typeof migratedD1>>;
 
@@ -92,15 +94,17 @@ export interface Journal {
   readonly stores: PrProposeStores;
   readonly acks: ChannelReply["status"][];
   readonly recorded: string[];
+  /** The executions whose `pr.propose` row exists once the accept returns, before `apply-outbox` runs. */
+  readonly proposedAtAccept: string[];
 }
 
 /** Every outbox, execution and placement row, keyed by table and id, with its full content. */
 const snapshot = (db: TestD1): ReadonlyMap<string, string> =>
   new Map(
     [
-      ["outbox", "select * from outbox"],
-      ["executions", "select * from executions"],
-      ["placements", "select * from placements"],
+      ["outbox", "select * from mameko_outbox"],
+      ["executions", "select * from mameko_executions"],
+      ["placements", "select * from mameko_placements"],
     ].flatMap(([table, sql]) =>
       (db.sqlite.prepare(sql!).all() as Record<string, unknown>[]).map(
         (r) => [`${table} ${r["id"] ?? r["execution_id"]}`, JSON.stringify(r)] as const,
@@ -115,12 +119,12 @@ const leased = async (): Promise<Journal> => {
   for (const e of EXECUTIONS) {
     db.sqlite
       .prepare(
-        `insert into executions (id, scope_id, run, class, status, enqueued_at) values (?, 'acme/app', 'spec-drift-pr', 'batch', 'running', ?)`,
+        `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at) values (?, 'acme/app', 'spec-drift-pr', 'batch', 'running', ?)`,
       )
       .run(e.id, NOW);
     db.sqlite
       .prepare(
-        `insert into placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, ?)`,
+        `insert into mameko_placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, ?)`,
       )
       .run(e.id, EPOCH, EXECUTOR);
     if (e.staged)
@@ -129,25 +133,51 @@ const leased = async (): Promise<Journal> => {
         new TextEncoder().encode(JSON.stringify(MANIFEST)),
       );
   }
-  return { db, stores: { db, artifacts: bucket }, acks: [], recorded: [] };
+  return { db, stores: { db, artifacts: bucket }, acks: [], recorded: [], proposedAtAccept: [] };
 };
 
 /** Sends every execution's result through the channel and the control plane's step, then runs apply-outbox. */
 export const accept = async (journal: Journal | null) => {
   const j = journal ?? (await leased());
   const before = snapshot(j.db);
+  const config = channelConfig(profile);
+  const payloads = new AcceptedPayloads(() => j.stores.artifacts);
   for (const e of EXECUTIONS) {
-    const frame = frameOf(e.id, e.status);
-    const reply = await Effect.runPromise(
-      handleExecutorMessageWith(JSON.parse(frame) as ExecutorMessage, {
-        executorId: EXECUTOR,
-        floor: 0,
-        notApplicableDetails: [],
-        record: (id, epoch) => Effect.sync(() => void j.recorded.push(`${id}@${epoch}`)),
-      }).pipe(Effect.provide(d1PlacementStore(j.db))),
+    const message = JSON.parse(frameOf(e.id, e.status)) as ExecutorMessage;
+    const reply = await payloads.around(message, () =>
+      Effect.runPromise(
+        handleExecutorMessageWith(message, {
+          executorId: EXECUTOR,
+          floor: 0,
+          notApplicableDetails: [],
+          // The rows generated `on: accepted`, inserted only when this accept commits (MAMEKO-OUT-060).
+          acceptedRows: (id, outcome) =>
+            Effect.promise(() =>
+              acceptedIntentRows({
+                intents: {
+                  kinds: config.acceptedKinds ?? {},
+                  payload: (kind, execution) => payloads.payload(kind, execution),
+                },
+                executionId: id,
+                scopeId: "acme/app",
+                run: "spec-drift-pr",
+                className: "batch",
+                classRank: config.classRanks?.["batch"] ?? 0,
+                outcome,
+                now: NOW + 1_000,
+              }),
+            ),
+          record: (id, epoch) => Effect.sync(() => void j.recorded.push(`${id}@${epoch}`)),
+        }).pipe(Effect.provide(d1PlacementStore(j.db))),
+      ),
     );
     if (reply !== null) j.acks.push(reply.status);
-    await Effect.runPromise(prProposeOnResult(j.stores, profile, frame, EXECUTOR, NOW + 1_000));
+    if (
+      j.db.sqlite
+        .prepare("select 1 from mameko_outbox where kind = 'pr.propose' and execution_id = ?")
+        .all(e.id).length > 0
+    )
+      j.proposedAtAccept.push(e.id);
     await Effect.runPromise(
       ExecutionSteps.use((steps) => steps.applyOutbox(e.id, outcomeOf(e.status), EPOCH)).pipe(
         Effect.provide(

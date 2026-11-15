@@ -305,8 +305,9 @@ describe("live deploy target", () => {
     ]);
   });
 
-  it("[FD-OPS-050] the floor canary does not apply to a deploy with no Container class, and fails where the coordinator has none to run", async () => {
-    const { layer } = layerFor(world());
+  it("[FD-OPS-050] the floor canary does not apply to a deploy with no Container class, and fails without the operator's Access service token, which its routes serve", async () => {
+    const w = world();
+    const { layer } = layerFor(w);
     expect(await use(layer, (t) => t.floorCanary([worker]))).toMatchObject({
       status: "not-applicable",
     });
@@ -314,8 +315,9 @@ describe("live deploy target", () => {
       ...worker,
       config: { ...worker.config, containers: [{ class_name: "LeanPool" }] },
     };
-    expect(await use(layer, (t) => t.floorCanary([withContainers]))).toMatchObject({
-      status: "failed",
-    });
+    await expect(use(layer, (t) => t.floorCanary([withContainers]))).rejects.toThrow(
+      "FD_ACCESS_CLIENT_ID and FD_ACCESS_CLIENT_SECRET are not set",
+    );
+    expect(w.calls.filter((c) => c.includes("/v1/ops/floor-canary"))).toEqual([]);
   });
 });

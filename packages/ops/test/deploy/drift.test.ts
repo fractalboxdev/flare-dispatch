@@ -22,6 +22,7 @@ import {
   alarmPortFromEnv,
   APP_PERMISSIONS,
   containerClassOf,
+  containerPools,
   placeholderOverlay,
   requiredPorts,
 } from "../../src/index.ts";
@@ -101,7 +102,7 @@ describe("the drift check over the rendered control-plane template", () => {
     }
   });
 
-  it("[FD-OPS-020] [FD-PROF-033] fails a deploy in which a pool's admission cap is at or above its Container class's max_instances, naming the pool", async () => {
+  it("[FD-OPS-020] [FD-PROF-033] fails a deploy in which a Container pool's admission cap is at or above its Container class's max_instances, naming the pool", async () => {
     expect(poolAdmissionCaps).toEqual({
       lean: { admission_cap: 48 },
       agent: { admission_cap: 8 },
@@ -110,7 +111,10 @@ describe("the drift check over the rendered control-plane template", () => {
       control: { admission_cap: 16 },
     });
 
-    for (const [pool, { admission_cap: cap }] of Object.entries(poolAdmissionCaps)) {
+    // The `control` pool has no Container class, so its cap has no `max_instances` to stay below.
+    expect(containerPools()).toEqual(["lean", "agent", "browser", "release"]);
+    for (const pool of containerPools()) {
+      const cap = poolAdmissionCaps[pool]!.admission_cap;
       const cls = containerClassOf(pool);
       // One above the cap passes; at the cap and below it fail.
       expect(staticFindings(withMax(cls, cap + 1))).toEqual([]);

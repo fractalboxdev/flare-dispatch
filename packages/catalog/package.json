@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./runs": "./src/runs.ts",
+    "./control-runs": "./src/control-runs.ts",
     "./run-digests": "./src/run-digests.json"
   },
   "scripts": {

@@ -24,7 +24,7 @@ const cancelThrough = (db: TestD1, executionId: string) => {
 };
 
 const statusOf = (db: TestD1, executionId: string) =>
-  db.sqlite.prepare("select status, reason from executions where id = ?").get(executionId);
+  db.sqlite.prepare("select status, reason from mameko_executions where id = ?").get(executionId);
 
 describe("the API's execution cancel", () => {
   it("records a live execution cancelled(operator-cancel) and cancels its workflow and lease", async () => {

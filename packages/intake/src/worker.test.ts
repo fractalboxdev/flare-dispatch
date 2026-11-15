@@ -136,7 +136,7 @@ describe("the intake routes on the live Layers", () => {
     );
     expect(r!.status).toBe(202);
     expect((await bodyOf(r)).executions).toHaveLength(2);
-    const executions = w.db.sqlite.prepare("select run, class from executions order by run").all();
+    const executions = w.db.sqlite.prepare("select run, class from mameko_executions order by run").all();
     expect(executions).toEqual([
       { run: "check", class: "interactive" },
       { run: "lint", class: "batch" },
@@ -151,7 +151,7 @@ describe("the intake routes on the live Layers", () => {
   it("[FD-PROF-013] [FD-PROF-014] a gating run whose check the base branch's ruleset requires resolves to required", async () => {
     const w = await worker(DEFAULT_MANIFEST, ["flare-dispatch/check:ci"]);
     await w.handle(await signedWebhook("pull_request", pullRequestPayload()), "webhooks/github");
-    expect(w.db.sqlite.prepare("select run, class from executions order by run").all()).toEqual([
+    expect(w.db.sqlite.prepare("select run, class from mameko_executions order by run").all()).toEqual([
       { run: "check", class: "required" },
       { run: "lint", class: "batch" },
     ]);
@@ -162,7 +162,7 @@ describe("the intake routes on the live Layers", () => {
     const w = await worker('{"version": 2}');
     await w.handle(await signedWebhook("pull_request", pullRequestPayload()), "webhooks/github");
     expect(w.calls).toContain(`POST /repos/${REPO}/check-runs`);
-    expect(w.db.sqlite.prepare("select reason from shed order by id").all()).toEqual([
+    expect(w.db.sqlite.prepare("select reason from mameko_shed order by id").all()).toEqual([
       { reason: "manifest: invalid" },
     ]);
   });

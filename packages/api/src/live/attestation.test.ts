@@ -195,7 +195,7 @@ describe("the enrollment route's code hash", () => {
     );
     expect(Exit.isSuccess(exit), JSON.stringify(exit)).toBe(true);
     const row = await (db as unknown as D1Database)
-      .prepare("select code_hash from executors where executor_id = ?")
+      .prepare("select code_hash from mameko_executors where executor_id = ?")
       .bind("code-hash-device")
       .first<{ code_hash: string | null }>();
     return row?.code_hash;

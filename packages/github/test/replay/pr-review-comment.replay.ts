@@ -103,7 +103,7 @@ export const reviews = async (journal: Plane | null) => {
   const p = journal ?? (await plane());
   const ghCalls = p.gh.calls.length;
   const sideCalls = p.side.calls.length;
-  const outbox = new Set(p.rows<{ id: string }>("select id from outbox").map((r) => r.id));
+  const outbox = new Set(p.rows<{ id: string }>("select id from mameko_outbox").map((r) => r.id));
 
   for (const id of [FIRST, SECOND]) {
     const intents = await review(id);
@@ -122,7 +122,7 @@ export const reviews = async (journal: Plane | null) => {
       .filter((call) => COMMENT_CALLS.test(call))
       .map((call): ReplayEffect => ({ kind: "github", key: call })),
     ...p
-      .rows<{ id: string }>("select id from outbox")
+      .rows<{ id: string }>("select id from mameko_outbox")
       .filter((r) => !outbox.has(r.id))
       .map((r): ReplayEffect => ({ kind: "intent", key: r.id })),
   ];

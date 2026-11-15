@@ -352,13 +352,13 @@ describe("phase-gate records from the control plane", () => {
     const finishedAt = over.finishedAt ?? NOW - DAY;
     await t.db
       .prepare(
-        "insert into executions (id, scope_id, run, class, status, enqueued_at, finished_at) values (?, 'acme/app', ?, ?, ?, ?, ?)",
+        "insert into mameko_executions (id, scope_id, run, class, status, enqueued_at, finished_at) values (?, 'acme/app', ?, ?, ?, ?, ?)",
       )
       .bind(id, run, over.cls ?? "required", over.status ?? "success", finishedAt - ms, finishedAt)
       .run();
     await t.db
       .prepare(
-        "insert into placements (execution_id, state, epoch, accepted_kind) values (?, 'accepted', 1, ?)",
+        "insert into mameko_placements (execution_id, state, epoch, accepted_kind) values (?, 'accepted', 1, ?)",
       )
       .bind(id, kind)
       .run();

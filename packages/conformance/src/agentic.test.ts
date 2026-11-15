@@ -90,7 +90,7 @@ const freshPlane = async () => {
   await runD1Migrations(db);
   await db
     .prepare(
-      `insert into executors (executor_id, kind, posture_tier, labels_json, slots_json)
+      `insert into mameko_executors (executor_id, kind, posture_tier, labels_json, slots_json)
        values ('e1', 'cloudflare', 'unmanaged', '[]', '{}')`,
     )
     .run();
@@ -130,13 +130,13 @@ const checkout = async () => {
 const seedExecution = async (db: D1Like, id: string, scope: string, run: string, epoch: number) => {
   await db
     .prepare(
-      "insert into executions (id, scope_id, run, class, status, enqueued_at) values (?, ?, ?, 'interactive', 'running', 0)",
+      "insert into mameko_executions (id, scope_id, run, class, status, enqueued_at) values (?, ?, ?, 'interactive', 'running', 0)",
     )
     .bind(id, scope, run)
     .run();
   await db
     .prepare(
-      "insert into placements (execution_id, state, epoch, executor_id, accepted_epoch) values (?, 'leased', ?, 'e1', null)",
+      "insert into mameko_placements (execution_id, state, epoch, executor_id, accepted_epoch) values (?, 'leased', ?, 'e1', null)",
     )
     .bind(id, epoch)
     .run();
@@ -149,7 +149,7 @@ const acceptSuccess = (db: D1Like, id: string, epoch: number) =>
       yield* Effect.promise(() =>
         db
           .prepare(
-            "update placements set state = 'accepted', epoch = ?, accepted_epoch = ? where execution_id = ?",
+            "update mameko_placements set state = 'accepted', epoch = ?, accepted_epoch = ? where execution_id = ?",
           )
           .bind(epoch, epoch, id)
           .run(),
@@ -179,7 +179,7 @@ const stageIntent = (
   const json = JSON.stringify(payload);
   return db
     .prepare(
-      `insert into staged_intents (execution_id, epoch, intent_key, kind, limit_key, payload_json, payload_digest, effect_class)
+      `insert into mameko_staged_intents (execution_id, epoch, intent_key, kind, limit_key, payload_json, payload_digest, effect_class)
        values (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
@@ -432,7 +432,7 @@ const outboxRows = (db: D1Like) =>
     kind: string;
     state: string;
     payload_json: string;
-  }>(db, "select execution_id, intent_key, kind, state, payload_json from outbox order by id");
+  }>(db, "select execution_id, intent_key, kind, state, payload_json from mameko_outbox order by id");
 
 describe("an agentic recipe's repository writes on the composed control plane", () => {
   it("reach GitHub only as outbox rows of the accepted epoch, pr.propose and pr.close through the agentic appliers", async () => {
@@ -452,7 +452,7 @@ describe("an agentic recipe's repository writes on the composed control plane", 
       files: [{ path: "specs/api.md", content: text }],
     });
     await runSpecDrift(plane, { id: "x1", epoch: 1, scope: "o/r" }, drifted, drift("epoch one\n"));
-    await plane.db.prepare("update placements set epoch = 2 where execution_id = 'x1'").run();
+    await plane.db.prepare("update mameko_placements set epoch = 2 where execution_id = 'x1'").run();
     await runSpecDrift(plane, { id: "x1", epoch: 2, scope: "o/r" }, drifted, drift("epoch two\n"));
 
     // x2 is in sync, so the run closes the open spec-drift pull request.
@@ -524,7 +524,7 @@ describe("an agentic recipe's repository writes on the composed control plane", 
     const proposed = JSON.parse(queued[0]!.payload_json) as { manifest: Manifest };
     const staged = await rows<{ epoch: number; committed: number; payload_json: string }>(
       plane.db,
-      "select epoch, committed, payload_json from staged_intents where execution_id = 'x1' order by epoch",
+      "select epoch, committed, payload_json from mameko_staged_intents where execution_id = 'x1' order by epoch",
     );
     expect(staged.map((r) => [r.epoch, r.committed])).toEqual([
       [1, 0],
@@ -610,7 +610,7 @@ describe("the staged write the executor builds, as the composed control plane co
     await seedExecution(plane.db, "x1", "o/r", "spec-drift-pr", 1);
     await plane.db
       .prepare(
-        "update placements set state = 'accepted', accepted_epoch = 1 where execution_id = 'x1'",
+        "update mameko_placements set state = 'accepted', accepted_epoch = 1 where execution_id = 'x1'",
       )
       .run();
     const github = fakeGithub({ "o/r": { base } });

@@ -107,7 +107,7 @@ export const seed = async (db: TestD1, id: string, label: string, parent: string
   );
   db.sqlite
     .prepare(
-      `insert into executions (id, scope_id, run, class, status, enqueued_at, parent_id)
+      `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at, parent_id)
        values (?, 'acme/app', ?, 'required', 'running', ?, ?)`,
     )
     .run(id, RUN, NOW, parent);
@@ -163,7 +163,7 @@ export const simulateChildConclusions = async (
       clock += 60_000;
       await drain(db, gh, clock);
       const open = db.sqlite
-        .prepare("select count(*) as n from outbox where state in ('pending', 'in_flight')")
+        .prepare("select count(*) as n from mameko_outbox where state in ('pending', 'in_flight')")
         .get() as { n: number };
       if (open.n === 0) return;
     }
@@ -206,7 +206,7 @@ export const simulateChildConclusions = async (
     (
       db.sqlite
         .prepare(
-          "select execution_id from outbox where kind = 'check.conclude' and state = 'applied'",
+          "select execution_id from mameko_outbox where kind = 'check.conclude' and state = 'applied'",
         )
         .all() as { execution_id: string }[]
     ).map((r) => r.execution_id),
@@ -227,7 +227,7 @@ export const simulateChildConclusions = async (
   const cpRows = new Set(
     (
       db.sqlite
-        .prepare("select execution_id from outbox where intent_key = 'cp:check:conclude'")
+        .prepare("select execution_id from mameko_outbox where intent_key = 'cp:check:conclude'")
         .all() as { execution_id: string }[]
     ).map((r) => r.execution_id),
   );

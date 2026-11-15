@@ -3,8 +3,15 @@
 import { createHash, createHmac } from "node:crypto";
 import { lookupRun, type CatalogEntry } from "@fractalboxdev/flare-dispatch-catalog";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
+import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
+import { launchGrants, mintGrants } from "@fractalboxdev/mameko-host-cloudflare";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
+import type { ControlPlaneEnv } from "../src/config.ts";
 import { signDeployClaimToken } from "../src/deploy-claim.ts";
+import { revokeLeaseCredentials } from "../src/lease.ts";
+import { revokeDevice } from "../src/operator-revoke.ts";
+import { mintPoolCredential, poolSettings } from "../src/pools.ts";
 import {
   leaseModelCredentials,
   MODEL_LEASE_CREDENTIAL,
@@ -64,14 +71,14 @@ const plane = async (
   for (const [id, epoch] of Object.entries(executions)) {
     await db
       .prepare(
-        `insert into executions (id, scope_id, run, class, status, enqueued_at, deadline_at)
+        `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at, deadline_at)
          values (?, ?, 'pr-review', 'interactive', 'running', ?, ?)`,
       )
       .bind(id, REPO, NOW - 60_000, DEADLINE)
       .run();
     await db
       .prepare(
-        "insert into placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, null)",
+        "insert into mameko_placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, null)",
       )
       .bind(id, epoch)
       .run();
@@ -90,7 +97,7 @@ const plane = async (
     (
       await db
         .prepare(
-          "select max_micro_usd as max, settled_micro_usd as settled from model_calls where execution_id = ?",
+          "select max_micro_usd as max, settled_micro_usd as settled from mameko_model_calls where execution_id = ?",
         )
         .bind(id)
         .all()
@@ -124,16 +131,18 @@ const call = async (
     method?: string;
     path?: string;
     at?: number;
+    authorization?: string;
     fetch?: typeof globalThis.fetch;
   } = {},
 ) => {
   const method = options.method ?? "POST";
+  const authorization = options.authorization ?? (bearer === null ? null : `Bearer ${bearer}`);
   const response = await modelGatewayFetch(
     new Request(`${ORIGIN}${options.path ?? "/v1/model/completions"}`, {
       method,
       headers: {
         "content-type": "application/json",
-        ...(bearer === null ? {} : { authorization: `Bearer ${bearer}` }),
+        ...(authorization === null ? {} : { authorization }),
       },
       ...(method === "POST" ? { body: options.raw ?? JSON.stringify(options.body ?? BODY) } : {}),
     }),
@@ -187,7 +196,10 @@ describe("the model route", () => {
       await call(env, await token({ executionId: "01JMODELUNKNOWN00000000000" })),
     ).toMatchObject({ status: 401, body: { error: "lease_stale" } });
     expect((await call(env, await token({ epoch: 2 }))).status).toBe(200);
-    await db.prepare("update executions set status = 'success' where id = ?").bind(EXECUTION).run();
+    await db
+      .prepare("update mameko_executions set status = 'success' where id = ?")
+      .bind(EXECUTION)
+      .run();
     expect(await call(env, await token({ epoch: 2 }))).toMatchObject({
       status: 401,
       body: { error: "lease_stale", message: "execution is terminal" },
@@ -308,6 +320,101 @@ describe("the model route", () => {
     expect(
       await leaseModelCredentials({ MODEL_LEASE_SECRET: "" }, entry("pr-review"), scope),
     ).toEqual({});
+  });
+
+  it("[FD-AGT-010] MAMEKO-HOST-050 MAMEKO-HOST-051 a Container launch carries the lease's model-lease token as the model-gateway grant's credential, which the model route accepts", async () => {
+    const { env, ai } = await plane({ [EXECUTION]: 3 });
+    const deploy = { ...env, PUBLIC_ORIGIN: ORIGIN } as unknown as ControlPlaneEnv;
+    const settings = poolSettings(deploy, buildProfile("production"));
+    expect(settings.mintedGrants).toEqual([MODEL_LEASE_CREDENTIAL]);
+    // The launch's grants as mameko's controller builds them, each minted grant through the controller's minter.
+    const grants = await mintGrants(
+      launchGrants(settings, "pr-review"),
+      settings.mintedGrants ?? [],
+      DEADLINE,
+      (grant) =>
+        mintPoolCredential(deploy)(grant, {
+          executionId: EXECUTION,
+          epoch: 3,
+          deadlineAt: DEADLINE,
+        }),
+    );
+    const model = grants.agent.find((g) => g.name === MODEL_LEASE_CREDENTIAL);
+    expect(model?.credential).toBe(`Bearer ${await token({ epoch: 3 })}`);
+    expect(grants.setup.every((g) => g.credential === undefined)).toBe(true);
+    expect(await call(env, null, { authorization: model!.credential! })).toEqual({
+      status: 200,
+      body: { text: "the completion" },
+    });
+    expect(ai.calls).toHaveLength(1);
+    // A deploy without the secret mints no grant, and no other grant is minted.
+    expect(
+      poolSettings({ ...deploy, MODEL_LEASE_SECRET: "" }, buildProfile("production")).mintedGrants,
+    ).toEqual([]);
+    await expect(
+      mintPoolCredential(deploy)("cf-api", {
+        executionId: EXECUTION,
+        epoch: 3,
+        deadlineAt: DEADLINE,
+      }),
+    ).rejects.toThrow("no credential minter");
+  });
+
+  it("MAMEKO-ISO-053 MAMEKO-HOST-052 refuses a revoked lease's token with lease_stale while its placement still holds the epoch", async () => {
+    const { db, env, ai } = await plane({ [EXECUTION]: 1, "01JMODELOTHER0000000000000": 1 });
+    expect((await call(env, await token())).status).toBe(200);
+    await Effect.runPromise(revokeLeaseCredentials(db, EXECUTION, 1, NOW));
+    expect(await call(env, await token())).toMatchObject({
+      status: 401,
+      body: { error: "lease_stale", message: "token revoked" },
+    });
+    // Another lease's token is untouched.
+    expect(
+      (await call(env, await token({ executionId: "01JMODELOTHER0000000000000" }))).status,
+    ).toBe(200);
+    expect(ai.calls).toHaveLength(2);
+  });
+
+  it("MAMEKO-OPS-043 MAMEKO-OPS-044 MAMEKO-OPS-045 an operator's device revoke requeues the device's lease at the next epoch and revokes its model-lease token", async () => {
+    const { db, env } = await plane({ [EXECUTION]: 1 });
+    await db
+      .prepare(
+        `insert into mameko_executors (executor_id, kind, posture_tier, labels_json, slots_json)
+         values ('dev-1', 'device', 'unmanaged', '[]', '{}')`,
+      )
+      .run();
+    await db
+      .prepare("update mameko_placements set executor_id = 'dev-1' where execution_id = ?")
+      .bind(EXECUTION)
+      .run();
+    const lease = await token();
+    expect((await call(env, lease)).status).toBe(200);
+    const call_ = {
+      identity: "operator@example.com",
+      requestId: "req-1",
+      reason: "lost laptop",
+      now: NOW,
+    };
+    expect(await Effect.runPromise(revokeDevice(db, "dev-1", call_))).toEqual({
+      target: "executor:dev-1",
+    });
+    expect((await call(env, lease)).status).toBe(401);
+    const placement = (
+      await db
+        .prepare("select state, epoch from mameko_placements where execution_id = ?")
+        .bind(EXECUTION)
+        .all()
+    ).results[0] as { state: string; epoch: number };
+    expect(placement.epoch).toBe(2);
+    const revoked = (
+      await db.prepare("select execution_id, epoch from fd_lease_token_revocations").all()
+    ).results;
+    expect(revoked).toEqual([{ execution_id: EXECUTION, epoch: 1 }]);
+    // A reason outside 1 to 500 characters changes nothing.
+    const refused = await Effect.runPromise(
+      Effect.flip(revokeDevice(db, "dev-1", { ...call_, reason: "" })),
+    );
+    expect(refused).toMatchObject({ error: "reason_required" });
   });
 });
 

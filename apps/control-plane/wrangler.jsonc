@@ -104,7 +104,7 @@
     { "binding": "ARTIFACTS", "bucket_name": "{{r2.ARTIFACTS}}" },
   ],
   // The `ExecutionEngine` object calls this Worker's own `MamekoDrain` entrypoint when an execution settles, so its
-  // outcome rows go out then rather than at the next tick (MAMEKO-HOST-064). The service is this Worker's name.
+  // outcome rows go out then rather than at the next tick (MAMEKO-HOST-067). The service is this Worker's name.
   "services": [
     {
       "binding": "MAMEKO_DRAIN",
@@ -119,13 +119,14 @@
       { "name": "EPOCH_ANCHOR", "class_name": "EpochAnchor" },
       { "name": "MONITOR", "class_name": "LivenessMonitor" },
       { "name": "CACHE_LEDGER", "class_name": "CacheLedger" },
+      // One per pool, by the pool's name; the `control` pool's runs run in objects of this namespace with no Container
+      // (MAMEKO-EXEC-057), so the `control` pool's declaration names this binding as its container.
       { "name": "POOL_CONTROLLER", "class_name": "PoolController" },
       { "name": "INSTALLATION_QUOTA", "class_name": "InstallationQuota" },
       { "name": "LEAN_POOL", "class_name": "LeanPool" },
       { "name": "AGENT_POOL", "class_name": "AgentPool" },
       { "name": "BROWSER_POOL", "class_name": "BrowserPool" },
       { "name": "RELEASE_POOL", "class_name": "ReleasePool" },
-      { "name": "CONTROL_POOL", "class_name": "ControlPool" },
       // One per GitHub App installation: its tick units, one per alarm (FD-INT-067).
       { "name": "INTAKE_UNITS", "class_name": "IntakeUnits" },
       // The only writer of the private transparency log: one object, `idFromName("private")`, writing to `CACHE`
@@ -133,7 +134,7 @@
       { "name": "TRANSPARENCY_LOG", "class_name": "TransparencyLog" },
     ],
   },
-  // One Container class per cloud pool, each running the gate image; `max_instances` sits above the pool's admission
+  // One Container class per Container pool, each running the gate image; `max_instances` sits above the pool's admission
   // cap in the profile (FD-ARCH-001).
   "containers": [
     {
@@ -159,12 +160,6 @@
       "image": "../../infra/v2/Dockerfile.gate",
       "image_build_context": "../..",
       "max_instances": 16,
-    },
-    {
-      "class_name": "ControlPool",
-      "image": "../../infra/v2/Dockerfile.gate",
-      "image_build_context": "../..",
-      "max_instances": 32,
     },
   ],
   "migrations": [
@@ -192,5 +187,7 @@
     },
     { "tag": "v3", "new_sqlite_classes": ["IntakeUnits"] },
     { "tag": "v4", "new_sqlite_classes": ["TransparencyLog"] },
+    // The `control` pool runs in `PoolController` objects, so no `ControlPool` class remains.
+    { "tag": "v5", "deleted_classes": ["ControlPool"] },
   ],
 }

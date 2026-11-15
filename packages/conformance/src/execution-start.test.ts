@@ -100,7 +100,7 @@ const executionRow = async (id: string) =>
   (await (
     await db()
   )
-    .prepare("select class, status, started_at, engine_started_at from executions where id = ?")
+    .prepare("select class, status, started_at, engine_started_at from mameko_executions where id = ?")
     .bind(id)
     .first<{
       class: string;
@@ -143,7 +143,7 @@ describe("a deferred class's workflow start on the composed control plane", () =
     await (
       await db()
     )
-      .prepare("update executions set deadline_at = ? where id = ?")
+      .prepare("update mameko_executions set deadline_at = ? where id = ?")
       .bind(Date.now() + 3_600_000, id)
       .run();
 

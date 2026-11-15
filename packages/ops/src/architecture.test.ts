@@ -26,7 +26,7 @@ const complete = {
   durable_objects: {
     bindings: durableObjectClasses(0).map((c) => ({ name: c.toUpperCase(), class_name: c })),
   },
-  containers: ["LeanPool", "AgentPool", "BrowserPool", "ReleasePool", "ControlPool"].map(
+  containers: ["LeanPool", "AgentPool", "BrowserPool", "ReleasePool"].map(
     (class_name) => ({ class_name }),
   ),
   d1_databases: [{ binding: "DB" }],

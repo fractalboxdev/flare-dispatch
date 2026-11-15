@@ -47,7 +47,7 @@ describe("dispatch validation", () => {
     ).toEqual({ status: 400, code: "invalid_inputs" });
     expect(h.executions()).toEqual([]);
     expect(h.records()).toEqual([]);
-    expect(h.rows("select * from placements")).toEqual([]);
+    expect(h.rows("select * from mameko_placements")).toEqual([]);
     expect(h.sheds()).toEqual([
       { scope_id: REPO, run: "check", reason: "credential in payload: inputs.steps[0]" },
     ]);
@@ -72,7 +72,7 @@ describe("dispatch validation", () => {
     const other = await refusal(h, keyed({ sha: BASE }));
     expect(same).toEqual({ ...first, duplicate: true });
     expect(other).toEqual({ status: 409, code: "conflict", executionId: first.executionId });
-    expect(h.rows("select canonical, request_digest from dedup_keys")).toEqual([
+    expect(h.rows("select canonical, request_digest from mameko_dedup_keys")).toEqual([
       {
         canonical: `idem:${REPO}:build-7`,
         request_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
@@ -257,7 +257,7 @@ describe("dispatch to admission", () => {
     const fresh = await admit(h, authenticated({ repository: "ACME/APP", sha: HEAD }));
     expect(fresh.duplicate).toBe(false);
     expect(h.records().map((r) => r.repo)).toEqual([REPO, REPO]);
-    expect(h.rows("select canonical from dedup_keys").map((r) => r.canonical)).toEqual([
+    expect(h.rows("select canonical from mameko_dedup_keys").map((r) => r.canonical)).toEqual([
       `check:ci:${REPO}:${BASE}`,
       `check:ci:${REPO}:${HEAD}`,
     ]);

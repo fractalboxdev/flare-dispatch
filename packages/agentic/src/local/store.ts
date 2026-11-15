@@ -7,7 +7,7 @@ export class LocalStoreFailed extends Schema.TaggedError<LocalStoreFailed>()("Lo
   detail: Schema.String,
 }) {}
 
-/** What a rehearsal tested, as `local.register` carries it (MAMEKO-LOCAL-069, FD-LOCAL-072). */
+/** What a rehearsal tested, as `local.register` carries it (MAMEKO-LOCAL-070, FD-LOCAL-072). */
 export const Provenance = Schema.Struct({
   treeHash: Schema.String,
   baseCommit: Schema.String,
@@ -290,7 +290,7 @@ export const localStoreD1 = (db: D1Binding): Layer.Layer<LocalStore> => {
       }),
     heldIntents: (executionId) =>
       Effect.map(
-        all("heldIntents", "select intent_key from outbox where execution_id = ?", executionId),
+        all("heldIntents", "select intent_key from mameko_outbox where execution_id = ?", executionId),
         (rows) => new Set(rows.map((r) => r["intent_key"] as string)),
       ),
   });

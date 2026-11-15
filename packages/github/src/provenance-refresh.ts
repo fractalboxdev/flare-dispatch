@@ -40,8 +40,8 @@ const sha256Hex = (text: string) =>
  * The execution whose check run a conclusion row exists for. An execution with none has not concluded: its conclusion,
  * when applied, reads the statement as logged, so it needs no update.
  */
-const CONCLUDED = `select e.scope_id, e.class from executions e
-  where e.id = ? and exists (select 1 from outbox o where o.execution_id = e.id and o.kind = 'check.conclude')`;
+const CONCLUDED = `select e.scope_id, e.class from mameko_executions e
+  where e.id = ? and exists (select 1 from mameko_outbox o where o.execution_id = e.id and o.kind = 'check.conclude')`;
 
 /**
  * Inserts the check-run update of a logged statement for an execution with a conclusion row (FD-PROV-042), and answers

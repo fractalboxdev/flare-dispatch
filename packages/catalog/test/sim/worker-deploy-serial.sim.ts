@@ -130,14 +130,14 @@ export const simulateSerialDeploys = async (seed: number): Promise<SerialOutcome
 
   const live = () =>
     rows(
-      `select e.id, p.state, p.epoch from executions e join placements p on p.execution_id = e.id
+      `select e.id, p.state, p.epoch from mameko_executions e join mameko_placements p on p.execution_id = e.id
        where e.serial_key = ? and e.status in ('pending', 'running') order by e.enqueued_at`,
       GROUP,
     ) as { id: string; state: string; epoch: number }[];
 
   const checkSerial = (step: string) => {
     const holders = rows(
-      `select count(*) as n from executions e join placements p on p.execution_id = e.id
+      `select count(*) as n from mameko_executions e join mameko_placements p on p.execution_id = e.id
        where e.serial_key = ? and p.state = 'leased'`,
       GROUP,
     )[0]!.n as number;
@@ -178,7 +178,7 @@ export const simulateSerialDeploys = async (seed: number): Promise<SerialOutcome
       ),
     );
     shaOf.set(admitted.executionId, head);
-    const key = rows("select serial_key from executions where id = ?", admitted.executionId)[0]!
+    const key = rows("select serial_key from mameko_executions where id = ?", admitted.executionId)[0]!
       .serial_key;
     if (key !== GROUP)
       violations.push({
@@ -264,7 +264,7 @@ export const simulateSerialDeploys = async (seed: number): Promise<SerialOutcome
     const holder = [...leased.keys()][0];
     if (holder === undefined) return;
     rows(
-      "update placements set state = 'queued', epoch = epoch + 1 where execution_id = ?",
+      "update mameko_placements set state = 'queued', epoch = epoch + 1 where execution_id = ?",
       holder,
     );
     leased.delete(holder);
@@ -288,7 +288,7 @@ export const simulateSerialDeploys = async (seed: number): Promise<SerialOutcome
     }
     // A newer push cancels the older waiters of the group, never its holder (MAMEKO-ADM-075).
     reached.superseded = rows(
-      "select count(*) as n from executions where serial_key = ? and reason = 'superseded'",
+      "select count(*) as n from mameko_executions where serial_key = ? and reason = 'superseded'",
       GROUP,
     )[0]!.n as number;
   } finally {

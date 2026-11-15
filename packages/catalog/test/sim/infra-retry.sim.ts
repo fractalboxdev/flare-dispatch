@@ -3,15 +3,22 @@
 // many of its attempts in a row end with an infrastructure error, which error each is, and how the attempt after them
 // ends. The infrastructure errors are those the recipes record: a checkout that fails, a job command that cannot
 // start, a child that cannot start, and a child that ends with no verdict. Each attempt that starts runs the
-// `gate-job` recipe on a scripted host. The parent restarts a job after an infrastructure error up to the retries its
-// class gives the parent: a `release` job's declared `retries` (default 2), since `release` defers its retry bound to
-// the run, and none for any other class, whose retries are the control plane's restarts of the child execution
-// (mameko MAMEKO-ADM-083). The scenario checks that a job records `failure` with `infra: <error tag>` of its last
-// attempt exactly when its infrastructure errors outlast that allowance, and the end of the attempt after them
-// otherwise; that each restart is a new child under the attempt's dedup key; and that the parent's verdict lists every
-// job that did not succeed. `scenarios` is what the `sim` job runs (packages/ops/scripts/harness.ts).
+// `gate-job` recipe on a scripted host; a requeued child that cannot be placed ends with no verdict.
+//
+// Two layers restart a job, and for each class exactly one of them does. The control plane requeues a child execution
+// whose result is an `infra:` failure under a new epoch up to its class's retry bound (mameko MAMEKO-ADM-083,
+// FD-PROF-009): once for `required`, `interactive` and `batch` (on a device), and for `release` the `gate-job` run's
+// own declared retries, which are none. The parent restarts a `release` job as a new child up to the job's declared
+// `retries` (default 2, FD-GATE-060), and no job of another class. A child that cannot start or ends with no verdict
+// has no result for the control plane to retry, so only the parent restarts it.
+//
+// The scenario checks that a job records `failure` with `infra: <error tag>` of its last attempt exactly when its
+// infrastructure errors outlast both layers' retries, and the end of the attempt after them otherwise; that each
+// parent restart is a new child under the attempt's dedup key; and that the parent's verdict lists every job that did
+// not succeed. `scenarios` is what the `sim` job runs (packages/ops/scripts/harness.ts).
 import { isDeepStrictEqual } from "node:util";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
+import { retryBoundOf } from "@fractalboxdev/mameko-coordinator";
 import { Effect, Layer } from "effect";
 import {
   seededRandom,
@@ -31,6 +38,7 @@ import {
   runMatrix,
   type JobState,
 } from "../../src/matrix.ts";
+import { gateJobSpec } from "../../src/spec.ts";
 import { ChildStartFailed, MatrixChildren, type ChildVerdict } from "../../src/ports.ts";
 import { Outcome } from "../../src/reasons.ts";
 
@@ -66,6 +74,8 @@ interface JobPlan {
 export interface Plan {
   readonly className: string;
   readonly release: boolean;
+  /** The control plane's requeues of one child execution after an `infra:` result (MAMEKO-ADM-083). */
+  readonly requeues: number;
   readonly window: number;
   readonly jobs: readonly JobPlan[];
 }
@@ -79,6 +89,7 @@ export const plan = (seed: number): Plan => {
   return {
     className: cls.name,
     release,
+    requeues: retryBoundOf(cls.retries, gateJobSpec.retries).max,
     window: 1 + int(4),
     jobs: Array.from({ length: 1 + int(6) }, (_, i) => ({
       key: `j${i + 1}`,
@@ -92,6 +103,33 @@ export const plan = (seed: number): Plan => {
 /** The restarts the parent makes of a job after infrastructure errors, for the class it runs at. */
 const allowanceOf = (p: Plan, job: JobPlan): number =>
   p.release ? (job.declared ?? DEFAULT_RELEASE_RETRIES) : 0;
+
+/** The infrastructure errors the control plane requeues a child execution after: the `infra:` results a lease ends. */
+const requeued = (end: Infra | Final): boolean => end === "checkout" || end === "exec";
+
+/** A requeued lease's scheduled end: a requeued child that cannot be placed ends with no verdict. */
+const requeuedEnd = (end: Infra | Final): Infra | Final => (end === "start" ? "no-verdict" : end);
+
+/**
+ * Where a job's schedule ends under both layers: the attempt that ends it, and how many children the parent started.
+ * Each lease of a child takes the schedule's next attempt; the control plane requeues the child after an `infra:`
+ * result while it has requeues left, and the parent restarts the job after an infrastructure verdict while it has
+ * restarts left.
+ */
+const expectedEnd = (
+  p: Plan,
+  job: JobPlan,
+): { readonly end: Infra | Final; readonly children: number } => {
+  const at = (i: number): Infra | Final => job.infra[i] ?? job.final;
+  let next = 0;
+  for (let child = 0; ; child++) {
+    let end = at(next++);
+    for (let requeue = 0; requeued(end) && requeue < p.requeues; requeue++)
+      end = requeuedEnd(at(next++));
+    if (typeof end === "object" || child >= allowanceOf(p, job))
+      return { end, children: child + 1 };
+  }
+};
 
 /** The scripted host of one attempt: the checkout fails, the job command cannot start, or the command exits. */
 const hostOf = (command: string, end: Infra | Final): readonly Scripted[] =>
@@ -114,32 +152,45 @@ export const runScenario = (seed: number): Promise<Observation> => {
   const p = plan(seed);
   const byKey = new Map(p.jobs.map((j) => [j.key, j]));
   const starts: { key: string; dedupKey: string }[] = [];
-  const endOf = (key: string, attempt: number): Infra | Final => {
+  // Each job's next scheduled attempt: every child start and every lease of a child takes one.
+  const taken = new Map<string, number>();
+  const takeEnd = (key: string): Infra | Final => {
     const job = byKey.get(key)!;
+    const attempt = taken.get(key) ?? 0;
+    taken.set(key, attempt + 1);
     return job.infra[attempt] ?? job.final;
   };
-  const inputs = new Map<string, { input: GateJobInput; attempt: number }>();
+  const inputs = new Map<string, { input: GateJobInput; first: Infra | Final }>();
   const children = Layer.succeed(MatrixChildren, {
     start: (r) =>
       Effect.gen(function* () {
-        const attempt = starts.filter((s) => s.key === r.key).length;
         starts.push({ key: r.key, dedupKey: r.dedupKey });
-        if (endOf(r.key, attempt) === "start")
+        const first = takeEnd(r.key);
+        if (first === "start")
           return yield* new ChildStartFailed({ key: r.key, detail: "placement refused" });
-        inputs.set(r.dedupKey, { input: r.input as GateJobInput, attempt });
+        inputs.set(r.dedupKey, { input: r.input as GateJobInput, first });
         return { key: r.key, executionId: r.dedupKey };
       }),
+    // The child execution's leases: the control plane requeues it after an `infra:` result up to its class's bound,
+    // and the parent reads the result of the lease the control plane does not requeue.
     await: (handle) =>
       Effect.gen(function* () {
-        const { input, attempt } = inputs.get(handle.executionId)!;
-        const end = endOf(handle.key, attempt);
-        if (end === "no-verdict") return { _tag: "NoVerdict" } satisfies ChildVerdict;
-        const outcome = yield* runGateJob(input).pipe(
-          Effect.provide(
-            Layer.merge(fakeExec(hostOf(input.command, end)).layer, fakeArtifacts().layer),
-          ),
-        );
-        return { _tag: "Recorded", outcome } satisfies ChildVerdict;
+        const { input, first } = inputs.get(handle.executionId)!;
+        let end = first;
+        for (let requeue = 0; ; requeue++) {
+          if (end === "no-verdict") return { _tag: "NoVerdict" } satisfies ChildVerdict;
+          const outcome = yield* runGateJob(input).pipe(
+            Effect.provide(
+              Layer.merge(fakeExec(hostOf(input.command, end)).layer, fakeArtifacts().layer),
+            ),
+          );
+          if (
+            !(outcome._tag === "failure" && outcome.reason.startsWith("infra:")) ||
+            requeue >= p.requeues
+          )
+            return { _tag: "Recorded", outcome } satisfies ChildVerdict;
+          end = requeuedEnd(takeEnd(handle.key));
+        }
       }),
     cancel: () => Effect.void,
     discover: () => Effect.die("the scenario declares no discover command"),
@@ -185,28 +236,30 @@ export const observeSeed = async (seed: number): Promise<SeedResult> => {
   const failed: string[] = [];
   for (const job of p.jobs) {
     const allowance = allowanceOf(p, job);
-    const outlasted = job.infra.length > allowance;
-    const attempts = Math.min(job.infra.length, allowance) + 1;
-    const expected: Outcome = outlasted
-      ? Outcome.failure(INFRA[job.infra[allowance]!])
-      : job.final._tag === "success"
-        ? Outcome.success()
-        : Outcome.failure(`exit: ${job.final.code}`);
+    const { end, children } = expectedEnd(p, job);
+    const expected: Outcome =
+      typeof end === "string"
+        ? Outcome.failure(INFRA[end])
+        : end._tag === "success"
+          ? Outcome.success()
+          : Outcome.failure(`exit: ${end.code}`);
     const state = o.states.get(job.key);
     if (!isDeepStrictEqual(state, { _tag: "Done", outcome: expected }))
       v(
-        `${p.className} job ${job.key} with ${job.infra.join(",") || "no"} infrastructure errors and ${allowance} ` +
-          `restart(s) recorded ${JSON.stringify(state)}, not ${JSON.stringify(expected)}`,
+        `${p.className} job ${job.key} with ${job.infra.join(",") || "no"} infrastructure errors, ${allowance} ` +
+          `restart(s) and ${p.requeues} requeue(s) recorded ${JSON.stringify(state)}, not ${JSON.stringify(expected)}`,
       );
     const keys = o.starts.filter((s) => s.key === job.key).map((s) => s.dedupKey);
-    const wanted = Array.from({ length: attempts }, (_, i) => childDedupKey(PARENT, job.key, i));
+    const wanted = Array.from({ length: children }, (_, i) => childDedupKey(PARENT, job.key, i));
     if (!isDeepStrictEqual(keys, wanted))
       v(
         `${p.className} job ${job.key} started ${JSON.stringify(keys)}, not ${JSON.stringify(wanted)}`,
       );
     if (expected._tag !== "success") failed.push(job.key);
-    if (outlasted) reach(`${p.release ? "release" : "other"}-outlasted ${job.infra[allowance]}`);
+    if (typeof end === "string") reach(`${p.release ? "release" : "other"}-outlasted ${end}`);
     else if (job.infra.length > 0) reach("retried-through");
+    if (p.requeues > 0 && job.infra.some(requeued) && typeof end === "object")
+      reach("requeued-through");
   }
   const verdict =
     failed.length === 0 ? Outcome.success() : Outcome.failure(`jobs: ${failed.join(", ")}`);

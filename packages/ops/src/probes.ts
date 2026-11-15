@@ -1,6 +1,7 @@
 // The three GitHub probes the control plane runs every 15 min: the synthetic webhook canary, the installation probe
 // and the delivery probe, and the `webhook-silent` check (specs/operability.md § Liveness and alerts). The App-JWT
 // reads go through `GithubAppReads`, which the GitHub App package supplies.
+import { CANARY_BRANCH, CANARY_RUN } from "@fractalboxdev/flare-dispatch-catalog";
 import type { Profile } from "@fractalboxdev/flare-dispatch-profile";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Context, Effect, Schema } from "effect";
@@ -58,10 +59,8 @@ export const PROBE_INTERVAL_MS = 900_000;
 export const CANARY_DEADLINE_MS = 300_000;
 const DAY_MS = 86_400_000;
 
-/** The canary branch of the fixture repository. */
-export const CANARY_BRANCH = "flare-dispatch-canary";
-/** The run the canary webhook admits (FD-OPS-039). */
-export const CANARY_RUN = "canary";
+/** The canary branch of the fixture repository, and the run the canary webhook admits (FD-OPS-039). */
+export { CANARY_BRANCH, CANARY_RUN };
 
 /** The configuration the probes read from the operator overlay. */
 export interface ProbeConfig {
@@ -184,7 +183,7 @@ export const canaryStage = async (
   const { results } = await db
     .prepare(
       `select e.id, e.status, e.surface_delivered_at, p.state as placement
-       from executions e left join placements p on p.execution_id = e.id
+       from mameko_executions e left join mameko_placements p on p.execution_id = e.id
        where e.run = ? and e.scope_id = ? and e.enqueued_at >= ? order by e.enqueued_at desc limit 1`,
     )
     .bind(CANARY_RUN, config.fixtureRepo, pushedAt)

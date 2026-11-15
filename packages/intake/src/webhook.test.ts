@@ -138,9 +138,9 @@ describe("webhook to admission", () => {
       ["lint", "pending"],
     ]);
     expect(
-      h.rows("select canonical from dedup_keys order by canonical").map((r) => r.canonical),
+      h.rows("select canonical from mameko_dedup_keys order by canonical").map((r) => r.canonical),
     ).toEqual([`check:ci:${REPO}:${HEAD}`, `lint:${REPO}:${HEAD}`]);
-    expect(h.rows("select count(*) as n from placements")[0]!.n).toBe(2);
+    expect(h.rows("select count(*) as n from mameko_placements")[0]!.n).toBe(2);
   });
 
   it("[FD-GATE-020] a labelled check entry reports under flare-dispatch/check:<label>, an unlabelled entry under flare-dispatch/<run>", async () => {
@@ -371,7 +371,7 @@ describe("webhook to admission", () => {
 
   it("[FD-INT-004] when admission fails the webhook answers 503 intake_unavailable and keeps no record", async () => {
     const h = await harness();
-    h.db.sqlite.exec("drop table placements");
+    h.db.sqlite.exec("drop table mameko_placements");
     const r = await deliver(h, "pull_request", pullRequestPayload());
     expect(r!.status).toBe(503);
     expect((await bodyOf(r)).error).toBe("intake_unavailable");
@@ -424,7 +424,7 @@ describe("merge queue", () => {
     const [executionId] = r.executions as string[];
     expect(
       h
-        .rows("select kind, payload_json from outbox where execution_id = ?", executionId)
+        .rows("select kind, payload_json from mameko_outbox where execution_id = ?", executionId)
         .map((row) => ({ kind: row["kind"], payload: JSON.parse(row["payload_json"] as string) })),
     ).toEqual([
       { kind: "check.open", payload: { name: "flare-dispatch/check:ci", head_sha: group } },
@@ -449,21 +449,21 @@ describe("merge queue", () => {
     const [executionId] = opened.executions as string[];
     const destroyed = await deliver(h, "merge_group", mergeGroupPayload("destroyed"), "d-2");
     expect(destroyed!.status).toBe(202);
-    expect(h.rows("select status, reason from executions where id = ?", executionId)).toEqual([
+    expect(h.rows("select status, reason from mameko_executions where id = ?", executionId)).toEqual([
       { status: "cancelled", reason: "merge-group-destroyed" },
     ]);
     // The execution's workflow and lease are cancelled with the declared cause.
     expect(h.recorded.workflowCancels).toEqual([{ executionId, cause: "merge-group-destroyed" }]);
     // The cancel writes the outcome row its check run concludes from.
     expect(
-      h.rows("select kind from outbox where execution_id = ? order by kind", executionId),
+      h.rows("select kind from mameko_outbox where execution_id = ? order by kind", executionId),
     ).toEqual([{ kind: "check.conclude" }, { kind: "check.open" }]);
   });
 });
 
 /** Marks the execution of every record with the given status, as mameko's terminal write does. */
 const settle = (h: Harness, status: string) =>
-  h.db.sqlite.exec(`update executions set status = '${status}'`);
+  h.db.sqlite.exec(`update mameko_executions set status = '${status}'`);
 
 describe("check re-runs", () => {
   const firstRun = async () => {
@@ -492,7 +492,7 @@ describe("check re-runs", () => {
       class: first!.class,
     });
     expect(
-      h.rows("select canonical from dedup_keys order by canonical").map((x) => x.canonical),
+      h.rows("select canonical from mameko_dedup_keys order by canonical").map((x) => x.canonical),
     ).toContain(`check:ci:${REPO}:${HEAD}:attempt-2`);
     expect(h.recorded.resolved).toHaveLength(1);
   });
@@ -575,8 +575,8 @@ describe("check re-runs", () => {
     const lint = await harness();
     await deliver(lint, "pull_request", pullRequestPayload());
     const [check, lintRow] = lint.executions();
-    lint.db.sqlite.exec(`update executions set status = 'success' where id = '${check!.id}'`);
-    lint.db.sqlite.exec(`update executions set status = 'failure' where id = '${lintRow!.id}'`);
+    lint.db.sqlite.exec(`update mameko_executions set status = 'success' where id = '${check!.id}'`);
+    lint.db.sqlite.exec(`update mameko_executions set status = 'failure' where id = '${lintRow!.id}'`);
     const r = await bodyOf(await deliver(lint, "check_suite", checkSuiteRerequested(), "d-2"));
     expect(r.executions).toHaveLength(1);
     expect(
@@ -592,14 +592,14 @@ describe("check re-runs", () => {
     const { h, id } = await firstRun();
     settle(h, "failure");
     h.db.sqlite.exec(
-      `insert into reservations (execution_id, class, hold_micro_usd, state, metered_micro_usd, updated_at)
+      `insert into mameko_reservations (execution_id, class, hold_micro_usd, state, metered_micro_usd, updated_at)
        values ('${id}', 'interactive', 100, 'settled', 100, 0)`,
     );
     await deliver(h, "check_run", checkRunRerequested(id), "d-2");
     const second = h.records()[1]!;
     expect(second.spend_line).toBeNull();
     h.db.sqlite.exec(
-      `insert into reservations (execution_id, class, hold_micro_usd, state, metered_micro_usd, updated_at)
+      `insert into mameko_reservations (execution_id, class, hold_micro_usd, state, metered_micro_usd, updated_at)
        values ('${second.execution_id as string}', 'interactive', 100, 'settled', 100, 0)`,
     );
     settle(h, "failure");
@@ -640,7 +640,7 @@ describe("cooldown", () => {
     await h.adjust(50_000);
     // The first `lint` has finished, so the class's per-repository queue bound has room.
     h.db.sqlite
-      .prepare("update executions set status = 'success' where id = ?")
+      .prepare("update mameko_executions set status = 'success' where id = ?")
       .run(first!.execution_id as string);
     expect(await h.run(releaseHeld())).toEqual({
       admitted: 1,
@@ -658,11 +658,11 @@ describe("cooldown", () => {
     // deadline it writes on the execution and placement rows from the release, as it counted the first execution's from
     // its admission.
     const placed = h.rows(
-      "select p.eligible_kinds, p.deadline_at as p_deadline, e.deadline_at as e_deadline, e.enqueued_at from placements p join executions e on e.id = p.execution_id where p.execution_id = ?",
+      "select p.eligible_kinds, p.deadline_at as p_deadline, e.deadline_at as e_deadline, e.enqueued_at from mameko_placements p join mameko_executions e on e.id = p.execution_id where p.execution_id = ?",
       id,
     )[0]!;
     const firstRow = h.rows(
-      "select deadline_at, enqueued_at from executions where id = ?",
+      "select deadline_at, enqueued_at from mameko_executions where id = ?",
       first!.execution_id as string,
     )[0]!;
     expect(held!.eligible_kinds).toBeNull();
@@ -686,7 +686,7 @@ describe("cooldown", () => {
     const id = held!.execution_id as string;
     // Holding stages a row and sends no GitHub write; the drainer opens it under its permit.
     expect(h.github.calls).toEqual([]);
-    expect(h.rows("select kind, state, sends from outbox where execution_id = ?", id)).toEqual([
+    expect(h.rows("select kind, state, sends from mameko_outbox where execution_id = ?", id)).toEqual([
       { kind: "check.open", state: "pending", sends: 0 },
     ]);
     await drainHeldChecks(h);
@@ -704,7 +704,7 @@ describe("cooldown", () => {
     // Admission opens the check run under the same id, so the `check.open` applier finds this one and adopts it.
     expect(h.executions().find((e) => e.id === id)?.status).toBe("pending");
     expect(
-      h.rows("select kind, payload_json from outbox where execution_id = ?", id).map((r) => ({
+      h.rows("select kind, payload_json from mameko_outbox where execution_id = ?", id).map((r) => ({
         kind: r.kind,
         payload: JSON.parse(r.payload_json as string),
       })),
@@ -722,7 +722,7 @@ describe("cooldown", () => {
     await deliver(h, "pull_request", payload, "d-2");
     await deliver(h, "pull_request", payload, "d-3");
     const heldId = h.records().filter((r) => r.run === "lint")[1]!.execution_id as string;
-    expect(h.rows("select kind from outbox where execution_id = ?", heldId)).toEqual([
+    expect(h.rows("select kind from mameko_outbox where execution_id = ?", heldId)).toEqual([
       { kind: "check.open" },
     ]);
     await drainHeldChecks(h);
@@ -750,14 +750,14 @@ describe("cooldown", () => {
     const h = await harness();
     await deliver(h, "pull_request", pullRequestPayload({ head: "1".repeat(40) }));
     await h.adjust(10_000);
-    h.db.sqlite.exec(`create trigger fail_held_open before insert on outbox
+    h.db.sqlite.exec(`create trigger fail_held_open before insert on mameko_outbox
       when new.kind = 'check.open' and exists (select 1 from intake_held where execution_id = new.execution_id)
       begin select raise(abort, 'injected held-open store failure'); end`);
     const payload = pullRequestPayload({ head: "2".repeat(40) });
     expect((await deliver(h, "pull_request", payload, "d-2"))!.status).toBe(503);
     const held = h.records().filter((r) => r.run === "lint")[1]!.execution_id as string;
     expect(h.rows("select execution_id from intake_held")).toEqual([{ execution_id: held }]);
-    expect(h.rows("select kind from outbox where execution_id = ?", held)).toEqual([]);
+    expect(h.rows("select kind from mameko_outbox where execution_id = ?", held)).toEqual([]);
     expect(h.github.calls).toEqual([]);
     h.db.sqlite.exec("drop trigger fail_held_open");
     const again = await bodyOf(await deliver(h, "pull_request", payload, "d-3"));
@@ -768,7 +768,7 @@ describe("cooldown", () => {
     await h.adjust(50_000);
     await h.run(releaseHeld());
     await drainHeldChecks(h);
-    expect(h.rows("select kind, sends from outbox where execution_id = ?", held)).toEqual([
+    expect(h.rows("select kind, sends from mameko_outbox where execution_id = ?", held)).toEqual([
       { kind: "check.open", sends: 1 },
     ]);
     expect(h.github.runs.filter((r) => r.external_id === held)).toHaveLength(1);
@@ -784,7 +784,7 @@ describe("cooldown", () => {
     await drainHeldChecks(h);
     await h.adjust(55_000);
     await deliver(h, "pull_request", payload, "d-3");
-    h.db.sqlite.exec(`create trigger fail_held_drop before insert on outbox
+    h.db.sqlite.exec(`create trigger fail_held_drop before insert on mameko_outbox
       when new.kind = 'check.conclude' and exists (select 1 from intake_held where execution_id = new.execution_id)
       begin select raise(abort, 'injected held-drop store failure'); end`);
     expect(await h.run(Effect.result(releaseHeld()))).toMatchObject({
@@ -1109,7 +1109,7 @@ describe("the catalogue's request decoders through the webhook route", () => {
       executionId: (pushed.executions as string[])[0],
       duplicate: true,
     });
-    expect(h.rows("select canonical from dedup_keys")).toEqual([
+    expect(h.rows("select canonical from mameko_dedup_keys")).toEqual([
       { canonical: `worker-deploy:${REPO}:${HEAD}` },
     ]);
   });

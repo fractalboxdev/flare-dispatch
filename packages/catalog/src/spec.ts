@@ -12,8 +12,9 @@ import {
   TriagePrsInput,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import { buildProfile, deploymentOf, type Deployment } from "@fractalboxdev/flare-dispatch-profile";
-import type { Capability } from "@fractalboxdev/mameko-run";
-import { Match, SchemaAST, type Schema } from "effect";
+import { floorCanaryRun, type Capability } from "@fractalboxdev/mameko-run";
+import { Match, Schema, SchemaAST } from "effect";
+import { canaryEntry } from "./canary.ts";
 import {
   CHECK_MAX_DURATION_SEC,
   CheckInput,
@@ -110,7 +111,7 @@ const gate = (
   ...fields,
 });
 
-/** Where an execution of a run may run. `control` is the control pool: no container (MAMEKO-EXEC-056). */
+/** Where an execution of a run may run. `control` is the control pool: no container (MAMEKO-EXEC-057). */
 export type ExecutorKind = "device" | "cloud" | "control";
 
 /** What the control plane reads of a run: `defineRun`'s fields and the declarations beside them (FD-RUN-062). */
@@ -487,7 +488,49 @@ const agenticEntries: Readonly<Record<string, CatalogEntry>> = Object.fromEntrie
   }),
 );
 
-const entries: Readonly<Record<string, CatalogEntry>> = { ...gateEntries, ...agenticEntries };
+/**
+ * The class of the floor canary's ops run (MAMEKO-OPS-012): the profile's ops class (`delivery.ops_class`), which the
+ * Container pools that serve `required` claim.
+ */
+export const FLOOR_CANARY_CLASS = "required";
+
+/**
+ * mameko's floor canary (MAMEKO-OPS-013 to MAMEKO-OPS-015): one command and its replay under the same handle, then a
+ * request to a host outside every grant, on a Container pool's image. It declares no grant and reads no cache, so its
+ * job sandbox is sealed.
+ */
+export const floorCanary = floorCanaryRun({ qosClass: FLOOR_CANARY_CLASS, classRanks });
+
+const floorCanaryEntry: CatalogEntry = {
+  spec: {
+    ...floorCanary.spec,
+    requires: [...floorCanary.spec.requires],
+    labels: [...floorCanary.spec.labels],
+    constraints: [...floorCanary.spec.constraints],
+    grants: {
+      setup: [...floorCanary.spec.grants.setup],
+      agent: [...floorCanary.spec.grants.agent],
+    },
+    outputPaths: [...floorCanary.spec.outputPaths],
+    intentKinds: [...floorCanary.spec.intentKinds],
+  },
+  input: Schema.Unknown,
+  defaultClass: FLOOR_CANARY_CLASS,
+  manifestKey: null,
+  executors: ["cloud"],
+  containerRateUsdPerHour: null,
+  appCapabilities: [],
+  hostExecution: false,
+  workflowVersion: 1,
+  sealedSandbox: true,
+};
+
+const entries: Readonly<Record<string, CatalogEntry>> = {
+  ...gateEntries,
+  ...agenticEntries,
+  [floorCanary.spec.name]: floorCanaryEntry,
+  [canaryEntry.spec.name]: canaryEntry,
+};
 
 /** Every run of the catalogue by name, the registry the deploy's registry validator checks (FD-GATE-113). */
 export const RUN_CATALOG: Readonly<Record<string, CatalogEntry>> = entries;

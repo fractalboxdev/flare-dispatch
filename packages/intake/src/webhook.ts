@@ -11,6 +11,7 @@ import {
   type IntakeError,
   type IntakeUnavailable,
 } from "./config.ts";
+import { admitCanary, isCanaryPush } from "./canary.ts";
 import { commitOf, isForkPr, WebhookFields, type WebhookEvent } from "./event.ts";
 import { json, parseJson, readBody } from "./http.ts";
 import { InstallationEviction } from "./ports.ts";
@@ -210,6 +211,9 @@ const route = (event: WebhookEvent, fields: WebhookFields) =>
     }
     if (event.event === "merge_group")
       return yield* answer(yield* mergeGroup(event, fields, repo, sha.value));
+    // The canary webhook admits the canary alone; the fixture repository's manifest does not answer it (FD-OPS-039).
+    if (isCanaryPush((yield* IntakeConfig).canaryRepo, event, fields, repo))
+      return yield* answer(yield* admitCanary(fields, repo, sha.value));
     return yield* answer(
       both(
         release,

@@ -76,16 +76,16 @@ interface TerminalRow {
  */
 export const TERMINAL_UNRECORDED = `select e.id, e.scope_id, e.run, coalesce(e.class, r.class) as class, e.status,
     e.reason, r.sha, r.ref, r.trigger, coalesce(p.accepted_epoch, p.leased_epoch, 0) as epoch,
-    (select json_extract(o.payload_json, '$.name') from outbox o
+    (select json_extract(o.payload_json, '$.name') from mameko_outbox o
       where o.execution_id = e.id and o.intent_key = 'cp:check:open') as check_name,
-    (select o.payload_json from outbox o
+    (select o.payload_json from mameko_outbox o
       where o.execution_id = e.id and o.kind = 'check.conclude' and o.state = 'applied'
       order by o.applied_at, o.id limit 1) as concluded_json
-  from executions e
+  from mameko_executions e
   join intake_records r on r.execution_id = e.id
-  left join placements p on p.execution_id = e.id
+  left join mameko_placements p on p.execution_id = e.id
   where e.finished_at <= ? and e.status not in ('pending', 'running')
-    and not exists (select 1 from outbox v
+    and not exists (select 1 from mameko_outbox v
       where coalesce(v.execution_id, '') = '' and v.scope_id = e.scope_id
         and v.intent_key = 'ops:verdict-record:' || e.id)
   order by e.finished_at, e.id limit ?`;
@@ -115,7 +115,7 @@ export const REPORT_KINDS = ["check.summary", "check.annotations"] as const;
  * The run-emitted rows of the executions a pass records that carry a `report` member: each execution's `check.summary`
  * rows ahead of its `check.annotations` rows, each kind by intent key. One query reads every execution of the pass.
  */
-export const REPORTED_RESULTS = `select o.execution_id, o.payload_json from outbox o
+export const REPORTED_RESULTS = `select o.execution_id, o.payload_json from mameko_outbox o
   where o.execution_id in (select value from json_each(?))
     and o.kind in (${REPORT_KINDS.map((k) => `'${k}'`).join(", ")})
     and json_extract(o.payload_json, '$.report') is not null
@@ -217,7 +217,7 @@ const kindList = RECORD_KINDS.map((k) => `'${k}'`).join(", ");
  */
 export const UNDELIVERED_RECORDS = `select o.id, o.kind, o.state, o.last_error,
     coalesce(o.execution_id, json_extract(o.payload_json, '$.execution_id')) as execution_id
-  from outbox o
+  from mameko_outbox o
   where o.state in ('refused', 'expired') and o.kind in (${kindList})
     and not exists (select 1 from fd_alarms a
       where a.dedupe_key = '${RECORD_UNDELIVERED}:' || o.id and a.updated_at > 0)

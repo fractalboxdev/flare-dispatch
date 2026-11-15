@@ -17,6 +17,7 @@ import {
   hmacVerify,
   utf8,
 } from "@fractalboxdev/flare-dispatch-cache/crypto";
+import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Option, Schema } from "effect";
 
 /** One token kind: its version prefix and the HKDF label its key derives under. */
@@ -100,4 +101,65 @@ export const verifyLeaseToken = async (
 export const bearerOf = (request: Request): string | null => {
   const auth = request.headers.get("authorization");
   return auth === null ? null : (/^Bearer\s+(\S+)$/i.exec(auth.trim())?.[1] ?? null);
+};
+
+/**
+ * The leases whose tokens are revoked: one row per execution and epoch. A lease's end revokes every token minted for
+ * it, its model-lease token and its control-plane read token, and each route refuses a revoked lease's token
+ * (MAMEKO-ISO-053, MAMEKO-HOST-052).
+ */
+const REVOCATION_SCHEMA = [
+  `create table if not exists fd_lease_token_revocations (
+    execution_id text not null,
+    epoch integer not null,
+    revoked_at integer not null,
+    primary key (execution_id, epoch))`,
+] as const;
+
+const revocationsMigrated = new WeakMap<object, Promise<unknown>>();
+
+const migrateRevocations = (db: D1Like): Promise<unknown> => {
+  const existing = revocationsMigrated.get(db);
+  if (existing !== undefined) return existing;
+  const run = (async () => {
+    for (const sql of REVOCATION_SCHEMA) await db.prepare(sql).run();
+  })().catch((e: unknown) => {
+    revocationsMigrated.delete(db);
+    throw e;
+  });
+  revocationsMigrated.set(db, run);
+  return run;
+};
+
+/** Revokes every token of the execution's lease at `epoch`, as the lease ends. */
+export const revokeLeaseTokens = async (
+  db: D1Like,
+  executionId: string,
+  epoch: number,
+  now: number,
+): Promise<void> => {
+  await migrateRevocations(db);
+  await db
+    .prepare(
+      `insert into fd_lease_token_revocations (execution_id, epoch, revoked_at) values (?, ?, ?)
+       on conflict (execution_id, epoch) do nothing`,
+    )
+    .bind(executionId, epoch, now)
+    .run();
+};
+
+/** Whether the execution's lease at `epoch` has had its tokens revoked. */
+export const leaseTokensRevoked = async (
+  db: D1Like,
+  executionId: string,
+  epoch: number,
+): Promise<boolean> => {
+  await migrateRevocations(db);
+  const { results } = await db
+    .prepare(
+      "select 1 as revoked from fd_lease_token_revocations where execution_id = ? and epoch = ?",
+    )
+    .bind(executionId, epoch)
+    .all();
+  return results.length > 0;
 };

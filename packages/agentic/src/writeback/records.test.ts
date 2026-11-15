@@ -34,7 +34,7 @@ describe("writebackRecordsLayer", () => {
   it("[FD-AGT-013] reads each blob back byte for byte from the accepted epoch, with the digest of the bytes read", async () => {
     const db = recordsDb();
     db.exec(
-      "insert into placements values ('x1', 'accepted', 3, 'e1', 2); insert into executors values ('e1', 'cloudflare')",
+      "insert into mameko_placements values ('x1', 'accepted', 3, 'e1', 2); insert into mameko_executors values ('e1', 'cloudflare')",
     );
     const binary = Uint8Array.from([0, 255, 10, 13, 128]);
     const text = enc("# A\r\n");
@@ -65,7 +65,7 @@ describe("writebackRecordsLayer", () => {
 
   it("[FD-AGT-013] reports the digest of the stored bytes, not the key they are stored under", async () => {
     const db = recordsDb();
-    db.exec("insert into placements values ('x1', 'accepted', 1, null, 1)");
+    db.exec("insert into mameko_placements values ('x1', 'accepted', 1, null, 1)");
     const bucket = memoryBucket();
     const claimed = enc("claimed\n");
     bucket.objects.set(artifactPath("x1", 1, stagedBlobName(sha256(claimed))), enc("swapped\n"));
@@ -81,7 +81,7 @@ describe("writebackRecordsLayer", () => {
 
   it("[FD-AGT-026] reads no bytes when the stored blobs exceed the byte bound, and answers their sizes", async () => {
     const db = recordsDb();
-    db.exec("insert into placements values ('x1', 'accepted', 1, null, 1)");
+    db.exec("insert into mameko_placements values ('x1', 'accepted', 1, null, 1)");
     const bucket = memoryBucket();
     const big = new Uint8Array(9);
     const small = enc("ok\n");
@@ -105,7 +105,7 @@ describe("writebackRecordsLayer", () => {
 
   it("[FD-AGT-013] leaves out a blob the store does not hold, and fails without a placement or a bucket", async () => {
     const db = recordsDb();
-    db.exec("insert into placements values ('x1', 'accepted', 1, null, 1)");
+    db.exec("insert into mameko_placements values ('x1', 'accepted', 1, null, 1)");
     const missing = await run(
       Effect.flatMap(WritebackRecords, (r) =>
         r.blobs("x1", [entry("a.md", enc("a"))], DEFAULT_MAX_BYTES),
@@ -134,10 +134,10 @@ describe("writebackRecordsLayer", () => {
 
   it("answers a gateway model call as true, a cloud placement without one as false, and fails on a device", async () => {
     const db = recordsDb();
-    db.exec(`insert into executors values ('c1', 'cloudflare'), ('d1', 'device');
-      insert into placements values ('called', 'accepted', 1, 'd1', 1), ('cloud', 'accepted', 1, 'c1', 1),
+    db.exec(`insert into mameko_executors values ('c1', 'cloudflare'), ('d1', 'device');
+      insert into mameko_placements values ('called', 'accepted', 1, 'd1', 1), ('cloud', 'accepted', 1, 'c1', 1),
         ('device', 'accepted', 1, 'd1', 1);
-      insert into model_calls values ('m1', 'called')`);
+      insert into mameko_model_calls values ('m1', 'called')`);
     const calls = (id: string) =>
       run(
         Effect.flatMap(WritebackRecords, (r) => r.modelCalls(id)),

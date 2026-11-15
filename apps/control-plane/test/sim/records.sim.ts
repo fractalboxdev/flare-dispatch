@@ -87,13 +87,13 @@ const seed = async (db: TestD1, id: string, label: string, epoch: number, now: n
   );
   db.sqlite
     .prepare(
-      `insert into executions (id, scope_id, run, class, status, enqueued_at)
+      `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at)
        values (?, ?, ?, 'required', 'running', ?)`,
     )
     .run(id, SCOPE, RUN, now);
   db.sqlite
     .prepare(
-      `insert into placements (execution_id, state, epoch, leased_epoch) values (?, 'leased', ?, ?)`,
+      `insert into mameko_placements (execution_id, state, epoch, leased_epoch) values (?, 'leased', ?, ?)`,
     )
     .run(id, epoch, epoch);
   const payload = { name: `flare-dispatch/${RUN}:${label}`, head_sha: SHA };
@@ -188,7 +188,7 @@ export const simulateRecords = async (seedValue: number): Promise<RecordsOutcome
   const recordRows = () =>
     db.sqlite
       .prepare(
-        `select execution_id, scope_id, intent_key, limit_key, state, payload_json from outbox
+        `select execution_id, scope_id, intent_key, limit_key, state, payload_json from mameko_outbox
          where kind = 'verdict.record'`,
       )
       .all() as {
@@ -200,7 +200,7 @@ export const simulateRecords = async (seedValue: number): Promise<RecordsOutcome
       payload_json: string;
     }[];
   const executionRow = (id: string) =>
-    db.sqlite.prepare("select status, reason, finished_at from executions where id = ?").get(id);
+    db.sqlite.prepare("select status, reason, finished_at from mameko_executions where id = ?").get(id);
 
   // The terminal writes stamp rows with the store's clock, so every tick runs after them.
   let clock = Date.now() + 1_000;
@@ -210,7 +210,7 @@ export const simulateRecords = async (seedValue: number): Promise<RecordsOutcome
     const terminal = new Set(
       (
         db.sqlite
-          .prepare("select id from executions where status not in ('pending', 'running')")
+          .prepare("select id from mameko_executions where status not in ('pending', 'running')")
           .all() as { id: string }[]
       ).map((r) => r.id),
     );
@@ -267,7 +267,7 @@ export const simulateRecords = async (seedValue: number): Promise<RecordsOutcome
     await tick();
     const open = db.sqlite
       .prepare(
-        "select count(*) as n from outbox where state in ('pending', 'in_flight', 'ambiguous')",
+        "select count(*) as n from mameko_outbox where state in ('pending', 'in_flight', 'ambiguous')",
       )
       .get() as { n: number };
     if (open.n === 0) break;

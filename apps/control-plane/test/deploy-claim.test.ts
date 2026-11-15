@@ -37,23 +37,23 @@ const plane = async (executions: Readonly<Record<string, number>>) => {
   for (const [id, epoch] of Object.entries(executions)) {
     await db
       .prepare(
-        `insert into executions (id, scope_id, run, class, status, enqueued_at, deadline_at)
+        `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at, deadline_at)
          values (?, 'acme/app', 'worker-deploy', 'release', 'running', ?, ?)`,
       )
       .bind(id, NOW - 60_000, DEADLINE)
       .run();
     await db
       .prepare(
-        "insert into placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, null)",
+        "insert into mameko_placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, null)",
       )
       .bind(id, epoch)
       .run();
   }
   const env: DeployClaimEnv = { DB: db, DEPLOY_CLAIM_SECRET: SECRET, PUBLIC_ORIGIN: ORIGIN };
   const reclaim = (id: string, epoch: number) =>
-    db.prepare("update placements set epoch = ? where execution_id = ?").bind(epoch, id).run();
+    db.prepare("update mameko_placements set epoch = ? where execution_id = ?").bind(epoch, id).run();
   const finish = (id: string) =>
-    db.prepare("update executions set status = 'success' where id = ?").bind(id).run();
+    db.prepare("update mameko_executions set status = 'success' where id = ?").bind(id).run();
   return { db, env, reclaim, finish };
 };
 

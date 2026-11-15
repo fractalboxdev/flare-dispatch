@@ -43,7 +43,7 @@ const NOW = 1_800_000_000_000;
 const execution = (id: string, over: Partial<Record<string, unknown>> = {}) =>
   t.db
     .prepare(
-      "insert into executions (id, scope_id, run, class, status, enqueued_at) values (?, ?, ?, ?, ?, ?)",
+      "insert into mameko_executions (id, scope_id, run, class, status, enqueued_at) values (?, ?, ?, ?, ?, ?)",
     )
     .bind(
       id,
@@ -63,14 +63,14 @@ const executor = (
 ) =>
   t.db
     .prepare(
-      "insert into executors (executor_id, kind, posture_tier, labels_json, slots_json, last_heartbeat_at, drain, quarantine) values (?, ?, 'unmanaged', '[]', ?, ?, ?, ?)",
+      "insert into mameko_executors (executor_id, kind, posture_tier, labels_json, slots_json, last_heartbeat_at, drain, quarantine) values (?, ?, 'unmanaged', '[]', ?, ?, ?, ?)",
     )
     .bind(id, kind, JSON.stringify(slots), NOW - 5_000, flags.drain, flags.quarantine)
     .run();
 
 const placement = (executionId: string, executorId: string | null, state = "leased", epoch = 1) =>
   t.db
-    .prepare("insert into placements (execution_id, state, epoch, executor_id) values (?, ?, ?, ?)")
+    .prepare("insert into mameko_placements (execution_id, state, epoch, executor_id) values (?, ?, ?, ?)")
     .bind(executionId, state, epoch, executorId)
     .run();
 
@@ -99,7 +99,7 @@ describe("executions view", () => {
     await placement("e1", "dev-1", "leased", 2);
     await t.db
       .prepare(
-        "insert into reservations (execution_id, class, hold_micro_usd, state, metered_micro_usd, updated_at) values ('e1', 'required', 5000, 'settled', 4200, 0)",
+        "insert into mameko_reservations (execution_id, class, hold_micro_usd, state, metered_micro_usd, updated_at) values ('e1', 'required', 5000, 'settled', 4200, 0)",
       )
       .run();
     const all = await listExecutions(t.db, {}, 50, null);
@@ -133,7 +133,7 @@ describe("executions view", () => {
       Array.from({ length: 205 }, (_, i) =>
         t.db
           .prepare(
-            "insert into executions (id, scope_id, run, class, status, enqueued_at) values (?, 'acme/app', 'check', 'required', 'pending', ?)",
+            "insert into mameko_executions (id, scope_id, run, class, status, enqueued_at) values (?, 'acme/app', 'check', 'required', 'pending', ?)",
           )
           .bind(`e${String(i).padStart(3, "0")}`, NOW - i),
       ),
@@ -196,7 +196,7 @@ const outboxRow = async (
     },
   ]);
   await t.db
-    .prepare("update outbox set state = ?, last_error = ?, attempts = 1 where id = ?")
+    .prepare("update mameko_outbox set state = ?, last_error = ?, attempts = 1 where id = ?")
     .bind(state, lastError, id)
     .run();
 };
@@ -258,7 +258,7 @@ describe("execution page", () => {
     expect(html).toContain("<tr><th>Verdict</th><td>success</td></tr>");
     expect(listedReasons(html)).toEqual(["human-commits-present"]);
 
-    const { results } = await t.db.prepare("select id, status from executions order by id").all();
+    const { results } = await t.db.prepare("select id, status from mameko_executions order by id").all();
     expect(results).toEqual(["e1", "e2", "e3", "e4"].map((id) => ({ id, status: "success" })));
   });
 });

@@ -222,8 +222,8 @@ describe("a gate job at the execution's deadline", () => {
     const deadline = Date.now() + 4_000;
     const db = await mf.getD1Database("DB");
     await db.batch([
-      db.prepare("update executions set deadline_at = ? where id = ?").bind(deadline, id),
-      db.prepare("update placements set deadline_at = ? where execution_id = ?").bind(deadline, id),
+      db.prepare("update mameko_executions set deadline_at = ? where id = ?").bind(deadline, id),
+      db.prepare("update mameko_placements set deadline_at = ? where execution_id = ?").bind(deadline, id),
     ]);
 
     const device = await newDevice();

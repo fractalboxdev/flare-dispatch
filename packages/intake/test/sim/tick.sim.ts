@@ -305,7 +305,7 @@ export const simulateTickUnits = async (seed: number): Promise<SimOutcome> => {
 
   const haveCron = new Set(
     h
-      .rows("select canonical from dedup_keys where canonical like '%:cron:%'")
+      .rows("select canonical from mameko_dedup_keys where canonical like '%:cron:%'")
       .map((r) => r.canonical as string),
   );
   for (const k of wantCron) if (!haveCron.has(k)) fail("end", `no execution for ${k}`);

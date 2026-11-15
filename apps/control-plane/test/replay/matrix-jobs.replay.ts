@@ -91,9 +91,9 @@ export interface Journal {
 const snapshot = (db: TestD1): ReadonlyMap<string, string> =>
   new Map(
     [
-      ["outbox", "select * from outbox", "id"],
-      ["executions", "select * from executions", "id"],
-      ["dedup_keys", "select * from dedup_keys", "sha256"],
+      ["outbox", "select * from mameko_outbox", "id"],
+      ["executions", "select * from mameko_executions", "id"],
+      ["dedup_keys", "select * from mameko_dedup_keys", "sha256"],
     ].flatMap(([table, sql, key]) =>
       (db.sqlite.prepare(sql!).all() as Record<string, unknown>[]).map(
         (r) => [`${table} ${String(r[key!])}`, JSON.stringify(r)] as const,
@@ -170,19 +170,19 @@ const admittedChildren = (j: Journal) =>
         const status = () =>
           (
             j.db.sqlite
-              .prepare("select status from executions where id = ?")
+              .prepare("select status from mameko_executions where id = ?")
               .get(handle.executionId) as { status: string }
           ).status;
         if (status() === "pending") {
           // The job's lease at epoch 1 starts it, and the executor channel accepts its result at that epoch.
           j.db.sqlite
             .prepare(
-              "update executions set status = 'running', started_at = ? where id = ? and status = 'pending'",
+              "update mameko_executions set status = 'running', started_at = ? where id = ? and status = 'pending'",
             )
             .run(j.clock, handle.executionId);
           j.db.sqlite
             .prepare(
-              "update placements set state = 'accepted', epoch = 1, accepted_epoch = 1, executor_id = 'cf-1' where execution_id = ?",
+              "update mameko_placements set state = 'accepted', epoch = 1, accepted_epoch = 1, executor_id = 'cf-1' where execution_id = ?",
             )
             .run(handle.executionId);
           yield* ExecutionSteps.use((steps) =>
@@ -236,7 +236,7 @@ const drainAll = async (j: Journal) => {
       ),
     );
     const open = j.db.sqlite
-      .prepare("select count(*) as n from outbox where state in ('pending', 'in_flight')")
+      .prepare("select count(*) as n from mameko_outbox where state in ('pending', 'in_flight')")
       .get() as { n: number };
     if (open.n === 0) return;
   }

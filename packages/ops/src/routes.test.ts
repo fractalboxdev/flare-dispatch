@@ -112,12 +112,12 @@ describe("operability routes", () => {
     const s = await setup();
     await t.db
       .prepare(
-        "insert into executions (id, scope_id, run, class, status, enqueued_at) values ('e 1', 'acme/app', 'spec-drift-pr', 'required', 'success', 0)",
+        "insert into mameko_executions (id, scope_id, run, class, status, enqueued_at) values ('e 1', 'acme/app', 'spec-drift-pr', 'required', 'success', 0)",
       )
       .run();
     await t.db
       .prepare(
-        `insert into outbox (id, execution_id, scope_id, intent_key, kind, limit_key, tier, priority, class_rank,
+        `insert into mameko_outbox (id, execution_id, scope_id, intent_key, kind, limit_key, tier, priority, class_rank,
            draws_reserve, payload_json, payload_digest, intent_attempts, effect_class, state, attempts, sends,
            next_attempt_at, last_error, inserted_at, undetermined)
          values ('1', 'e 1', 'acme/app', 'cp:pr:propose', 'pr.propose', '7', 'effect', 0, 1, 0, '{}', 'd', 0,

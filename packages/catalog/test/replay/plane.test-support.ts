@@ -60,12 +60,12 @@ export const leasedPlane = async (executionId: string, run: string, scope: strin
   await runD1Migrations(db);
   db.sqlite
     .prepare(
-      `insert into executions (id, scope_id, run, class, status, enqueued_at) values (?, ?, ?, 'release', 'running', ?)`,
+      `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at) values (?, ?, ?, 'release', 'running', ?)`,
     )
     .run(executionId, scope, run, Date.now());
   db.sqlite
     .prepare(
-      `insert into placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, ?)`,
+      `insert into mameko_placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, ?)`,
     )
     .run(executionId, EPOCH, EXECUTOR);
   const kinds = settings.channel.intentKinds;
@@ -85,7 +85,7 @@ export const leasedPlane = async (executionId: string, run: string, scope: strin
     accept: () =>
       db.sqlite
         .prepare(
-          "update placements set state = 'accepted', accepted_epoch = ? where execution_id = ? and state = 'leased'",
+          "update mameko_placements set state = 'accepted', accepted_epoch = ? where execution_id = ? and state = 'leased'",
         )
         .run(EPOCH, executionId),
     /** The workflow's `apply-outbox` stage for the accepted outcome. */
@@ -101,19 +101,19 @@ export const leasedPlane = async (executionId: string, run: string, scope: strin
     snapshot: () => ({
       outbox: db.sqlite
         .prepare(
-          "select id, intent_key, kind, tier, payload_json, state from outbox order by tier, id",
+          "select id, intent_key, kind, tier, payload_json, state from mameko_outbox order by tier, id",
         )
         .all(),
       staged: db.sqlite
-        .prepare("select intent_key, kind, committed from staged_intents order by intent_key")
+        .prepare("select intent_key, kind, committed from mameko_staged_intents order by intent_key")
         .all(),
-      executions: db.sqlite.prepare("select id, status, reason from executions").all(),
+      executions: db.sqlite.prepare("select id, status, reason from mameko_executions").all(),
     }),
     /** The effect-tier rows: the run's intents the outbox holds. */
     effects: () =>
       db.sqlite
         .prepare(
-          "select id, intent_key, kind, payload_json from outbox where tier = 'effect' order by id",
+          "select id, intent_key, kind, payload_json from mameko_outbox where tier = 'effect' order by id",
         )
         .all() as { id: string; intent_key: string; kind: string; payload_json: string }[],
   };

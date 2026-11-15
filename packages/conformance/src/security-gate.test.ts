@@ -266,5 +266,5 @@ describe("the lease of a security scan's job sandbox on the composed control pla
 
   // The egress half of FD-GATE-110: the scan runs declare the git host as their one `setup` grant and none for
   // `agent`, and end the setup phase before the first scanner (`packages/catalog/src/security-gate.test.ts`); a
-  // Container's outbound handler then decides every request over the `agent` grants (MAMEKO-HOST-058).
+  // Container's outbound handler then decides every request over the `agent` grants (MAMEKO-HOST-060).
 });

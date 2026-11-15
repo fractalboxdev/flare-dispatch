@@ -4,7 +4,7 @@
 //
 // `processGateExec` runs a command, through `/bin/sh -c` or as an argv with no shell, as a supervised child process. The child leads its own process group, so a timeout
 // or a stopped runner kills everything the command started. Its output reaches the runner's stderr: the runner's
-// stdout carries only the result line, and any other line there loses the result (MAMEKO-EXEC-148).
+// stdout carries only the result line, and any other line there loses the result (MAMEKO-EXEC-157).
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -244,7 +244,7 @@ export const processGateExec: Layer.Layer<GateExec> = Layer.succeed(GateExec, ho
 /**
  * `GateExec` where a Container is the job sandbox: the host's processes and file system as `processGateExec` has them,
  * and the setup phase ended through mameko's `Exec`, so the Container's outbound handler switches to the run's `agent`
- * grants before the call returns (MAMEKO-HOST-058).
+ * grants before the call returns (MAMEKO-HOST-060).
  */
 export const containerGateExec: Layer.Layer<GateExec, never, Exec> = Layer.effect(
   GateExec,

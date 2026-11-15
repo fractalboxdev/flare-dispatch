@@ -102,13 +102,13 @@ export const simulateParentCancel = async (seed: number): Promise<ParentCancelOu
   const rows = (sql: string, ...params: unknown[]) =>
     db.sqlite.prepare(sql).all(...(params as never[])) as Record<string, unknown>[];
   const statusOf = (id: string) =>
-    rows("select status, reason from executions where id = ?", id)[0] as
+    rows("select status, reason from mameko_executions where id = ?", id)[0] as
       | { status: string; reason: string | null }
       | undefined;
 
   const claim = (id: string) =>
     Effect.gen(function* () {
-      const epoch = rows("select epoch from placements where execution_id = ?", id)[0]!
+      const epoch = rows("select epoch from mameko_placements where execution_id = ?", id)[0]!
         .epoch as number;
       const placed = yield* PlacementStore.use((p) =>
         p.claim(id, { expectedEpoch: epoch, executorId: "dev-1", floor: 0 }),
@@ -241,7 +241,7 @@ export const simulateParentCancel = async (seed: number): Promise<ParentCancelOu
         }
         // A pending job never starts: no child execution is admitted once the parent is cancelled.
         const admitted = rows(
-          "select count(*) as n from executions where parent_id = ?",
+          "select count(*) as n from mameko_executions where parent_id = ?",
           PARENT,
         )[0]!.n as number;
         if (started.size !== startedBefore || admitted !== startedBefore)

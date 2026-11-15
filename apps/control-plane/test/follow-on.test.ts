@@ -27,7 +27,7 @@ describe("the dispatch.followOn applier of a deploy with the App", () => {
         sha: SMOKE_INPUTS.sha,
       },
     ]);
-    expect(deploy.db.sqlite.prepare("select canonical from dedup_keys").all()).toEqual([
+    expect(deploy.db.sqlite.prepare("select canonical from mameko_dedup_keys").all()).toEqual([
       { canonical: `${PARENT}/${INTENT_KEY}` },
     ]);
     expect(deploy.starts.map((p) => p.executionId)).toEqual([children[0]!.execution_id]);

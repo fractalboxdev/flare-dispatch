@@ -28,7 +28,6 @@ export {
   PoolController,
   TransparencyLog,
 } from "./durable-objects.ts";
-export { ControlPool } from "./deferred-objects.ts";
 export {
   AgentPool,
   BrowserPool,
@@ -43,7 +42,7 @@ let migrated: Promise<unknown> | undefined;
 
 const migrate = (env: ControlPlaneEnv) =>
   (migrated ??= (async () => {
-    // The artifact store's table moves to `fd_artifacts` before mameko's migration 33 creates its own `artifacts`.
+    // A legacy artifact store table moves to `fd_artifacts` before mameko adopts an unprefixed store (MAMEKO-HOST-024).
     await moveLegacyArtifactsTable(env.DB as unknown as D1Database);
     await runD1Migrations(env.DB);
     await Effect.runPromise(migrateChildConclusions(env.DB));
@@ -51,8 +50,9 @@ const migrate = (env: ControlPlaneEnv) =>
     await Effect.runPromise(migrateIntake(env.DB));
     await migrateLocalStore(env.DB);
     await migrateDeployClaims(env.DB);
-    // Each Container pool's executor row, on a deploy that can launch its Containers (MAMEKO-LEASE-003).
-    if (launchKeysOf(env) !== null) await registerPools(env, profileOf(env));
+    // The control pool's executor row, and each Container pool's on a deploy that can launch its Containers
+    // (MAMEKO-LEASE-003).
+    await registerPools(env, profileOf(env), launchKeysOf(env) !== null);
   })().catch((e: unknown) => {
     migrated = undefined;
     throw e;

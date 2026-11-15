@@ -1,6 +1,6 @@
 // The per-lease GitHub token: an installation token scoped to the one
 // repository the execution targets and to read permissions only (FD-GH-002,
-// MAMEKO-HOST-048). Its returned usable-until metadata is bounded by the lease deadline, but GitHub's native token
+// MAMEKO-HOST-050). Its returned usable-until metadata is bounded by the lease deadline, but GitHub's native token
 // lifetime is unchanged. This helper is not a complete CredentialMinter: that port stays absent until its grant,
 // enforced lifetime and durable revocation contract can be served.
 import type { LeaseRef } from "@fractalboxdev/mameko-ports";

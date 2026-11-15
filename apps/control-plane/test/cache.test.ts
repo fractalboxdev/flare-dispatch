@@ -221,7 +221,7 @@ const plane = async (deploy: Partial<ControlPlaneEnv> = {}) => {
   const execution = async (id: string, status: string, finishedAt: number | null) => {
     await db
       .prepare(
-        `insert into executions (id, scope_id, run, class, status, enqueued_at, deadline_at, finished_at)
+        `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at, deadline_at, finished_at)
          values (?, 'acme/app', 'check', 'required', ?, ?, ?, ?)`,
       )
       .bind(id, status, NOW - 40 * DAY, NOW + DAY, finishedAt)
@@ -272,7 +272,7 @@ describe("the cache's minute-tick steps", () => {
     expect(await p.ledger.usage()).toEqual({ stored: 100, pending: 250 });
 
     await p.db
-      .prepare("update executions set status = 'success', finished_at = ? where id = 'e-done'")
+      .prepare("update mameko_executions set status = 'success', finished_at = ? where id = 'e-done'")
       .bind(NOW - 60_000)
       .run();
     expect(await p.step("ledger-end")).toEqual({ ended: 1, failed: 0 });
@@ -386,7 +386,7 @@ describe("the log route under the repository's confidentiality mode", () => {
     await p.execution("e-logs", "success", NOW);
     await p.db
       .prepare(
-        "insert into placements (execution_id, state, epoch, executor_id) values ('e-logs', 'accepted', 1, 'dev-7')",
+        "insert into mameko_placements (execution_id, state, epoch, executor_id) values ('e-logs', 'accepted', 1, 'dev-7')",
       )
       .run();
     const name = await logObjectName({
@@ -430,13 +430,13 @@ describe("the compile-cache route's lookups", () => {
     await p.execution("e-cc", "running", null);
     await p.db
       .prepare(
-        "insert into executors (executor_id, kind, posture_tier, labels_json, slots_json, last_heartbeat_at, drain, quarantine) values ('dev-1', 'device', 'unmanaged', '[]', '{}', ?, 0, 0)",
+        "insert into mameko_executors (executor_id, kind, posture_tier, labels_json, slots_json, last_heartbeat_at, drain, quarantine) values ('dev-1', 'device', 'unmanaged', '[]', '{}', ?, 0, 0)",
       )
       .bind(NOW)
       .run();
     await p.db
       .prepare(
-        "insert into placements (execution_id, state, epoch, executor_id) values ('e-cc', 'leased', 1, 'dev-1')",
+        "insert into mameko_placements (execution_id, state, epoch, executor_id) values ('e-cc', 'leased', 1, 'dev-1')",
       )
       .run();
     const stored = compileObjectKey(protectedCloud("acme/app"), "obj-hit");

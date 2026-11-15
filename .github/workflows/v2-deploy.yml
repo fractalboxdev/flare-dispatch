@@ -15,6 +15,9 @@ name: v2-deploy
 # sts:GetCallerIdentity, budgets:ViewBudget, budgets:DescribeBudgetActionsForAccount, iam:GetPolicy,
 # iam:GetPolicyVersion and, for an SCP action, organizations:DescribePolicy, organizations:DescribeOrganization,
 # organizations:ListParents and organizations:ListRoots. This read role is separate from `aws.launcherRoleArn`, the role that launches ECS tasks.
+# `FD_ACCESS_CLIENT_ID`, `FD_ACCESS_CLIENT_SECRET`: a Cloudflare Access service token whose common name the overlay
+# lists among `operators`, with which `fd deploy` runs the container floor canary through the control plane's
+# `/v1/ops/floor-canary` routes on the dispatcher hostname (FD-OPS-050).
 on:
   push:
     branches: [main]
@@ -67,6 +70,8 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+          FD_ACCESS_CLIENT_ID: ${{ secrets.FD_ACCESS_CLIENT_ID }}
+          FD_ACCESS_CLIENT_SECRET: ${{ secrets.FD_ACCESS_CLIENT_SECRET }}
         run: node --experimental-strip-types --no-warnings packages/ops/scripts/fd-operability.ts deploy --overlay "@$RUNNER_TEMP/fd/overlay.json"
 
   doctor:

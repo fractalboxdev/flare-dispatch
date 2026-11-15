@@ -6,7 +6,6 @@ import {
   type CloudAgenticServices,
 } from "@fractalboxdev/flare-dispatch-agentic/executor";
 import {
-  defineRun,
   type Artifact,
   type Exec,
   type Intents,
@@ -17,12 +16,10 @@ import {
 import { Effect, Layer } from "effect";
 import { runCheck } from "./check.ts";
 import { processGateExec, type GateExec } from "./command.ts";
-import { runDeploySmoke } from "./deploy-smoke.ts";
 import { ExecutionLease, type LeaseLayerFailure } from "./execution-lease.ts";
 import { githubReadLayer, type GithubRead } from "./github-read.ts";
 import {
   CheckInput,
-  DeploySmokeInput,
   GateJobInput,
   OffloadTestInput,
   OxlintInput,
@@ -35,13 +32,13 @@ import { runGateJob } from "./job.ts";
 import { runOffloadTest } from "./offload-test.ts";
 import { runOxlint } from "./oxlint.ts";
 import { localContentArtifacts, type GateArtifacts } from "./ports.ts";
-import { toRunResult } from "./reasons.ts";
+import { canaryRun, deploySmokeRun } from "./control-runs.ts";
+import { defineGateRun } from "./gate-run.ts";
 import { runSandboxImage } from "./sandbox-image.ts";
 import { runSecurityGate, runSecurityRescan, type ScanServices } from "./security-gate.ts";
 import {
   checkSpec,
-  classRanks,
-  deploySmokeSpec,
+  floorCanary,
   gateJobSpec,
   lookupRun,
   offloadTestSpec,
@@ -51,45 +48,17 @@ import {
   securityRescanSpec,
   workerDeploySpec,
   type ExecutorKind,
-  type RunSpecFields,
 } from "./spec.ts";
 import { runWorkerDeploy, type DeployLedger } from "./worker-deploy.ts";
 
-/**
- * One gate run through `defineRun`, with its body beside the definition, so an executor whose services depend on the
- * lease builds them inside each execution around the same body.
- */
-const define = <I extends Parameters<typeof defineRun>[0]["input"], R>(
-  spec: RunSpecFields,
-  input: I,
-  body: (input: I["Type"]) => Effect.Effect<Parameters<typeof toRunResult>[0], never, R>,
-) => {
-  const run = (i: I["Type"]) => body(i).pipe(Effect.map(toRunResult));
-  return {
-    ...defineRun(
-      {
-        ...spec,
-        input,
-        requires: [...spec.requires],
-        labels: [...spec.labels],
-        constraints: [...spec.constraints],
-        grants: { setup: [...spec.grants.setup], agent: [...spec.grants.agent] },
-        outputPaths: [...spec.outputPaths],
-        intentKinds: [...spec.intentKinds],
-      },
-      run,
-      { classRanks },
-    ),
-    body: run,
-  };
-};
+const define = defineGateRun;
 
 export const checkRun = define(checkSpec, CheckInput, runCheck);
 export const oxlintRun = define(oxlintSpec, OxlintInput, runOxlint);
 export const gateJobRun = define(gateJobSpec, GateJobInput, runGateJob);
 export const offloadTestRun = define(offloadTestSpec, OffloadTestInput, (i) => runOffloadTest(i));
 export const workerDeployRun = define(workerDeploySpec, WorkerDeployInput, runWorkerDeploy);
-export const deploySmokeRun = define(deploySmokeSpec, DeploySmokeInput, (i) => runDeploySmoke(i));
+export { deploySmokeRun };
 export const sandboxImageRun = define(sandboxImageSpec, SandboxImageInput, runSandboxImage);
 export const securityGateRun = define(securityGateSpec, SecurityGateInput, runSecurityGate);
 export const securityRescanRun = define(securityRescanSpec, SecurityRescanInput, runSecurityRescan);
@@ -106,6 +75,8 @@ export const registry = [
   securityGateRun,
   securityRescanRun,
   ...agenticRuns,
+  floorCanary,
+  canaryRun,
 ] as const;
 
 /** Which executor kinds serve a run, from its catalogue entry. */
@@ -168,9 +139,17 @@ const SCAN_NAMES: ReadonlySet<string> = new Set([
   securityRescanRun.spec.name,
 ]);
 
+/** The floor canary, which a cloud executor serves on the runner's own services (MAMEKO-OPS-012). */
+const FLOOR_CANARY_NAME = floorCanary.spec.name;
+
+/** A registry run whose body is registered beside its definition: every run but mameko's floor canary. */
+type BodiedRun = Exclude<(typeof registry)[number], typeof floorCanary>;
+
+const withBody = (run: (typeof registry)[number]): run is BodiedRun => "body" in run;
+
 /**
  * The gate runs a cloud executor serves with its gate Layers: a run whose catalogue entry lists `cloud`, that is
- * neither agentic nor a scan run, and that is no host execution. A host execution's run is the device runner entry's
+ * neither agentic, a scan run nor the floor canary, and that is no host execution. A host execution's run is the device runner entry's
  * under `development` only, so the cloud executor serves the same gate runs under both deployments.
  */
 const isCloudGateRun = (name: string): boolean => {
@@ -179,7 +158,8 @@ const isCloudGateRun = (name: string): boolean => {
     found._tag === "Available" &&
     !found.entry.hostExecution &&
     !AGENTIC_NAMES.has(name) &&
-    !SCAN_NAMES.has(name)
+    !SCAN_NAMES.has(name) &&
+    name !== FLOOR_CANARY_NAME
   );
 };
 
@@ -188,7 +168,8 @@ const isCloudGateRun = (name: string): boolean => {
  * refuses, that the catalogue does not serve on the executor's kind, or that needs a service the executor lacks is
  * absent, so its lease answers `RunNotInCatalog`. The device serves the gate runs; the cloud executor serves the
  * agentic recipes, whose catalogue entries are cloud-only, where it supplies their Layers; `security-gate` and
- * `security-rescan` where it supplies the scan Layers; and the cloud gate runs where it supplies the gate Layers.
+ * `security-rescan` where it supplies the scan Layers; the cloud gate runs where it supplies the gate Layers; and the
+ * floor canary on the runner's own services.
  */
 export const runsFor = (deployment: Deployment, executor: RunnerExecutor = { kind: "device" }) => {
   const available = registry
@@ -202,14 +183,16 @@ export const runsFor = (deployment: Deployment, executor: RunnerExecutor = { kin
         ),
       }))
     : [
-        ...gateRunsWith(available, executor.gate),
-        ...agenticRunsWith(available, executor.layers),
-        ...scanRunsWith(available, executor.scan),
+        ...gateRunsWith(available.filter(withBody), executor.gate),
+        ...agenticRunsWith(available.filter(withBody), executor.layers),
+        ...scanRunsWith(available.filter(withBody), executor.scan),
+        // The floor canary needs only `Exec`, which the runner's job services supply.
+        ...available.filter((run) => run.spec.name === FLOOR_CANARY_NAME),
       ];
 };
 
 /** The cloud gate runs of `available`, each with the cloud executor's gate Layers provided; none without them. */
-const gateRunsWith = <R extends (typeof registry)[number]>(
+const gateRunsWith = <R extends BodiedRun>(
   available: readonly R[],
   gate: Layer.Layer<CloudGateServices, never, LocalContent> | undefined,
 ) =>
@@ -279,7 +262,7 @@ const perExecution = <R extends RunBody, A>(
 };
 
 /** The agentic recipes of `available`, each with the cloud executor's agentic Layers built per execution; none without them. */
-const agenticRunsWith = <R extends (typeof registry)[number]>(
+const agenticRunsWith = <R extends BodiedRun>(
   available: readonly R[],
   layers: Layer.Layer<CloudAgenticServices, LeaseLayerFailure, LeaseLayerContext> | undefined,
 ) =>
@@ -290,7 +273,7 @@ const agenticRunsWith = <R extends (typeof registry)[number]>(
         .map((run) => perExecution(run, layers));
 
 /** The scan runs of `available`, each with the cloud executor's scan Layers built per execution; none without them. */
-const scanRunsWith = <R extends (typeof registry)[number]>(
+const scanRunsWith = <R extends BodiedRun>(
   available: readonly R[],
   scan:
     | Layer.Layer<Exclude<ScanServices, Intents>, LeaseLayerFailure, LeaseLayerContext>

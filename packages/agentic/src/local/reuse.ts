@@ -1,5 +1,5 @@
 // FlareDispatch's reuse policy: when a registered rehearsal concludes a pull-request check in place of a placed run
-// (specs/local-scheduler.md § Rehearsal reuse, MAMEKO-LOCAL-075). Every read the policy decides on that fails names no
+// (specs/local-scheduler.md § Rehearsal reuse, MAMEKO-LOCAL-076). Every read the policy decides on that fails names no
 // rehearsal, so the run is placed as usual.
 import { PostureSource, ReusePolicy } from "@fractalboxdev/mameko-ports";
 import { Clock, Context, Effect, Exit, Layer, Schema } from "effect";

@@ -209,13 +209,13 @@ export const plane = async () => {
       during("admit", async () => {
         db.sqlite
           .prepare(
-            `insert into executions (id, scope_id, run, class, status, enqueued_at)
+            `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at)
              values (?, ?, ?, 'required', 'running', ?) on conflict (id) do nothing`,
           )
           .run(id, SCOPE, `run-${id.slice(-4)}`, T0);
         db.sqlite
           .prepare(
-            `insert into placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, ?)
+            `insert into mameko_placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, ?)
              on conflict (execution_id) do nothing`,
           )
           .run(id, EPOCH, EXECUTOR);
@@ -279,7 +279,7 @@ export const plane = async () => {
       during("accept", async () => {
         db.sqlite
           .prepare(
-            "update placements set state = 'accepted', accepted_epoch = ? where execution_id = ? and state = 'leased'",
+            "update mameko_placements set state = 'accepted', accepted_epoch = ? where execution_id = ? and state = 'leased'",
           )
           .run(EPOCH, id);
       }),
@@ -294,7 +294,7 @@ export const plane = async () => {
             drainOnce({ now, token: (id) => `tok-${id}-${now}`, random: () => 0.5, actuatorOf }),
           );
           const [{ n }] = rows<{ n: number }>(
-            "select count(*) as n from outbox where state in ('pending', 'in_flight', 'ambiguous')",
+            "select count(*) as n from mameko_outbox where state in ('pending', 'in_flight', 'ambiguous')",
           ) as [{ n: number }];
           if (n === 0) return;
           now += MINUTE_MS;
@@ -320,7 +320,7 @@ const snapshot = (p: Plane): ReadonlyMap<string, string> =>
       ] as const
     ).flatMap(([table, key]) =>
       p
-        .rows<{ k: string }>(`select ${key} as k, * from ${table}`)
+        .rows<{ k: string }>(`select ${key} as k, * from mameko_${table}`)
         .map((r) => [`${table} ${r.k}`, JSON.stringify(r)] as const),
     ),
   );

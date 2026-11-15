@@ -291,7 +291,7 @@ export const runScenario = async (seed: number): Promise<Observation> => {
   const rows = h.rows(
     `select e.id, e.class, e.enqueued_at, e.deadline_at, p.admitted_at, p.cloud_eligible_at, p.local_open,
             p.eligible_kinds
-       from executions e join placements p on p.execution_id = e.id`,
+       from mameko_executions e join mameko_placements p on p.execution_id = e.id`,
   );
   const admitted = ids.map((id) => admittedRow(rows.find((r) => r["id"] === id)!));
   const reviewed = admitted[p.reviewed]!;

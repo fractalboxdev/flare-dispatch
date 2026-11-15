@@ -270,7 +270,7 @@ export const simulateIsolation = async (seed: number): Promise<IsolationOutcome>
 
     // Each job ran as its own child execution of the parent.
     const admitted = rows(
-      "select id, class from executions where parent_id = ? order by id",
+      "select id, class from mameko_executions where parent_id = ? order by id",
       PARENT,
     ) as { id: string; class: string }[];
     const ids = keys.map((k) => children.get(k)?.id);
@@ -287,7 +287,7 @@ export const simulateIsolation = async (seed: number): Promise<IsolationOutcome>
       const child = children.get(key);
       if (child === undefined) continue;
       const placements = rows(
-        "select state, epoch, leased_epoch, executor_id from placements where execution_id = ?",
+        "select state, epoch, leased_epoch, executor_id from mameko_placements where execution_id = ?",
         child.id,
       );
       const p = placements[0];
@@ -302,7 +302,7 @@ export const simulateIsolation = async (seed: number): Promise<IsolationOutcome>
         );
     }
     const parentPlacement = rows(
-      "select state, executor_id, leased_epoch from placements where execution_id = ?",
+      "select state, executor_id, leased_epoch from mameko_placements where execution_id = ?",
       PARENT,
     )[0];
     if (
@@ -313,7 +313,7 @@ export const simulateIsolation = async (seed: number): Promise<IsolationOutcome>
 
     // Each child holds its own hold: one held reservation of its own amount, and the parent's stays its own.
     const reservations = new Map(
-      rows("select execution_id, class, hold_micro_usd, state from reservations").map((r) => [
+      rows("select execution_id, class, hold_micro_usd, state from mameko_reservations").map((r) => [
         r["execution_id"] as string,
         r,
       ]),

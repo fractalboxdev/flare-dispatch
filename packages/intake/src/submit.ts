@@ -99,6 +99,11 @@ export interface Submission extends Omit<KeyedRequest, "run"> {
   readonly repositoryPublic: boolean | null;
   /** The `author_association` of every principal whose text the trigger's payload carries. */
   readonly inputAssociations: readonly string[];
+  /**
+   * An ops run of the control plane's own, charged against the ops line (MAMEKO-SPD-065): the synthetic webhook canary
+   * (FD-OPS-039). Absent for every request from outside.
+   */
+  readonly opsRun?: boolean;
 }
 
 export const submission = (
@@ -500,6 +505,9 @@ export const submit = (
       // A merge group's runs report on the group's head, which is the request's commit (FD-GH-075).
       check: s.run.ownsCheck ? { name, headSha: s.sha } : null,
       refusal,
+      // A `release` execution's infrastructure retries are its run's declared `retries` (FD-PROF-009).
+      runRetries: s.run.retries,
+      ...(s.opsRun === true ? { opsRun: true } : {}),
     };
 
     // Inside the run's cooldown window the request is held before admission, and the minute tick admits it once the

@@ -80,14 +80,14 @@ export interface ControlPlaneEnv extends CacheEnv {
     idFromName(name: string): unknown;
     get(id: unknown): QuotaObject;
   };
-  /** One `PoolController` object per Container pool, by `idFromName(<pool name>)` (MAMEKO-HOST-059). */
+  /** One `PoolController` object per Container pool, by `idFromName(<pool name>)` (MAMEKO-HOST-061). */
   readonly POOL_CONTROLLER: {
     idFromName(name: string): unknown;
     get(id: unknown): { wake(pool?: string): Promise<void> };
   };
   /**
    * The ES256 private JWK (a Worker secret) that signs each Container's launch credential; unset, no Container pool
-   * claims or launches (MAMEKO-HOST-052).
+   * claims or launches (MAMEKO-HOST-054).
    */
   readonly LAUNCH_SIGNING_KEY?: string;
   /** The Cloudflare API token (a Worker secret) the `cf-api` grant attaches to a job's API request (FD-GATE-066). */
@@ -392,6 +392,17 @@ export const channelConfig = (profile: Profile): ExecutorChannelEnv["MAMEKO_CHAN
       .map(([name, kind]) => [name, kind.effect_class]),
   ),
   notApplicableDetails: [...profile.outcome_mapping.not_applicable_details],
+  // Each class's retry bound after an infrastructure failure: `release` the run's declared retries, `required` and
+  // `interactive` 1, `batch` one retry on a device (FD-PROF-009, MAMEKO-ADM-083).
+  classRetries: Object.fromEntries(
+    profile.classes.flatMap((c) => (c.retries === undefined ? [] : [[c.name, c.retries]])),
+  ),
+  // The kinds generated `on: accepted`, `pr.propose` among them, which the accept inserts in its transaction from the
+  // channel's `acceptedPayload` (MAMEKO-OUT-060, FD-AGT-034), and the class ranks their rows carry.
+  acceptedKinds: Object.fromEntries(
+    Object.entries(profile.intent_kinds).filter(([, kind]) => kind.on === "accepted"),
+  ),
+  classRanks: Object.fromEntries(profile.classes.map((c) => [c.name, c.rank])),
   executorKind: "device",
   planeShare: deviceSlotDefaults.total,
 });

@@ -107,7 +107,7 @@ const appendLayer = (env: ControlPlaneEnv) => {
 
 const refreshRows = (db: TestD1) =>
   db.sqlite
-    .prepare("select intent_key, kind, state from outbox where intent_key like ? order by id")
+    .prepare("select intent_key, kind, state from mameko_outbox where intent_key like ? order by id")
     .all(`${PROVENANCE_REFRESH_KEY}:%`);
 
 describe("a statement logged after the conclusion", () => {

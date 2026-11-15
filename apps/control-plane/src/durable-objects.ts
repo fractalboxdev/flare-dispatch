@@ -21,15 +21,18 @@ import {
 } from "@fractalboxdev/flare-dispatch-cache/transparency-log";
 import { alarmPortFromEnv } from "@fractalboxdev/flare-dispatch-ops";
 import { FlareDispatchLivenessMonitor } from "@fractalboxdev/flare-dispatch-ops/worker";
+import { controlRuns } from "@fractalboxdev/flare-dispatch-catalog/control-runs";
 import {
+  ControlPool as MamekoControlPool,
   ExecutionEngine as MamekoExecutionEngine,
   ExecutorChannel as MamekoExecutorChannel,
-  PoolController as MamekoPoolController,
   type ChannelSocket as MamekoChannelSocket,
   type ClaimedLease,
   type PoolControllerEnv,
 } from "@fractalboxdev/mameko-host-cloudflare";
-import type { ExecutorKind } from "@fractalboxdev/mameko-kernel";
+import type { ExecutorMessage } from "@fractalboxdev/mameko-coordinator";
+import { CONTROL_POOL, type ExecutorKind } from "@fractalboxdev/mameko-kernel";
+import type { CatalogRun } from "@fractalboxdev/mameko-runner/program";
 import { type ExecutionRecord, ObjectStorePresigner } from "@fractalboxdev/mameko-ports";
 import { DurableObject } from "cloudflare:workers";
 import { Context, Effect, Match } from "effect";
@@ -41,10 +44,10 @@ import { leaseCloudValues, withCloudLease } from "./cloud-lease.ts";
 import { leaseReadCredentials } from "./control-plane-read.ts";
 import { leaseDeployClaim, withDeployClaim } from "./deploy-claim.ts";
 import { leaseModelCredentials } from "./model-gateway.ts";
-import { prProposeOnFrame } from "./pr-propose.ts";
+import { AcceptedPayloads, type AcceptedExecution } from "./pr-propose.ts";
 import { type ChannelSocket, cloudStatementOnFrame } from "./provenance.ts";
-import { imageDigestOf, invalidateLeaseNonce, leaseNonce, requestLeaseFields } from "./lease.ts";
-import { launchKeysOf, poolSettings } from "./pools.ts";
+import { imageDigestOf, leaseNonce, requestLeaseFields, revokeLeaseCredentials } from "./lease.ts";
+import { launchKeysOf, mintPoolCredential, poolSettings } from "./pools.ts";
 import {
   channelConfig,
   deployment,
@@ -70,7 +73,7 @@ const PROGRESS_TIMEOUT_MS = 300_000;
  */
 /**
  * Signs each `exec.presign` URL with the object-store presigner over the presign token, on the bucket's S3 endpoint
- * (MAMEKO-HOST-051, FD-CACHE-091). A deploy without the presign token, the account id or the bucket name signs none.
+ * (MAMEKO-HOST-053, FD-CACHE-091). A deploy without the presign token, the account id or the bucket name signs none.
  */
 const presignWith =
   (bindings: ControlPlaneEnv) =>
@@ -114,15 +117,19 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
   },
 
   /**
-   * An `exec.result` that the accept compare-and-set accepted from a cloud executor gets its `pr.propose` row where it
-   * is a `success` that carries a staged write (FD-AGT-034), and its cloud-builder statement, signed with the
-   * provenance key and queued for the transparency log (FD-PROV-008, FD-PROV-009); the placement row, not the frame,
-   * decides whether it was accepted.
+   * An `exec.result` that the accept compare-and-set accepted from a cloud executor gets its cloud-builder statement,
+   * signed with the provenance key and queued for the transparency log (FD-PROV-008, FD-PROV-009); the placement row,
+   * not the frame, decides whether it was accepted.
    */
   afterFrame: async (ws: unknown, message: string | ArrayBuffer) => {
-    await prProposeOnFrame(bindings, ws as ChannelSocket, message, Date.now());
     await cloudStatementOnFrame(bindings, ws as ChannelSocket, message, Date.now());
   },
+
+  /**
+   * The payloads of the kinds generated `on: accepted`: a `success` result's `pr.propose` row from its staged write,
+   * which mameko's accept inserts in its own transaction (FD-AGT-034, MAMEKO-OUT-060).
+   */
+  accepted: new AcceptedPayloads(() => bindings.CACHE),
 
   /** Signs each `exec.presign` URL; a deploy that signs none has mameko answer the request `refused`. */
   presign: presignWith(bindings),
@@ -174,9 +181,9 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
         if (record === null) return yield* new ExecutionInputsMissing({ executionId });
         const { results } = yield* Effect.promise(() =>
           bindings.DB.prepare(
-            `select e.run, e.scope_id, e.deadline_at, p.epoch, x.kind from executions e
-             left join placements p on p.execution_id = e.id
-             left join executors x on x.executor_id = p.executor_id where e.id = ?`,
+            `select e.run, e.scope_id, e.deadline_at, p.epoch, x.kind from mameko_executions e
+             left join mameko_placements p on p.execution_id = e.id
+             left join mameko_executors x on x.executor_id = p.executor_id where e.id = ?`,
           )
             .bind(executionId)
             .all(),
@@ -240,10 +247,21 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
       }).pipe(Effect.provide(d1IntakeStore(bindings.DB))),
     ),
 
-  /** A reclaim through the channel invalidates the reclaimed epoch's nonce before it frees the placement (FD-PROV-011). */
+  /**
+   * A lease's end through the channel invalidates the epoch's nonce before it frees the placement (FD-PROV-011), and
+   * revokes the lease's model-lease token (MAMEKO-ISO-053, MAMEKO-HOST-052).
+   */
   revokeCredentials: (executionId: string, epoch: number): Promise<void> =>
-    Effect.runPromise(invalidateLeaseNonce(bindings.DB, executionId, epoch, Date.now())),
+    revokeLease(bindings, executionId, epoch),
 });
+
+/** Invalidates the lease's nonce and revokes its model-lease token, as the lease at `epoch` ends. */
+const revokeLease = (
+  bindings: Pick<ControlPlaneEnv, "DB">,
+  executionId: string,
+  epoch: number,
+): Promise<void> =>
+  Effect.runPromise(revokeLeaseCredentials(bindings.DB, executionId, epoch, Date.now()));
 
 /** The channel of the device executors, with FlareDispatch's hooks. */
 export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
@@ -286,30 +304,50 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
   protected override revokeCredentials(executionId: string, epoch: number): Promise<void> {
     return this.hooks.revokeCredentials(executionId, epoch);
   }
+
+  /** Reads a `success` result's staged write before mameko's accept, whose transaction inserts its `pr.propose` row. */
+  protected override endLease(message: ExecutorMessage, executorId: string): Promise<unknown> {
+    return this.hooks.accepted.around(message, () => super.endLease(message, executorId));
+  }
+
+  /** The `pr.propose` payload of an accepted result (MAMEKO-OUT-060); null for any other kind. */
+  protected override acceptedPayload(kind: string, execution: AcceptedExecution): unknown {
+    return this.hooks.accepted.payload(kind, execution);
+  }
 }
 
 type PoolEnv = ChannelEnv & PoolControllerEnv;
 
 /**
- * One per Container pool, addressed by the pool's name (MAMEKO-HOST-059): mameko's pool controller, with the same
- * hooks as `ExecutorChannel` and the settings `poolSettings` derives from the profile. Without a launch signing key it
- * is given no pool, so it claims nothing and starts no Container.
+ * One per pool, addressed by the pool's name (MAMEKO-HOST-061): mameko's `ControlPool`, the pool controller whose
+ * `control` pool runs each lease's run program in an object of this namespace with no Container (MAMEKO-EXEC-057),
+ * with the same hooks as `ExecutorChannel` and the settings `poolSettings` derives from the profile. Without a launch
+ * signing key it is given the `control` pool alone, so it starts no Container.
  */
-export class PoolController extends MamekoPoolController<PoolEnv> {
+export class PoolController extends MamekoControlPool<PoolEnv> {
   private readonly hooks: ReturnType<typeof channelHooks>;
 
   constructor(ctx: DurableObjectState, env: ControlPlaneEnv) {
     const profile = profileOf(env);
     const keys = launchKeysOf(env);
     const settings = poolSettings(env, profile);
+    const control = settings.pools[CONTROL_POOL];
     super(ctx, {
       ...env,
       MAMEKO_CHANNEL_CONFIG: channelConfig(profile),
-      MAMEKO_POOL_CONFIG: keys === null ? { ...settings, pools: {} } : settings,
+      MAMEKO_POOL_CONFIG:
+        keys === null
+          ? { ...settings, pools: control === undefined ? {} : { [CONTROL_POOL]: control } }
+          : settings,
       MAMEKO_LAUNCH_SIGNING_KEY: keys?.signing ?? ({} as PoolEnv["MAMEKO_LAUNCH_SIGNING_KEY"]),
       ...(keys === null ? {} : { MAMEKO_LAUNCH_KEY: keys.verify }),
     } as PoolEnv);
     this.hooks = channelHooks(env);
+  }
+
+  /** The `control` pool's run catalogue (`control-runs.ts`). */
+  protected override runs(): readonly CatalogRun[] {
+    return controlRuns;
   }
 
   override async webSocketMessage(ws: unknown, message: string | ArrayBuffer): Promise<void> {
@@ -338,8 +376,31 @@ export class PoolController extends MamekoPoolController<PoolEnv> {
     return this.hooks.leaseFields(executionId);
   }
 
+  /** A minted grant's credential for one launch: the `model-gateway` grant's model-lease token (MAMEKO-HOST-050). */
+  protected override mintCredential(
+    grant: string,
+    lease: {
+      readonly executionId: string;
+      readonly epoch: number;
+      readonly scopeId: string;
+      readonly deadlineAt: number;
+    },
+  ): Promise<{ readonly credential: string; readonly expiresAt: number }> {
+    return mintPoolCredential(this.env)(grant, lease);
+  }
+
   protected override revokeCredentials(executionId: string, epoch: number): Promise<void> {
     return this.hooks.revokeCredentials(executionId, epoch);
+  }
+
+  /** Reads a `success` result's staged write before mameko's accept, whose transaction inserts its `pr.propose` row. */
+  protected override endLease(message: ExecutorMessage, executorId: string): Promise<unknown> {
+    return this.hooks.accepted.around(message, () => super.endLease(message, executorId));
+  }
+
+  /** The `pr.propose` payload of an accepted result (MAMEKO-OUT-060); null for any other kind. */
+  protected override acceptedPayload(kind: string, execution: AcceptedExecution): unknown {
+    return this.hooks.accepted.payload(kind, execution);
   }
 }
 
@@ -409,10 +470,11 @@ export class TransparencyLog extends PrivateLogObject<LogEnv> {
 
 /**
  * mameko's monitor whose timed wake also raises `cron-silent` (MAMEKO-OPS-010). A sweep's reclaim of a silent lease
- * invalidates the reclaimed epoch's nonce before it frees the placement (FD-PROV-011).
+ * invalidates the reclaimed epoch's nonce before it frees the placement (FD-PROV-011), and revokes the lease's
+ * model-lease token (MAMEKO-ISO-053).
  */
 export class LivenessMonitor extends FlareDispatchLivenessMonitor {
   protected override revokeCredentials(executionId: string, epoch: number): Promise<void> {
-    return Effect.runPromise(invalidateLeaseNonce(this.env.DB, executionId, epoch, Date.now()));
+    return revokeLease(this.env, executionId, epoch);
   }
 }

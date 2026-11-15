@@ -1,4 +1,4 @@
-// Builds the run-catalogue bundle a Container pool's device executor pins (MAMEKO-EXEC-144): the cloud runner entry
+// Builds the run-catalogue bundle a Container pool's device executor pins (MAMEKO-EXEC-153): the cloud runner entry
 // (`src/cloud-runner-entry.ts`) bundled with the runner. `infra/v2/Dockerfile.gate` runs it at image build time:
 //
 //   node --experimental-strip-types --no-warnings packages/catalog/scripts/build-pool-catalog.ts <out dir>

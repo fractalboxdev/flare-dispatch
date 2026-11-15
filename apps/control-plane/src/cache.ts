@@ -85,7 +85,7 @@ export const leaseCache = async (
 ) => {
   const placement = await first<LeaseOf>(
     env.DB,
-    `select p.epoch, x.kind from placements p left join executors x on x.executor_id = p.executor_id
+    `select p.epoch, x.kind from mameko_placements p left join mameko_executors x on x.executor_id = p.executor_id
      where p.execution_id = ?`,
     record.executionId,
   );
@@ -109,8 +109,8 @@ const executionStatus = (db: D1Like, id: string) =>
     repo: string | null;
   }>(
     db,
-    `select e.status, e.scope_id, p.epoch, p.executor_id, i.repo from executions e
-       left join placements p on p.execution_id = e.id
+    `select e.status, e.scope_id, p.epoch, p.executor_id, i.repo from mameko_executions e
+       left join mameko_placements p on p.execution_id = e.id
        left join intake_records i on i.execution_id = e.id
      where e.id = ?`,
     id,
@@ -124,7 +124,7 @@ const executorKindOf = async (db: D1Like, executionId: string) =>
   (
     await first<{ kind: string | null }>(
       db,
-      `select x.kind from placements p left join executors x on x.executor_id = p.executor_id
+      `select x.kind from mameko_placements p left join mameko_executors x on x.executor_id = p.executor_id
        where p.execution_id = ?`,
       executionId,
     )
@@ -222,8 +222,8 @@ const leasedTo = (env: ControlPlaneEnv, executorId: string) =>
           env.DB,
           `select p.epoch, p.state, p.executor_id, p.cache_read, p.cache_write, x.kind, i.repo, e.class, e.status,
              e.deadline_at
-           from placements p join executions e on e.id = p.execution_id
-             left join executors x on x.executor_id = p.executor_id
+           from mameko_placements p join mameko_executions e on e.id = p.execution_id
+             left join mameko_executors x on x.executor_id = p.executor_id
              left join intake_records i on i.execution_id = p.execution_id
            where p.execution_id = ?`,
           executionId,

@@ -5,6 +5,7 @@ import RUN_DIGESTS from "@fractalboxdev/flare-dispatch-catalog/run-digests" with
 import { requestContextOf, type IntakeRecord } from "@fractalboxdev/flare-dispatch-intake";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Effect, Schema } from "effect";
+import { revokeLeaseTokens } from "./lease-token.ts";
 
 /** The image a host execution names: it runs in no image, and a lease must carry the field. */
 export const NO_IMAGE = "none: host execution";
@@ -56,7 +57,7 @@ export const requestLeaseFields = (
   execution: { readonly scope_id: string; readonly deadline_at: number },
 ) => ({
   // The run-definition digest the runner checks the lease's run against; a run the catalogue lacks names a digest no
-  // run has, so a runner refuses it (MAMEKO-EXEC-157).
+  // run has, so a runner refuses it (MAMEKO-EXEC-166).
   run_digest:
     entry === null
       ? NO_RUN_DIGEST
@@ -191,6 +192,22 @@ export const invalidateLeaseNonce = (
         .bind(now, executionId, epoch)
         .run(),
     );
+  });
+
+/**
+ * Revokes every credential of the execution's lease at `epoch` as the lease ends: its nonce (FD-PROV-011) and its
+ * model-lease and control-plane read tokens (MAMEKO-ISO-053, MAMEKO-HOST-052). The channel, the pool controller, the liveness monitor and an
+ * operator's device revoke call it.
+ */
+export const revokeLeaseCredentials = (
+  db: D1Like,
+  executionId: string,
+  epoch: number,
+  now: number,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    yield* invalidateLeaseNonce(db, executionId, epoch, now);
+    yield* Effect.promise(() => revokeLeaseTokens(db, executionId, epoch, now));
   });
 
 /**

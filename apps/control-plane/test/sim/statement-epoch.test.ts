@@ -153,7 +153,7 @@ const enroll = async (executorId: string) => {
   await (
     await database()
   )
-    .prepare("update executors set attested_at = ?, code_hash = ? where executor_id = ?")
+    .prepare("update mameko_executors set attested_at = ?, code_hash = ? where executor_id = ?")
     .bind(Date.now() - 3_600_000, CODE_HASH, executorId)
     .run();
   const socket = await connect(mf, executorId, device.keys);
@@ -234,7 +234,7 @@ const quarantined = async (executorId: string) =>
     await (
       await database()
     )
-      .prepare("select quarantine from executors where executor_id = ?")
+      .prepare("select quarantine from mameko_executors where executor_id = ?")
       .bind(executorId)
       .first<{ quarantine: number }>()
   )?.quarantine === 1;

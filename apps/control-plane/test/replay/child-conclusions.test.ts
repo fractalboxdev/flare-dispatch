@@ -84,10 +84,10 @@ interface Journal {
 /** Every outbox and execution row, keyed by table and id, with its full content. */
 const snapshot = (db: TestD1): ReadonlyMap<string, string> =>
   new Map([
-    ...(db.sqlite.prepare("select * from outbox").all() as { id: string }[]).map(
+    ...(db.sqlite.prepare("select * from mameko_outbox").all() as { id: string }[]).map(
       (r) => [`outbox ${r.id}`, JSON.stringify(r)] as const,
     ),
-    ...(db.sqlite.prepare("select * from executions").all() as { id: string }[]).map(
+    ...(db.sqlite.prepare("select * from mameko_executions").all() as { id: string }[]).map(
       (r) => [`executions ${r.id}`, JSON.stringify(r)] as const,
     ),
   ]);
@@ -113,7 +113,7 @@ const drainAll = async (j: Journal) => {
     j.clock += MINUTE_MS;
     await drain(j.db, j.gh, j.clock);
     const open = j.db.sqlite
-      .prepare("select count(*) as n from outbox where state in ('pending', 'in_flight')")
+      .prepare("select count(*) as n from mameko_outbox where state in ('pending', 'in_flight')")
       .get() as { n: number };
     if (open.n === 0) return;
   }
@@ -180,11 +180,11 @@ describe("an ended matrix parent's child conclusions under a replayed tick and d
     expect(j.passes).toEqual([["child-2", "child-3", "child-4"], [], [], []]);
     // Only the conclusion whose answer was lost is retried, and its retry reaches applied.
     expect(
-      j.db.sqlite.prepare("select id, attempts, state from outbox where attempts > 1").all(),
+      j.db.sqlite.prepare("select id, attempts, state from mameko_outbox where attempts > 1").all(),
     ).toEqual([{ id: LOST_ROW, attempts: 2, state: "applied" }]);
     const rows = j.db.sqlite
       .prepare(
-        "select execution_id, kind, payload_json, state from outbox where intent_key = ? order by execution_id",
+        "select execution_id, kind, payload_json, state from mameko_outbox where intent_key = ? order by execution_id",
       )
       .all(CHILD_CONCLUDE_KEY) as { execution_id: string; payload_json: string }[];
     expect(rows.map((r) => ({ ...r, payload_json: JSON.parse(r.payload_json) }))).toEqual([
