@@ -139,6 +139,7 @@ describe("the security gate recipes in the catalogue", () => {
       "base",
       "_tag",
       "branch",
+      "baseSha",
       "_tag",
       "baseSha",
     ]);
@@ -267,7 +268,7 @@ describe("the security gate request decoders", () => {
           sha: "a".repeat(40),
           ref: "refs/pull/7/head",
           scope: "o/r",
-          base: { _tag: "TargetBranch", branch: "main" },
+          base: { _tag: "TargetBranch", branch: "main", baseSha: "c".repeat(40) },
         });
     expect(Option.isNone(decode(pullRequest("closed", { draft: false, author: "octocat" })))).toBe(
       true,

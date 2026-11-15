@@ -138,15 +138,21 @@ export const poolGrants = (
 };
 
 /**
- * Each catalogue run's grant names per egress phase: the grants its spec declares, and for an agentic recipe that calls
- * models, the `agent` profile's `model-gateway` base grant (FD-PROF-050), so its `agent` phase reaches the model route
- * and no other host.
+ * Each catalogue run's grant names per egress phase: the grants its spec declares; for a run that requires
+ * `Workspace`, the `setup` profile's `git-remote` base grant (FD-PROF-050), through which the executor checks the
+ * lease's source out before the job starts; and for an agentic recipe that calls models, the `agent` profile's
+ * `model-gateway` base grant, so its `agent` phase reaches the model route.
  */
 export const RUN_GRANTS: PoolControllerSettings["runGrants"] = Object.fromEntries(
   Object.values(RUN_CATALOG).map(({ spec, agentic }) => [
     spec.name,
     {
-      setup: [...spec.grants.setup],
+      setup: [
+        ...new Set([
+          ...(spec.requires.includes("Workspace") ? ["git-remote"] : []),
+          ...spec.grants.setup,
+        ]),
+      ],
       agent: [
         ...spec.grants.agent,
         ...(agentic?.declaration.needsModel === true ? ["model-gateway"] : []),

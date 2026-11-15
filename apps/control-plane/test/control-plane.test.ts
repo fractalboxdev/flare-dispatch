@@ -1065,6 +1065,25 @@ describe("a development deployment", () => {
     await endStandingClaim(socket);
   });
 
+  it("MAMEKO-ADM-033 [FD-GATE-019] the lease of a run that requires Workspace carries the source admission recorded: the clone URL and the dispatched commit", async () => {
+    const device = await newDevice();
+    await post(development, "/v1/executors/register", registration("mac-source", device.identity));
+    const sha = "9".repeat(40);
+    const admitted = await post(development, "/v1/dispatch/check", dispatchBody(sha));
+    const { execution_id: id } = (await admitted.json()) as { execution_id: string };
+    const socket = await connect(development, "mac-source", device.keys);
+    socket.send(hello("mac-source"));
+    await socket.next("session.welcome");
+    socket.send({ type: "exec.claim", id: "c1", free: { batch: 1 } });
+    const lease = await socket.next("exec.lease");
+    expect(lease).toMatchObject({ execution_id: id, run: "check" });
+    expect(lease["source"]).toEqual({
+      remote: "https://github.com/fractalboxdev/flare-dispatch.git",
+      commit: sha,
+    });
+    await endStandingClaim(socket);
+  });
+
   it.each([
     [
       "skipped",

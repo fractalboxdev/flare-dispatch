@@ -18,7 +18,7 @@ import {
   type Resolution,
 } from "@fractalboxdev/mameko-coordinator";
 import { d1ExecutionStore, type D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
-import { AlarmPort, type CancelTarget } from "@fractalboxdev/mameko-ports";
+import { AlarmPort, type CancelTarget, type ExecutionSource } from "@fractalboxdev/mameko-ports";
 import { Clock, Context, Effect, Layer, Schema } from "effect";
 import type { Caller, RecordedTrigger } from "./event.ts";
 import type { IntakeRun, RunCatalog } from "./runs.ts";
@@ -108,6 +108,14 @@ export interface IntakeAdmitInput {
   };
   readonly maxDurationSec: number;
   readonly grants: { readonly setup: readonly string[]; readonly agent: readonly string[] };
+  /**
+   * The source the execution row stores and every lease carries, which the executor checks out before the job starts:
+   * the repository's HTTPS clone URL, the request's commit and, for a run that reads a merge base, the commit it diffs
+   * against (MAMEKO-ADM-033). Null or absent for a run whose `requires` omits `Workspace`.
+   */
+  readonly source?: ExecutionSource | null;
+  /** The run's `requires` lists `Workspace`, so admission refuses a request without a source (MAMEKO-ADM-034). */
+  readonly requiresWorkspace?: boolean;
   /**
    * The supersession group the request joins, from the profile's `supersessionKey` binding; null or absent joins none
    * (MAMEKO-ADM-063, FD-PROF-027).
@@ -343,6 +351,8 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
               ? () => Effect.void
               : (payload) => Effect.orDie(ports.startExecution!(payload)),
           grants: input.grants,
+          source: input.source ?? null,
+          requiresWorkspace: input.requiresWorkspace ?? false,
           intents: {
             ...admittedIntents(profile, input),
             ...(limitKey === undefined

@@ -28,6 +28,7 @@ import {
   sandboxImageDecoder,
   SecurityGateEntrySchema,
   securityGateDecoder,
+  securityGateSourceBase,
   securityRescanDecoder,
   WorkerDeployEntrySchema,
   workerDeployDecoder,
@@ -68,6 +69,7 @@ interface ManifestRecipe {
   /** The run reports under `flare-dispatch/<run>` alone, so its manifest entry names no label. */
   readonly labelless?: true;
   readonly bindCommit?: IntakeRun["bindCommit"];
+  readonly sourceBase?: IntakeRun["sourceBase"];
 }
 
 const recipe = <A>(
@@ -108,6 +110,13 @@ const prReviewRequiredCheck = (inputs: unknown, required: boolean): unknown =>
   Option.match(Schema.decodeUnknownOption(PrReviewInput)(inputs), {
     onNone: () => inputs,
     onSome: (input) => withRequiredCheck(input, required),
+  });
+
+/** The pull request's base commit a `pr-review` input names, which its review diff reads from (FD-AGT-049). */
+const prReviewSourceBase = (inputs: unknown): string | null =>
+  Option.match(Schema.decodeUnknownOption(PrReviewInput)(inputs), {
+    onNone: () => null,
+    onSome: (input) => input.baseSha,
   });
 
 /** The pull request a `pr-review` input names. */
@@ -167,11 +176,13 @@ const MANIFEST_RECIPES: Readonly<Record<string, ManifestRecipe>> = {
   securityGate: {
     ...gateRecipe(SecurityGateEntrySchema, () => securityGateDecoder()),
     labelless: true,
+    sourceBase: securityGateSourceBase,
   },
   "pr-review": {
     ...recipe(PrReviewParams, prReviewDecoder),
     requiredCheck: prReviewRequiredCheck,
     pullNumber: prReviewPullNumber,
+    sourceBase: prReviewSourceBase,
   },
   "improve-pr": recipe(ImprovePrParams, improvePrDecoder),
 };
@@ -188,6 +199,18 @@ const RUN_RECIPES: Readonly<Record<string, ManifestRecipe>> = {
     labelless: true,
     bindCommit: bindScanCommit,
   },
+};
+
+/**
+ * Whether the run requires `Workspace`, so admission records its source, and the base its source names, for a run
+ * whose recipe reads a merge base: `pr-review` and `security-gate` (MAMEKO-ADM-033, MAMEKO-ADM-034).
+ */
+const sourceOf = (entry: CatalogEntry): Pick<IntakeRun, "requiresWorkspace" | "sourceBase"> => {
+  const base = manifestRecipeOf(entry)?.sourceBase;
+  return {
+    requiresWorkspace: entry.spec.requires.includes("Workspace"),
+    ...(base === undefined ? {} : { sourceBase: base }),
+  };
 };
 
 /** A run's commit binding, where its recipe takes the commit from the dispatch (FD-GATE-112). */
@@ -273,6 +296,7 @@ export const catalogRuns =
         ...(manifestRecipeOf(entry)?.dispatchOnly === true ? { dispatchOnly: true } : {}),
         ...(manifestRecipeOf(entry)?.labelless === true ? { labelless: true } : {}),
         ...bindCommitOf(entry),
+        ...sourceOf(entry),
         ...(isReadOnlyScanRun(entry.spec.name, entry) ? { readOnlyScan: true } : {}),
       })),
       Match.orElse(() => undefined),

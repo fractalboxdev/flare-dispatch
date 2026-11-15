@@ -1,4 +1,5 @@
 // The Container pools' declarations, settings, grants and launch keys (specs/architecture.md § Components).
+import { RUN_CATALOG } from "@fractalboxdev/flare-dispatch-catalog";
 import { buildProfile } from "@fractalboxdev/flare-dispatch-profile";
 import { launchGrants } from "@fractalboxdev/mameko-host-cloudflare";
 import { describe, expect, it } from "vitest";
@@ -59,14 +60,16 @@ describe("Container pools", () => {
       profile,
     );
     const grants = launchGrants(withToken, "worker-deploy");
-    expect(grants.setup.map((g) => g.name)).toEqual(["cf-api", "deploy-claim"]);
+    expect(grants.setup.map((g) => g.name)).toEqual(["git-remote", "cf-api", "deploy-claim"]);
     expect(grants.agent).toEqual([]);
     expect(grants.setup.filter((g) => g.host === "api.cloudflare.com")).toEqual([
       expect.objectContaining({ name: "cf-api", credential: "Bearer cf-token" }),
     ]);
-    expect(launchGrants(poolSettings(env(), profile), "worker-deploy").setup[0]!.credential).toBe(
-      undefined,
-    );
+    expect(
+      launchGrants(poolSettings(env(), profile), "worker-deploy").setup.find(
+        (g) => g.name === "cf-api",
+      )!.credential,
+    ).toBe(undefined);
     // A run the catalogue does not declare gets no grant.
     expect(launchGrants(withToken, "no-such-run")).toEqual({ setup: [], agent: [] });
   });
@@ -92,14 +95,17 @@ describe("Container pools", () => {
           "worker-deploy",
         ).setup.map((g) => g.name),
         String(origin),
-      ).toEqual(["cf-api"]);
+      ).toEqual(["git-remote", "cf-api"]);
   });
 
-  it("[FD-AGT-010] an agentic recipe that calls models reaches the dispatcher's model route in its agent phase alone, with no credential, and its setup phase reaches no host", () => {
+  it("[FD-AGT-010] an agentic recipe that calls models reaches the dispatcher's model route in its agent phase alone, with no credential, and its setup phase reaches the git host alone", () => {
     const settings = poolSettings(env({ PUBLIC_ORIGIN: "https://ci.example.com/" }), profile);
     for (const run of ["pr-review", "improve-pr", "self-heal-pr", "release-notes"]) {
       const grants = launchGrants(settings, run);
-      expect(grants.setup, run).toEqual([]);
+      expect(
+        grants.setup.map((g) => g.name),
+        run,
+      ).toEqual(["git-remote"]);
       expect(grants.agent, run).toEqual([
         expect.objectContaining({
           name: "model-gateway",
@@ -111,7 +117,7 @@ describe("Container pools", () => {
       expect(grants.agent[0]?.credential, run).toBeUndefined();
     }
     // `triage-prs` calls no model, so its agent phase reaches no host.
-    expect(launchGrants(settings, "triage-prs")).toEqual({ setup: [], agent: [] });
+    expect(launchGrants(settings, "triage-prs").agent).toEqual([]);
     // A gate run's phases hold no model route.
     for (const run of ["worker-deploy", "security-gate", "sandbox-image"])
       expect(
@@ -119,10 +125,22 @@ describe("Container pools", () => {
         run,
       ).not.toContain("model-gateway");
     // A deploy that names no public origin has no dispatcher host to grant.
-    expect(launchGrants(poolSettings(env(), profile), "pr-review")).toEqual({
-      setup: [],
-      agent: [],
-    });
+    expect(launchGrants(poolSettings(env(), profile), "pr-review").agent).toEqual([]);
+  });
+
+  it("[FD-PROF-050] MAMEKO-ADM-033 every run that requires Workspace reaches the git host in its setup phase, where the executor checks out the lease's source, and no other run does", () => {
+    const settings = poolSettings(env({ PUBLIC_ORIGIN: "https://ci.example.com/" }), profile);
+    for (const [run, entry] of Object.entries(RUN_CATALOG)) {
+      const setup = launchGrants(settings, run).setup.map((g) => g.name);
+      expect(setup.includes("git-remote"), run).toBe(entry.spec.requires.includes("Workspace"));
+      expect(setup.filter((g) => g === "git-remote").length, run).toBeLessThanOrEqual(1);
+    }
+    expect(launchGrants(settings, "security-gate").setup.map((g) => g.name)).toEqual([
+      "git-remote",
+    ]);
+    const git = launchGrants(settings, "pr-review").setup[0]!;
+    expect(git).toMatchObject({ host: "github.com", methods: ["GET", "POST"], pathPrefix: "/" });
+    expect(git.credential).toBeUndefined();
   });
 
   it("[FD-ARCH-001] the launch keys are the secret's P-256 private JWK and its public half, and none for any other value", async () => {

@@ -284,7 +284,7 @@ describe("the security gate recipes as intake reads them", () => {
           sha: HEAD,
           ref: "refs/pull/12/head",
           scope: REPO,
-          base: { _tag: "TargetBranch", branch: "main" },
+          base: { _tag: "TargetBranch", branch: "main", baseSha: BASE },
         });
       }
     // The manifest's skipAuthors does not reach the scan input either.
@@ -299,6 +299,19 @@ describe("the security gate recipes as intake reads them", () => {
         production("security-gate")!.trigger(mergeGroup, { label: null, params: {} }, context),
       ),
     ).toMatchObject({ sha: HEAD, base: { _tag: "MergeGroup", baseSha: BASE } });
+  });
+
+  it("[FD-GATE-092] MAMEKO-ADM-033 a security-gate source's base is the pull request's base or merge_group.base_sha, and a rescan's names none", () => {
+    for (const run of SCANS) expect(production(run)!.requiresWorkspace, run).toBe(true);
+    const gate = production("security-gate")!;
+    const baseOf = (event: DispatchEvent) =>
+      gate.sourceBase!(
+        Option.getOrThrow(gate.trigger(event, { label: null, params: {} }, context)),
+      );
+    expect(baseOf(pullRequest())).toBe(BASE);
+    expect(baseOf(mergeGroup)).toBe(BASE);
+    expect(gate.sourceBase!({ base: { _tag: "TargetBranch", branch: "main" } })).toBeNull();
+    expect(production("security-rescan")!.sourceBase).toBeUndefined();
   });
 
   it("[FD-GATE-110] gives both scan runs the git host as their only setup grant and no agent grant", () => {
@@ -475,5 +488,40 @@ describe("the security gate recipes as intake reads them", () => {
       status: 400,
       code: "invalid_inputs",
     });
+  });
+});
+
+describe("the source a run's executions check out", () => {
+  const production = catalogRuns("production");
+
+  it("[FD-AGT-049] MAMEKO-ADM-033 every run that requires Workspace records a source, pr-review's with the pull request's base its review diff reads", () => {
+    for (const run of [
+      "pr-review",
+      "improve-pr",
+      "triage-issues",
+      "worker-deploy",
+      "sandbox-image",
+    ])
+      expect(production(run)!.requiresWorkspace, run).toBe(true);
+    for (const run of ["deploy-smoke", "offload-test"])
+      expect(production(run)!.requiresWorkspace, run).toBe(false);
+    const review = production("pr-review")!;
+    expect(
+      review.sourceBase!({
+        repo: { owner: "acme", name: "app" },
+        number: 12,
+        baseSha: BASE,
+        headSha: HEAD,
+        draft: false,
+        labels: [],
+        authorLogin: "octocat",
+        authorAssociation: "MEMBER",
+        forkHead: false,
+        maxDiffChars: 1000,
+      }),
+    ).toBe(BASE);
+    // A run that reads no merge base names none.
+    for (const run of ["improve-pr", "worker-deploy", "security-rescan"])
+      expect(production(run)!.sourceBase, run).toBeUndefined();
   });
 });

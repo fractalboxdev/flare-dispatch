@@ -1,6 +1,6 @@
 // Every gate run's input schema and run ceiling. This module imports no process or file API, so the control plane's
 // Worker decodes the same inputs the runner child executes.
-import { Data, Schema } from "effect";
+import { Data, Option, Schema } from "effect";
 import {
   CacheEntrySchema,
   CheckEntrySchema,
@@ -171,10 +171,15 @@ const ScanCommitFields = {
 
 /**
  * Where a `security-gate` scan range starts (specs/runs/gate.md § Security gate, step 2): the merge base of the head
- * and the target branch for a pull request, `merge_group.base_sha` for a merge group.
+ * and the target branch for a pull request, `merge_group.base_sha` for a merge group. A pull request's base also names
+ * the target branch's head at the event, the commit the execution's source fetches beside the head, so the merge base
+ * is in the checkout's history; the scan range still starts at the merge base the checkout computes.
  */
 export const SecurityGateBase = Schema.Union([
-  Schema.TaggedStruct("TargetBranch", { branch: Schema.NonEmptyString }),
+  Schema.TaggedStruct("TargetBranch", {
+    branch: Schema.NonEmptyString,
+    baseSha: Schema.optionalKey(ScanSha),
+  }),
   Schema.TaggedStruct("MergeGroup", { baseSha: ScanSha }),
 ]);
 export type SecurityGateBase = typeof SecurityGateBase.Type;
@@ -185,6 +190,16 @@ export const SecurityGateInput = Schema.Struct({
   base: SecurityGateBase,
 });
 export type SecurityGateInput = typeof SecurityGateInput.Type;
+
+/**
+ * The base of a `security-gate` execution's source (MAMEKO-ADM-033): `merge_group.base_sha` for a merge group, the
+ * target branch's head at the event for a pull request, and none for an input that names neither or does not decode.
+ */
+export const securityGateSourceBase = (inputs: unknown): string | null =>
+  Option.match(Schema.decodeUnknownOption(SecurityGateInput)(inputs), {
+    onNone: () => null,
+    onSome: ({ base }) => base.baseSha ?? null,
+  });
 
 /**
  * `security-rescan`'s input: the dispatched commit alone, which intake binds to the dispatch (`bindScanCommit`). Its
