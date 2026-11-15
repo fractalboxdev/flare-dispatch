@@ -1,7 +1,7 @@
 // The minute tick's composition: the operability package's tick with the GitHub applier draining the outbox, the
 // GitHub probes under the App, the admission of held requests, the enqueue of intake's sweep and schedule units for
 // every installation of the App, the conclusions of ended fan-out parents' children, the daily advisory refresh, the
-// advisory snapshot staleness alarm and the drain of the transparency-log appends.
+// advisory snapshot staleness alarm, the drain of the transparency-log appends and the Container pools' floor canary.
 import {
   GithubApp,
   insertChildConclusions,
@@ -20,6 +20,7 @@ import {
   type TickStep,
 } from "@fractalboxdev/flare-dispatch-ops";
 import {
+  FLOOR_CANARY_UNIT,
   startStaleExecutions,
   startUnstartedExecutions,
   type ExecutionPayload,
@@ -32,6 +33,7 @@ import { Cause, Effect, Exit, Layer, Schema } from "effect";
 import { advisoryRefreshStep, advisoryWatchOf } from "./advisory-snapshots.ts";
 import { isolateServices } from "./composition.ts";
 import { channelConfig, concludeKindOf, profileOf, type ControlPlaneEnv } from "./config.ts";
+import { floorCanaryPools, floorCanaryUnit } from "./floor-canary.ts";
 import { appOptionsOf } from "./github.ts";
 import { logAppendStep } from "./provenance.ts";
 
@@ -182,6 +184,7 @@ export const tickDeps = (
   const services = Layer.effectContext(Effect.promise(() => isolateServices(env)));
   const withApp = appOptionsOf(env) !== undefined;
   const fixtureRepo = env.GITHUB_FIXTURE_REPO?.trim() ?? "";
+  const canaryPools = floorCanaryPools(env, profileOf(env));
   const base = tickDepsFromEnv(env as unknown as Parameters<typeof tickDepsFromEnv>[0], {
     profile: profileOf(env),
   });
@@ -233,6 +236,17 @@ export const tickDeps = (
       advisoryRefreshStep(env, now),
       // Each log-append intent due now goes to Rekor or the private log (FD-PROV-034, FD-PROV-041).
       logAppendStep(env, now),
+      // Each Container pool's floor canary, once per 2 h slot, and the page for the slot before (MAMEKO-OPS-012).
+      ...(canaryPools.length === 0
+        ? []
+        : [
+            {
+              step: FLOOR_CANARY_UNIT,
+              effect: floorCanaryUnit(env, canaryPools, now).pipe(
+                Effect.provide(services as never),
+              ) as Effect.Effect<unknown, unknown>,
+            },
+          ]),
       ...steps(now),
     ],
   };

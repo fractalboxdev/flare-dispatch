@@ -1,7 +1,8 @@
 // The live `DeployTarget`: the Cloudflare API for the deployed Workers, their schedules, domains and Container
 // applications and the record of the last deploy in the artifacts bucket; `wrangler` for D1 migrations and Worker
 // deploys; the GitHub API with the App JWT for the App's registration and the default branch's ruleset; the Workers'
-// own hostnames for the post-deploy probes; the Cloudflare Access applications of the account; the account API token
+// own hostnames for the post-deploy probes; the control plane's floor canary routes on the dispatcher hostname under
+// the operator's Access service token; the Cloudflare Access applications of the account; the account API token
 // the object-store presigner signs with, by its policies (FD-CACHE-091); AWS STS, AWS Budgets, IAM
 // and AWS Organizations, signed with SigV4, for the AWS account's Budgets actions and the policies they apply; the
 // overlay's alert sink for `deploy-probe-failed`; the local file system for the scan bundle envelope the overlay pins.
@@ -9,7 +10,11 @@ import { signRequest, type AwsCredentials } from "@fractalboxdev/flare-dispatch-
 import { contentObjectKey } from "@fractalboxdev/flare-dispatch-cache/namespaces";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { Effect, Layer } from "effect";
+import {
+  FloorCanaryStarted,
+  FloorCanaryVerdictBody,
+} from "@fractalboxdev/flare-dispatch-api/declaration";
+import { Effect, Layer, Schema } from "effect";
 import type { DeployedAccessApplication } from "../access-application.ts";
 import { alarmMessage, RUNBOOK } from "../alarms.ts";
 import {
@@ -64,6 +69,13 @@ export interface LiveTargetConfig {
    * that carries the `aws` kind fails without them (FD-EXEC-083).
    */
   readonly aws?: AwsCredentials;
+  /**
+   * The Access service token whose common name the overlay lists among `operators`: the deploy reaches the control
+   * plane's floor canary routes on the dispatcher hostname with it (FD-OPS-050).
+   */
+  readonly access?: { readonly clientId: string; readonly clientSecret: string };
+  /** How often the deploy reads the floor canary's verdict, and how long it waits for one. */
+  readonly floorCanaryPoll?: { readonly intervalMs: number; readonly timeoutMs: number };
   readonly fetch?: typeof fetch;
   readonly now?: () => number;
   /** Writes a rendered configuration beside its template, for `wrangler -c`; removed after use. */
@@ -95,6 +107,12 @@ const CAS_BUCKET = "CACHE";
 
 /** The page size the Access applications are listed in. */
 const ACCESS_PAGE = 100;
+
+/**
+ * The floor canary's verdict reads: every 5 s, for at most 15 min, past the canary's 120 s start bound and its
+ * 600 s run (MAMEKO-OPS-018).
+ */
+const FLOOR_CANARY_POLL = { intervalMs: 5_000, timeoutMs: 900_000 } as const;
 
 export { scriptName };
 
@@ -841,15 +859,97 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
         return res.ok;
       }),
     floorCanary: (rendered) =>
-      Effect.succeed<CanaryResult>(
-        rendered.every((r) => arr(r.config["containers"]).length === 0)
-          ? { status: "not-applicable", detail: "the deploy carries no Container class" }
-          : {
+      Effect.gen(function* () {
+        if (rendered.every((r) => arr(r.config["containers"]).length === 0))
+          return {
+            status: "not-applicable",
+            detail: "the deploy carries no Container class",
+          } satisfies CanaryResult;
+        const host = c.overlay.hostnames["dispatcher"];
+        if (host === undefined)
+          return yield* new TargetFailed({
+            operation: "floor-canary",
+            message: "the overlay names no dispatcher hostname",
+          });
+        const access = c.access;
+        if (access === undefined)
+          return yield* new TargetFailed({
+            operation: "floor-canary",
+            message:
+              "FD_ACCESS_CLIENT_ID and FD_ACCESS_CLIENT_SECRET are not set; the floor canary routes serve an operator",
+          });
+        /** One operator call of the control plane's floor canary routes, decoded with `schema`. */
+        const call = <S extends Schema.Decoder<unknown>>(
+          method: "GET" | "POST",
+          path: string,
+          schema: S,
+        ) =>
+          Effect.gen(function* () {
+            const operation = `floor-canary ${method} ${path}`;
+            const res = yield* Effect.tryPromise({
+              try: () =>
+                fetcher(`https://${host}${path}`, {
+                  method,
+                  headers: {
+                    "CF-Access-Client-Id": access.clientId,
+                    "CF-Access-Client-Secret": access.clientSecret,
+                    "content-type": "application/json",
+                    accept: "application/json",
+                  },
+                  ...(method === "POST" ? { body: "{}" } : {}),
+                }),
+              catch: (e) => new TargetFailed({ operation, message: String(e) }),
+            });
+            const text = yield* Effect.tryPromise({
+              try: () => res.text(),
+              catch: (e) => new TargetFailed({ operation, message: String(e) }),
+            });
+            if (!res.ok)
+              return yield* new TargetFailed({
+                operation,
+                message: `answered ${res.status}: ${text.slice(0, 500)}`,
+              });
+            return yield* Effect.try({
+              try: () => JSON.parse(text) as unknown,
+              catch: (e) => new TargetFailed({ operation, message: `not JSON: ${String(e)}` }),
+            }).pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(schema)),
+              Effect.mapError((e) =>
+                e instanceof TargetFailed ? e : new TargetFailed({ operation, message: String(e) }),
+              ),
+            );
+          });
+        const started = yield* call("POST", "/v1/ops/floor-canary", FloorCanaryStarted);
+        const poll = c.floorCanaryPoll ?? FLOOR_CANARY_POLL;
+        const until = now() + poll.timeoutMs;
+        const id = started.execution_id;
+        const where = `execution ${id} on pool ${started.pool}, image ${started.image_digest}`;
+        for (;;) {
+          const v = yield* call(
+            "GET",
+            `/v1/ops/floor-canary/${encodeURIComponent(id)}`,
+            FloorCanaryVerdictBody,
+          );
+          if (v.verdict === "passed")
+            return { status: "passed", digest: started.image_digest } satisfies CanaryResult;
+          if (v.verdict === "failed")
+            return {
               status: "failed",
-              detail:
-                "the coordinator exposes no floor canary to run on the deployed digest (MAMEKO-OPS-012)",
-            },
-      ),
+              detail: `the floor canary failed at stage ${v.stage ?? "unknown"}: ${v.detail ?? ""} (${where})`,
+            } satisfies CanaryResult;
+          if (v.verdict === "inconclusive")
+            return {
+              status: "failed",
+              detail: `the floor canary was inconclusive: ${v.detail ?? ""} (${where})`,
+            } satisfies CanaryResult;
+          if (now() >= until)
+            return {
+              status: "failed",
+              detail: `the floor canary reached no verdict within ${poll.timeoutMs / 1000} s (${where})`,
+            } satisfies CanaryResult;
+          yield* Effect.sleep(poll.intervalMs);
+        }
+      }),
     writeRecord: (r) =>
       Effect.gen(function* () {
         const deployed = yield* deployedSettings(r);

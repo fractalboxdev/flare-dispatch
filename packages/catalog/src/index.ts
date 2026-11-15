@@ -19,6 +19,8 @@ export {
   DEFAULT_STEP_TIMEOUT_SEC,
   deploymentOf,
   deploySmokeSpec,
+  FLOOR_CANARY_CLASS,
+  floorCanary,
   gateJobSpec,
   isReadOnlyScanRun,
   lookupRun,

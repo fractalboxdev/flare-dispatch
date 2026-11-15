@@ -63,6 +63,7 @@ import { ArtifactsHandlers, cacheReads, LogsHandlers } from "./cache.ts";
 import { isolateServices, type IsolateServices } from "./composition.ts";
 import { apiEnvOf, deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { failureSummaries } from "./failure-summary.ts";
+import { floorCanaryLayer } from "./floor-canary.ts";
 import { appOptionsOf } from "./github.ts";
 import { intakeCancellation, intakePort } from "./intake-port.ts";
 import { revokeDevice } from "./operator-revoke.ts";
@@ -281,6 +282,7 @@ const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateS
     deliveryKeys(env, isolate),
     cacheReads(env),
     Layer.succeed(OpsStore)({ db: env.DB, now: Date.now }),
+    floorCanaryLayer(env, isolate, profileOf(env)),
     spendViewOf(env),
     policies(env),
     statements(env),

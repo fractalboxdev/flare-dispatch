@@ -395,6 +395,30 @@ export const PhaseGateRecords = Schema.Struct({
 });
 export type PhaseGateRecords = typeof PhaseGateRecords.Type;
 
+/** What `POST /v1/ops/floor-canary` takes: the Container pool to run the canary on, or the first canary pool. */
+export const FloorCanaryStartBody = Schema.Struct({ pool: Schema.optionalKey(Schema.String) });
+export type FloorCanaryStartBody = typeof FloorCanaryStartBody.Type;
+
+/** The floor canary `POST /v1/ops/floor-canary` admitted: its execution, its pool and the image digest it runs on. */
+export const FloorCanaryStarted = Schema.Struct({
+  execution_id: Schema.String,
+  pool: Schema.String,
+  image_digest: Schema.String,
+});
+export type FloorCanaryStarted = typeof FloorCanaryStarted.Type;
+
+/**
+ * A floor canary's verdict (MAMEKO-OPS-018): still running, passed, failed at a stage, or inconclusive. `stage` names
+ * the failed stage; `detail` says what the stage or the inconclusive execution saw.
+ */
+export const FloorCanaryVerdictBody = Schema.Struct({
+  execution_id: Schema.String,
+  verdict: Schema.Literals(["running", "passed", "failed", "inconclusive"]),
+  stage: Schema.NullOr(Schema.String),
+  detail: Schema.NullOr(Schema.String),
+});
+export type FloorCanaryVerdictBody = typeof FloorCanaryVerdictBody.Type;
+
 // --- Groups ----------------------------------------------------------------------------------------------------------
 
 const errors = { error: ApiErrors };
@@ -630,8 +654,8 @@ export class ArtifactsGroup extends HttpApiGroup.make("artifacts")
 const HtmlPage = Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/html" }));
 
 /**
- * The operability routes beside the operator operations: the fleet view, the phase gate's records, the spend view and
- * the GitHub App install flow. The operability area implements these handlers.
+ * The operability routes beside the operator operations: the fleet view, the phase gate's records, the floor canary,
+ * the spend view and the GitHub App install flow. The operability area implements these handlers.
  */
 export class OperabilityGroup extends HttpApiGroup.make("operability")
   .add(
@@ -643,6 +667,18 @@ export class OperabilityGroup extends HttpApiGroup.make("operability")
       /** Gate n, a phase from 0 to 3. */
       query: { gate: Schema.Literals(["0", "1", "2", "3"]) },
       success: PhaseGateRecords,
+      ...errors,
+    }),
+    /** Admits one floor canary on a Container pool as an ops run (FD-OPS-050, MAMEKO-OPS-012). */
+    HttpApiEndpoint.post("floorCanaryStart", "/v1/ops/floor-canary", {
+      payload: FloorCanaryStartBody,
+      success: FloorCanaryStarted.pipe(HttpApiSchema.status(202)),
+      ...errors,
+    }),
+    /** The verdict of the floor canary the execution ran (MAMEKO-OPS-018). */
+    HttpApiEndpoint.get("floorCanaryVerdict", "/v1/ops/floor-canary/:id", {
+      ...IdParam,
+      success: FloorCanaryVerdictBody,
       ...errors,
     }),
     HttpApiEndpoint.get("spend", "/v1/spend", { success: SpendViewBody, ...errors }),

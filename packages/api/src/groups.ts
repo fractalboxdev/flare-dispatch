@@ -134,8 +134,9 @@ export const artifactsGroup = <R>(
 const installOperator: Surface = { _tag: "Access", group: "operators", redirectBrowser: true };
 
 /**
- * The operability group, mounted with the operability area's handlers: the fleet view, the phase gate's records and
- * the install flow serve an operator (FD-IFC-016, FD-OPS-072); the spend view serves any Access identity (FD-SPD-057).
+ * The operability group, mounted with the operability area's handlers: the fleet view, the phase gate's records, the
+ * floor canary and the install flow serve an operator (FD-IFC-016, FD-OPS-050, FD-OPS-072); the spend view serves any
+ * Access identity (FD-SPD-057).
  */
 export const operabilityGroup = <R>(
   handlers: Layer.Layer<HttpApiGroup.Service<"flare-dispatch", "operability">, never, R>,
@@ -145,6 +146,8 @@ export const operabilityGroup = <R>(
     surfaces: {
       fleet: operator,
       phaseGate: operator,
+      floorCanaryStart: operator,
+      floorCanaryVerdict: operator,
       spend: member,
       installNew: installOperator,
       installCallback: installOperator,

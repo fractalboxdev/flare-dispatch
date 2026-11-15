@@ -6,8 +6,10 @@ import { describe, expect, it } from "vitest";
 import { makeOperability } from "../../src/cli/index.ts";
 import { DeployTarget, type CanaryResult, type RenderedWorker } from "../../src/index.ts";
 import {
+  CANARY_EXECUTION,
   CONTROL_PLANE,
   deploy,
+  GATE_DIGEST,
   OVERLAY,
   RECORD,
   ROOT,
@@ -76,12 +78,52 @@ describe("fd deploy and the container floor canary", () => {
     expect(failing.objects.has(RECORD)).toBe(false);
   });
 
-  it("[FD-OPS-050] the live target's canary does not pass while the coordinator exposes none, so a deploy with Container classes never reports success", async () => {
+  it("[FD-OPS-050] the live target admits the canary through the control plane's floor canary route under the operator's service token, polls its verdict until it passes, and reports the deployed digest", async () => {
     const w = world();
     const report = await deploy(w, OVERLAY, { canary: "live" });
-    expect(report.ok).toBe(false);
-    expect(w.calls.some((c) => c.startsWith("wrangler deploy"))).toBe(true);
-    expect(report.stages.at(-1)!.detail).toContain("floor-canary:");
-    expect(w.objects.has(RECORD)).toBe(false);
+    expect(report.ok).toBe(true);
+    const deployedAt = w.calls.findIndex((c) => c.startsWith("wrangler deploy"));
+    const canary = w.calls
+      .map((c, i) => [c, i] as const)
+      .filter(([c]) => c.includes("dispatch.example.com/v1/ops/floor-canary"));
+    expect(canary.map(([c]) => c)).toEqual([
+      "POST dispatch.example.com/v1/ops/floor-canary",
+      `GET dispatch.example.com/v1/ops/floor-canary/${CANARY_EXECUTION}`,
+      `GET dispatch.example.com/v1/ops/floor-canary/${CANARY_EXECUTION}`,
+    ]);
+    expect(canary[0]![1]).toBeGreaterThan(deployedAt);
+    expect(w.objects.has(RECORD)).toBe(true);
+    expect(report.stages.find((s) => s.stage === "probes")?.detail).toContain(
+      "floor canary passed",
+    );
+  });
+
+  it("[FD-OPS-050] a canary that fails a stage or is inconclusive keeps the live deploy from reporting success, naming the stage and the image digest", async () => {
+    for (const [verdict, words] of [
+      [
+        { verdict: "failed", stage: "egress", detail: "the request answered 200" },
+        "failed at stage egress: the request answered 200",
+      ],
+      [
+        { verdict: "inconclusive", detail: "the job sandbox did not start within 120 s" },
+        "was inconclusive: the job sandbox did not start within 120 s",
+      ],
+    ] as const) {
+      const w = world();
+      w.state.canaryVerdicts = [{ verdict: "running" }, verdict];
+      const report = await deploy(w, OVERLAY, { canary: "live" });
+      expect(report.ok).toBe(false);
+      const detail = report.stages.at(-1)!.detail;
+      expect(detail).toContain(`floor-canary: the floor canary ${words}`);
+      expect(detail).toContain(GATE_DIGEST);
+      expect(w.alarms).toEqual([
+        expect.objectContaining({
+          alarm: "deploy-probe-failed",
+          severity: "page",
+          state: "raised",
+        }),
+      ]);
+      expect(w.objects.has(RECORD)).toBe(false);
+    }
   });
 });

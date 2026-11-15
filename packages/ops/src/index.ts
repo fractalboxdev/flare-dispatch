@@ -7,6 +7,7 @@ export * from "./dashboard.ts";
 export * from "./decode.ts";
 export * from "./deploy.ts";
 export * from "./drift.ts";
+export * from "./floor-canary.ts";
 export * from "./install.ts";
 export * from "./kill-lines.ts";
 export * from "./link-token.ts";

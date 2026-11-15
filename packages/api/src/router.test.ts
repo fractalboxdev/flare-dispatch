@@ -61,6 +61,17 @@ describe("declaration and router", () => {
               killLines: [],
             }),
           )
+          .handle("floorCanaryStart", () =>
+            Effect.succeed({ execution_id: "e", pool: "agent", image_digest: "sha256:0" }),
+          )
+          .handle("floorCanaryVerdict", () =>
+            Effect.succeed({
+              execution_id: "e",
+              verdict: "running" as const,
+              stage: null,
+              detail: null,
+            }),
+          )
           .handle("spend", () =>
             Effect.succeed({
               month: "2027-01",

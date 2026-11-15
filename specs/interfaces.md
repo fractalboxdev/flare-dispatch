@@ -172,6 +172,8 @@ Every error response is a JSON object `{ "error": <code>, "message": <text>, "re
 | `GET /v1/ops/delivery-keys` | Every installation's delivery key, read from the GitHub App | 2 |
 | `GET /v1/ops/health` | Installation, delivery, cron, executor, outbox and control-state health ([operability.md](operability.md) FD-OPS-036) | 0 |
 | `GET /v1/ops/phase-gate?gate=<n>` | Gate n's `V-MEASURE` thresholds, page alarms and unresolved `kill-line` notifications over the gate window ([verification.md](verification.md) FD-VER-028, FD-VER-029) | 0 |
+| `POST /v1/ops/floor-canary` | Admit one container floor canary on a Container pool; answers its execution, pool and image digest ([operability.md](operability.md) FD-OPS-050) | 0 |
+| `GET /v1/ops/floor-canary/:id` | One floor canary's verdict: running, passed, failed with its stage, or inconclusive ([operability.md](operability.md) FD-OPS-050) | 0 |
 | `GET /v1/spend` | Month-to-date spend per class line ([spend.md](spend.md)) | 0 |
 | `GET /v1/ops/fleet` | Each executor's kind, heartbeat age, drain and quarantine flags and slots per class ([operability.md](operability.md) FD-OPS-071) | 1 |
 | `GET /v1/github/install/new`, `GET /v1/github/install/callback` | The GitHub App manifest flow and the new App's credentials ([operability.md](operability.md) FD-OPS-072 to FD-OPS-075) | 0 |

@@ -284,8 +284,8 @@ const stubFetch = (events: string[], text = '{"findings":[]}') => {
 };
 
 describe("the Container pool's run catalogue", () => {
-  it("serves every cloud run that is no host execution under both deployments: the cloud gate runs, the agentic recipes and the scan runs", () => {
-    const served = ["worker-deploy", "sandbox-image", ...AGENTIC, ...SCAN];
+  it("serves every cloud run that is no host execution under both deployments: the cloud gate runs, the agentic recipes, the scan runs and the floor canary", () => {
+    const served = ["worker-deploy", "sandbox-image", ...AGENTIC, ...SCAN, "floor-canary"];
     const cloudOnly = registry
       .map((r) => r.spec.name)
       .filter((name) => {
@@ -296,9 +296,13 @@ describe("the Container pool's run catalogue", () => {
     expect(names(cloudRuns("production"))).toEqual(served);
     expect(names(cloudRuns("development"))).toEqual(served);
     expect(names(runs)).toEqual(served);
-    for (const run of runs)
-      // Each run carries the cloud Layers, not the registry's unprovided Layer.
-      expect(run.layer).not.toBe(registry.find((r) => r.spec.name === run.spec.name)?.layer);
+    for (const run of runs) {
+      const registered = registry.find((r) => r.spec.name === run.spec.name)?.layer;
+      // Each run carries the cloud Layers, not the registry's unprovided Layer; the floor canary needs only the
+      // runner's `Exec`, so it carries its own.
+      if (run.spec.name === "floor-canary") expect(run.layer).toBe(registered);
+      else expect(run.layer).not.toBe(registered);
+    }
     for (const name of ["check", "oxlint", "gate-job"])
       expect(names(cloudRuns("development"))).not.toContain(name);
   });

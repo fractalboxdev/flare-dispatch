@@ -267,6 +267,16 @@ export const awsCredentialsOf = (
 };
 
 /**
+ * The Access service token the deploy reaches the control plane's operator routes with, from `FD_ACCESS_CLIENT_ID` and
+ * `FD_ACCESS_CLIENT_SECRET`; none unless both are set (FD-OPS-050).
+ */
+const accessTokenOf = (env: Readonly<Record<string, string | undefined>>) => {
+  const clientId = env["FD_ACCESS_CLIENT_ID"] ?? "";
+  const clientSecret = env["FD_ACCESS_CLIENT_SECRET"] ?? "";
+  return clientId === "" || clientSecret === "" ? {} : { access: { clientId, clientSecret } };
+};
+
+/**
  * The `Operability` service's two operations. `fd`'s Layer is
  * `Layer.succeed(Operability)(makeOperability({ fail: (message) => new OperabilityFailed({ message }) }))`.
  */
@@ -311,6 +321,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
               ...(env["GITHUB_REPOSITORY"] === undefined
                 ? {}
                 : { repository: env["GITHUB_REPOSITORY"] }),
+              ...accessTokenOf(env),
               ...awsCredentialsOf(env),
               ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
             }),

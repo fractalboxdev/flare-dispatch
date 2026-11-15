@@ -96,11 +96,14 @@ describe("grants that attach a deployment secret", () => {
 });
 
 describe("the cloud runner entry", () => {
-  it("serves the agentic recipes on the cloud executor, each with the cloud Layers provided", () => {
+  it("serves the agentic recipes on the cloud executor, each with the cloud Layers provided, and the floor canary on the runner's own services", () => {
     const layers = Layer.empty as unknown as Layer.Layer<CloudAgenticServices>;
     const cloud = runsFor("development", { kind: "cloud", layers });
-    expect(cloud.map((r) => r.spec.name)).toEqual(agenticRuns.map((r) => r.spec.name));
-    for (const run of cloud)
+    expect(cloud.map((r) => r.spec.name)).toEqual([
+      ...agenticRuns.map((r) => r.spec.name),
+      "floor-canary",
+    ]);
+    for (const run of cloud.filter((r) => r.spec.name !== "floor-canary"))
       expect(run.layer).not.toBe(agenticRuns.find((a) => a.spec.name === run.spec.name)?.layer);
     expect(runsFor("development").map((r) => r.spec.name)).toEqual(["check", "oxlint", "gate-job"]);
   });

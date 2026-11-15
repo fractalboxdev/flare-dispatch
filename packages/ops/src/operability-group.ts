@@ -1,7 +1,7 @@
-// The handlers of the declaration's operability group: the fleet view, the phase gate's records, the spend view and
-// the GitHub App install flow. The router's gate has already identified the caller (an operator, or for the spend view
-// any Access identity), checked the method and assigned the request id; each handler answers an error from the error
-// model (FD-IFC-001, FD-IFC-009).
+// The handlers of the declaration's operability group: the fleet view, the phase gate's records, the floor canary,
+// the spend view and the GitHub App install flow. The router's gate has already identified the caller (an operator,
+// or for the spend view any Access identity), checked the method and assigned the request id; each handler answers an
+// error from the error model (FD-IFC-001, FD-IFC-009).
 import { FlareDispatchApi } from "@fractalboxdev/flare-dispatch-api/declaration";
 import { apiError } from "@fractalboxdev/flare-dispatch-api/errors";
 import { CurrentIdentity } from "@fractalboxdev/flare-dispatch-api/identity";
@@ -11,6 +11,7 @@ import { HttpServerResponse } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
 import type { AccessIdentity } from "./access.ts";
 import { fleet } from "./dashboard.ts";
+import { FloorCanary } from "./floor-canary.ts";
 import { acceptState, credentialsPage, ManifestConversion, startInstall } from "./install.ts";
 import { runOpsMigrations } from "./liveness.ts";
 import { SpendView, utcMonth } from "./spend.ts";
@@ -49,6 +50,14 @@ const operatorOf = Effect.gen(function* () {
 
 const sourceOf = (request: { readonly source: unknown }) => request.source as Request;
 
+/** The control plane's floor canary, or `not_configured` on a deploy that composes none. */
+const floorCanary = Effect.gen(function* () {
+  const canary = yield* Effect.serviceOption(FloorCanary);
+  if (Option.isNone(canary))
+    return yield* apiError("not_configured", "this deploy runs no floor canary");
+  return canary.value;
+});
+
 export const OperabilityHandlers = HttpApiBuilder.group(
   FlareDispatchApi,
   "operability",
@@ -70,6 +79,38 @@ export const OperabilityHandlers = HttpApiBuilder.group(
               ),
             ),
           );
+        }),
+      )
+      .handle("floorCanaryStart", ({ payload }) =>
+        Effect.gen(function* () {
+          const canary = yield* floorCanary;
+          return yield* canary.start(payload.pool).pipe(
+            Effect.catchTags({
+              FloorCanaryPoolUnknown: (e) =>
+                Effect.fail(
+                  apiError(
+                    "invalid_body",
+                    `pool ${e.pool} runs no floor canary; the canary pools are ${e.pools.join(", ") || "none"}`,
+                  ),
+                ),
+              FloorCanaryUnavailable: (e) =>
+                Effect.fail(
+                  apiError("unavailable", `the floor canary was not admitted: ${e.reason}`),
+                ),
+            }),
+          );
+        }),
+      )
+      .handle("floorCanaryVerdict", ({ params }) =>
+        Effect.gen(function* () {
+          const canary = yield* floorCanary;
+          return yield* canary
+            .verdict(params.id)
+            .pipe(
+              Effect.catchTag("FloorCanaryUnavailable", (e) =>
+                Effect.fail(apiError("unavailable", `the floor canary is unreadable: ${e.reason}`)),
+              ),
+            );
         }),
       )
       .handle("spend", () =>
