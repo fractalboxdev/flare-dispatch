@@ -25,6 +25,7 @@ import {
   ExecutionEngine as MamekoExecutionEngine,
   ExecutorChannel as MamekoExecutorChannel,
   PoolController as MamekoPoolController,
+  type ChannelSocket as MamekoChannelSocket,
   type ClaimedLease,
   type PoolControllerEnv,
 } from "@fractalboxdev/mameko-host-cloudflare";
@@ -34,7 +35,7 @@ import { DurableObject } from "cloudflare:workers";
 import { Context, Effect, Match } from "effect";
 import { guardLease } from "./agentic.ts";
 import { isolateServices, presignerLayer } from "./composition.ts";
-import { leaseCache } from "./cache.ts";
+import { leaseCache, presignOnFrame } from "./cache.ts";
 import { leaseCacheAt } from "./cache-execution.ts";
 import { prProposeOnFrame } from "./pr-propose.ts";
 import { type ChannelSocket, cloudStatementOnFrame } from "./provenance.ts";
@@ -64,6 +65,30 @@ const PROGRESS_TIMEOUT_MS = 300_000;
  * statement after an accepted result, the presigner, the cache namespaces, the lease fields and the nonce revoke.
  */
 const channelHooks = (bindings: ControlPlaneEnv) => ({
+  /**
+   * An `exec.presign` for cache objects under an entry's writer prefix or for log segments is answered by
+   * FlareDispatch's presign policy (FD-CACHE-047), on the socket, before mameko's channel reads the frame; any other
+   * frame answers `false` and goes to mameko's channel. A failure is reported on the socket, as mameko's channel
+   * reports one, never dropped.
+   */
+  beforeFrame: async (ws: unknown, message: string | ArrayBuffer): Promise<boolean> => {
+    const socket = ws as MamekoChannelSocket;
+    const presigned = await presignOnFrame(
+      bindings,
+      (socket.deserializeAttachment() as { readonly executorId: string }).executorId,
+      message,
+      Date.now(),
+    ).catch((error: unknown) => ({
+      type: "session.error",
+      code: "internal",
+      ref: null,
+      message: String(error),
+    }));
+    if (presigned === null) return false;
+    socket.send(JSON.stringify(presigned));
+    return true;
+  },
+
   /**
    * An `exec.result` that the accept compare-and-set accepted from a cloud executor gets its `pr.propose` row where it
    * is a `success` that carries a staged write (FD-AGT-034), and its cloud-builder statement, signed with the
@@ -194,6 +219,7 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
   }
 
   override async webSocketMessage(ws: unknown, message: string | ArrayBuffer): Promise<void> {
+    if (await this.hooks.beforeFrame(ws, message)) return;
     await super.webSocketMessage(ws, message);
     await this.hooks.afterFrame(ws, message);
   }
@@ -248,6 +274,7 @@ export class PoolController extends MamekoPoolController<PoolEnv> {
   }
 
   override async webSocketMessage(ws: unknown, message: string | ArrayBuffer): Promise<void> {
+    if (await this.hooks.beforeFrame(ws, message)) return;
     await super.webSocketMessage(ws, message);
     await this.hooks.afterFrame(ws, message);
   }

@@ -19,22 +19,33 @@ import {
   ARTIFACT_PAGE_SIZE,
   artifactPage,
   artifactVisible,
+  CacheBucket,
+  CacheClock,
+  CacheLeases,
   compileCacheLookupRow,
   findArtifact,
   handleCompileCache,
+  Ledgers,
   ledgersOf,
+  parseCacheObjectPath,
+  parseLogObjectName,
+  presignForExecution,
+  R2PresignerLive,
   recordCacheLookups,
   serveArtifact,
   serveLogs,
   type ArtifactReader,
+  type Bucket,
   type CompileCacheLookup,
+  type LeaseState,
 } from "@fractalboxdev/flare-dispatch-cache";
 import type { IntakeRecord } from "@fractalboxdev/flare-dispatch-intake";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare";
-import { Context, Effect, Layer, Match } from "effect";
+import type { ExecutorKind } from "@fractalboxdev/mameko-kernel";
+import { Context, Effect, Layer, Match, Option, Schema } from "effect";
 import { HttpServerResponse, type HttpServerRequest } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
-import type { ControlPlaneEnv } from "./config.ts";
+import { presignerConfigOf, type ControlPlaneEnv } from "./config.ts";
 import { leaseCacheAt, type LeaseOf } from "./cache-execution.ts";
 import { migrateCache } from "./cache-retention.ts";
 import { confidentialCompute } from "./dev-repository.ts";
@@ -153,6 +164,122 @@ export const cacheFetch = async (
         : { epoch: s.epoch, terminal: isTerminal(s) };
     },
   });
+};
+
+// --- Presigned URLs for cache saves and log segments ------------------------------------------------------------------
+
+const PresignFrame = Schema.Struct({
+  type: Schema.Literal("exec.presign"),
+  id: Schema.String,
+  execution_id: Schema.String,
+  epoch: Schema.Number,
+  objects: Schema.Array(
+    Schema.Struct({
+      key: Schema.String,
+      method: Schema.Literals(["GET", "PUT"]),
+      length: Schema.NullOr(Schema.Number),
+    }),
+  ),
+});
+type PresignFrame = typeof PresignFrame.Type;
+
+const decodePresignFrame = Schema.decodeUnknownOption(Schema.fromJsonString(PresignFrame));
+
+/** A cache object under an entry's writer prefix, or a log segment: the object names the lease's grant prefixes cover. */
+const inGrantGrammar = (key: string) =>
+  parseCacheObjectPath(key) !== undefined ||
+  (key.startsWith("logs/") && parseLogObjectName(key) !== undefined);
+
+/**
+ * The lease the presign policy reads: the placement row while it is leased to `executorId`, with the namespaces the
+ * claim wrote onto it, the repository intake recorded, the executions row's status and `deadline_at`.
+ */
+const leasedTo = (env: ControlPlaneEnv, executorId: string) =>
+  Layer.succeed(CacheLeases, {
+    current: (executionId) =>
+      Effect.promise(async () => {
+        const row = await first<{
+          epoch: number;
+          state: string;
+          executor_id: string | null;
+          cache_read: string | null;
+          cache_write: string | null;
+          kind: string | null;
+          repo: string | null;
+          class: string;
+          status: string;
+          deadline_at: number | null;
+        }>(
+          env.DB,
+          `select p.epoch, p.state, p.executor_id, p.cache_read, p.cache_write, x.kind, i.repo, e.class, e.status,
+             e.deadline_at
+           from placements p join executions e on e.id = p.execution_id
+             left join executors x on x.executor_id = p.executor_id
+             left join intake_records i on i.execution_id = p.execution_id
+           where p.execution_id = ?`,
+          executionId,
+        );
+        if (row === undefined || row.state !== "leased" || row.executor_id !== executorId)
+          return null;
+        if (row.repo === null || row.deadline_at === null) return null;
+        return {
+          executionId,
+          repo: row.repo.toLowerCase(),
+          epoch: row.epoch,
+          status: isTerminal(row) ? "terminal" : "active",
+          namespaces: {
+            read: JSON.parse(row.cache_read ?? "[]") as string[],
+            write: row.cache_write,
+          },
+          executorId,
+          executorKind: (row.kind ?? "device") as ExecutorKind,
+          class: row.class,
+          deadlineAt: row.deadline_at,
+          confidential: confidentialCompute(env, row.repo),
+        } satisfies LeaseState;
+      }),
+  });
+
+/**
+ * The channel's answer to an `exec.presign` whose objects are all cache objects under an entry's writer prefix or log
+ * segments, the names a lease's `cache_prefix` and `log_prefix` cover; null for any other frame, which mameko's channel
+ * answers. FlareDispatch's presign policy decides each object (FD-CACHE-049 to FD-CACHE-055) and the object-store
+ * presigner signs it, so the executor writes the bytes to R2 and the Worker carries none (FD-CACHE-047, FD-ARCH-007).
+ * A request from an executor that does not hold the lease at its epoch is `stale`; one the policy refuses, or one on a
+ * deploy without the presign token, the `CACHE` bucket or the `CacheLedger`, is `refused`.
+ */
+export const presignOnFrame = (
+  env: ControlPlaneEnv & CacheEnv,
+  executorId: string,
+  message: string | ArrayBuffer,
+  now: number,
+): Promise<Record<string, unknown> | null> => {
+  const text = typeof message === "string" ? message : new TextDecoder().decode(message);
+  if (!text.includes('"exec.presign"')) return Promise.resolve(null);
+  const decoded = decodePresignFrame(text);
+  if (Option.isNone(decoded)) return Promise.resolve(null);
+  const frame: PresignFrame = decoded.value;
+  if (frame.objects.length === 0 || !frame.objects.every((o) => inGrantGrammar(o.key)))
+    return Promise.resolve(null);
+  const envelope = { type: "exec.presigned", id: crypto.randomUUID(), ref: frame.id };
+  const presigner = presignerConfigOf(env);
+  if (presigner === undefined || env.CACHE === undefined || env.CACHE_LEDGER === undefined)
+    return Promise.resolve({ ...envelope, status: "refused" });
+  const clock = Layer.succeed(CacheClock, { now: () => now });
+  return Effect.runPromise(
+    presignForExecution(frame).pipe(
+      Effect.map((answer) => ({ ...envelope, ...answer })),
+      Effect.catchTag("PresignRefused", () => Effect.succeed({ ...envelope, status: "refused" })),
+      Effect.provide(
+        Layer.mergeAll(
+          leasedTo(env, executorId),
+          Layer.succeed(CacheBucket, env.CACHE as unknown as Bucket),
+          Layer.succeed(Ledgers, ledgersOf(env.CACHE_LEDGER)),
+          R2PresignerLive(presigner).pipe(Layer.provideMerge(clock)),
+        ),
+      ),
+    ),
+  );
 };
 
 // --- Log and artifact reads behind the router -------------------------------------------------------------------------
