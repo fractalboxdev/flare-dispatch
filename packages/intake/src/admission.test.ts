@@ -36,6 +36,7 @@ import {
   type HarnessOptions,
 } from "./harness.test-support.ts";
 import { handleIntake } from "./routes.ts";
+import type { IntakeRun } from "./runs.ts";
 import { IntakeStore } from "./store.ts";
 import { releaseHeld } from "./submit.ts";
 
@@ -501,6 +502,81 @@ describe("supersession and serial groups at admission", () => {
         serial_key: `worker-deploy:${REPO}@main:api`,
         supersession_key: null,
       },
+    ]);
+  });
+});
+
+describe("the execution's source", () => {
+  const webhook = async (h: Harness, event: string, payload: unknown, delivery: string) =>
+    h.run(handleIntake(await signedWebhook(event, payload, { delivery }), "webhooks/github"));
+
+  const sourceRows = (h: Harness) =>
+    h.rows(
+      "select run, source_remote, source_commit, source_base from executions order by run",
+    ) as { run: string; source_remote: string | null; source_commit: string | null }[];
+
+  /** The test catalogue with `check` requiring `Workspace`; `lint` requires none. */
+  const workspaceCatalog: Record<string, IntakeRun> = {
+    ...CATALOG,
+    check: { ...CATALOG["check"]!, requiresWorkspace: true },
+  };
+
+  it("MAMEKO-ADM-033 [FD-GATE-092] a security-gate pull request's source names the clone URL, the head and the pull request's base", async () => {
+    const text = manifest([{ recipe: "security-gate", triggers: ["pull_request"], params: {} }]);
+    const h = await harness({
+      settings: { catalog: catalogRuns("production") },
+      repos: {
+        [REPO]: fakeRepo({
+          branches: { main: BASE },
+          files: {
+            [`${BASE}:.github/flare-dispatch.json`]: text,
+            [`${HEAD}:.github/flare-dispatch.json`]: text,
+          },
+        }),
+      },
+    });
+    await webhook(h, "pull_request", pullRequestPayload(), "d-1");
+    expect(sourceRows(h)).toEqual([
+      {
+        run: "security-gate",
+        source_remote: `https://github.com/${REPO}.git`,
+        source_commit: HEAD,
+        source_base: "d".repeat(40),
+      },
+    ]);
+  });
+
+  it("MAMEKO-ADM-033 a dispatch of a run that requires Workspace records the commit intake pinned with no base, and a run that requires none records no source", async () => {
+    const h = await harness({
+      resolve: requested,
+      settings: { catalog: (n) => workspaceCatalog[n] },
+    });
+    // The dispatch names no commit, so intake pins the head of its ref, `main` at `BASE`.
+    await dispatch(h, "check", check());
+    await dispatch(h, "lint", { inputs: { sha: HEAD } });
+    expect(sourceRows(h)).toEqual([
+      {
+        run: "check",
+        source_remote: `https://github.com/${REPO}.git`,
+        source_commit: BASE,
+        source_base: null,
+      },
+      { run: "lint", source_remote: null, source_commit: null, source_base: null },
+    ]);
+  });
+
+  it("MAMEKO-ADM-034 refuses a request to a run that requires Workspace whose commit is not a full commit id, before any row", async () => {
+    const h = await harness({
+      resolve: requested,
+      settings: { catalog: (n) => workspaceCatalog[n] },
+    });
+    expect(await refusal(h, dispatchOf("check", { ...check(), sha: "abc123" }))).toEqual({
+      status: 400,
+      code: "invalid_inputs",
+    });
+    expect(h.rows("select id from executions")).toEqual([]);
+    expect(h.rows("select reason from shed")).toEqual([
+      { reason: "invalid source: source.commit" },
     ]);
   });
 });

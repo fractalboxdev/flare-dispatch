@@ -47,6 +47,7 @@ export const LINK_KEY = "e2e-link-key";
 /** The secret compile-cache tokens derive from (FD-CACHE-057). */
 export const COMPILE_CACHE_SECRET = "e2e-compile-cache-secret";
 export const DEPLOY_CLAIM_SECRET = "e2e-deploy-claim-secret";
+export const MODEL_LEASE_SECRET = "e2e-model-lease-secret";
 
 const MANIFEST = {
   version: 1,
@@ -286,6 +287,7 @@ export const startStack = async (options: StackOptions = {}): Promise<Stack> => 
       CACHE_TOKEN_SECRET: "e2e-cache-token-secret",
       COMPILE_CACHE_SECRET,
       DEPLOY_CLAIM_SECRET,
+      MODEL_LEASE_SECRET,
       LINK_KEY,
       ...(options.publicOrigin === true ? { PUBLIC_ORIGIN: front.url } : {}),
       ...options.secrets,

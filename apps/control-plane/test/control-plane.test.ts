@@ -1065,6 +1065,25 @@ describe("a development deployment", () => {
     await endStandingClaim(socket);
   });
 
+  it("MAMEKO-ADM-033 [FD-GATE-019] the lease of a run that requires Workspace carries the source admission recorded: the clone URL and the dispatched commit", async () => {
+    const device = await newDevice();
+    await post(development, "/v1/executors/register", registration("mac-source", device.identity));
+    const sha = "9".repeat(40);
+    const admitted = await post(development, "/v1/dispatch/check", dispatchBody(sha));
+    const { execution_id: id } = (await admitted.json()) as { execution_id: string };
+    const socket = await connect(development, "mac-source", device.keys);
+    socket.send(hello("mac-source"));
+    await socket.next("session.welcome");
+    socket.send({ type: "exec.claim", id: "c1", free: { batch: 1 } });
+    const lease = await socket.next("exec.lease");
+    expect(lease).toMatchObject({ execution_id: id, run: "check" });
+    expect(lease["source"]).toEqual({
+      remote: "https://github.com/fractalboxdev/flare-dispatch.git",
+      commit: sha,
+    });
+    await endStandingClaim(socket);
+  });
+
   it.each([
     [
       "skipped",
@@ -1133,6 +1152,7 @@ const PLACEMENT_REPOSITORY = {
             },
           },
           { recipe: "security-rescan", triggers: ["dispatch"] },
+          { recipe: "pr-review", triggers: ["dispatch"], params: { maxDiffChars: 100_000 } },
         ],
       }),
     ).toString("base64"),
@@ -1142,12 +1162,16 @@ const PLACEMENT_REPOSITORY = {
 /** The scan bundle digest the placement deploy pins. */
 const SCAN_PIN = "b".repeat(64);
 
+/** The placement deploy's model-lease secret. */
+const MODEL_LEASE_SECRET = "placement-model-lease-secret";
+
 describe("placement of cloud-pinned runs through admission and the lease path", () => {
   let placement: Miniflare;
   beforeAll(async () => {
     placement = miniflare("development", true, PLACEMENT_REPOSITORY, {
       GATE_IMAGE_DIGEST: `sha256:${"a".repeat(64)}`,
       SCAN_BUNDLE_DIGEST: SCAN_PIN,
+      MODEL_LEASE_SECRET,
     });
     await placement.ready;
   });
@@ -1283,6 +1307,80 @@ describe("placement of cloud-pinned runs through admission and the lease path", 
       bundleDigest: SCAN_PIN,
       advisoryMaxAgeHours: 48,
       advisories: [],
+    });
+    await endStandingClaim(socket);
+  });
+
+  it("[FD-AGT-010] MAMEKO-ADM-033 a pr-review lease carries its source with the pull request's base, and its model-lease token in credentials, which the model route accepts at the lease's epoch", async () => {
+    const device = await newDevice();
+    await post(
+      placement,
+      "/v1/executors/register",
+      registration("mac-model-lease", device.identity, ["isolation:vm"]),
+    );
+    const [base, head] = ["1".repeat(40), "2".repeat(40)];
+    const admitted = await post(placement, "/v1/dispatch/pr-review", {
+      repository: "fractalboxdev/flare-dispatch",
+      sha: head,
+      inputs: {
+        repo: { owner: "fractalboxdev", name: "flare-dispatch" },
+        number: 7,
+        baseSha: base,
+        headSha: head,
+        draft: false,
+        labels: [],
+        authorLogin: "dev",
+        authorAssociation: "MEMBER",
+        forkHead: false,
+        maxDiffChars: 100_000,
+      },
+    });
+    expect(admitted.status).toBe(202);
+    const { execution_id: id, class: className } = (await admitted.json()) as {
+      execution_id: string;
+      class: string;
+    };
+    await (
+      await placement.getD1Database("DB")
+    )
+      .prepare("update placements set eligible_kinds = null where execution_id = ?")
+      .bind(id)
+      .run();
+    const socket = await connect(placement, "mac-model-lease", device.keys);
+    socket.send(hello("mac-model-lease"));
+    await socket.next("session.welcome");
+    socket.send({ type: "exec.claim", id: "c1", free: { [className]: 1 } });
+    const lease = (await socket.next("exec.lease")) as {
+      source: unknown;
+      inputs: Record<string, unknown>;
+      credentials: Record<string, string>;
+    };
+    expect(lease).toMatchObject({ execution_id: id, run: "pr-review" });
+    expect(lease.source).toEqual({
+      remote: "https://github.com/fractalboxdev/flare-dispatch.git",
+      commit: head,
+      base,
+    });
+    expect(Object.keys(lease.credentials)).toEqual(["model-gateway"]);
+    // The input carries no credential: the egress proxy, not the run, holds the token.
+    expect(JSON.stringify(lease.inputs)).not.toContain(lease.credentials["model-gateway"]!);
+    // The route takes the token at the lease's epoch; this deploy's registry routes no entry, so the call goes nowhere.
+    const call = await placement.dispatchFetch("http://x/v1/model/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${lease.credentials["model-gateway"]}`,
+      },
+      body: JSON.stringify({
+        call_site: "reviewer",
+        tier: "judgment",
+        messages: [{ role: "user", content: "the diff" }],
+      }),
+    });
+    expect(call.status).toBe(503);
+    expect(await call.json()).toMatchObject({
+      error: "unavailable",
+      message: "no model entry this deploy routes serves judgment",
     });
     await endStandingClaim(socket);
   });

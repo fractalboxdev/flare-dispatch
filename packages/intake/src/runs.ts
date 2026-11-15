@@ -54,6 +54,16 @@ export interface IntakeRun {
   /** The run's grants per egress phase; any grant keeps it off a host-process device (MAMEKO-LEASE-084). */
   readonly grants?: { readonly setup: readonly string[]; readonly agent: readonly string[] };
   /**
+   * The run's `requires` lists `Workspace`: admission records the request's source, which every lease carries and the
+   * executor checks out before the job starts (MAMEKO-ADM-033, MAMEKO-ADM-034).
+   */
+  readonly requiresWorkspace?: boolean;
+  /**
+   * The commit the run diffs against, read from its inputs, for a run that reads a merge base: the source's `base`,
+   * whose history and diff contents the checkout fetches. Null, or absent, sets no base.
+   */
+  readonly sourceBase?: (inputs: unknown) => string | null;
+  /**
    * The placement constraints and capability labels a request with these inputs declares, e.g. `cloud-pinned` for
    * `worker-deploy` and a publishing `sandbox-image` (FD-GATE-061, FD-GATE-080); none when absent.
    */

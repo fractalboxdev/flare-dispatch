@@ -263,6 +263,42 @@ export const spendValuesOf = (overlay: OverlayValues): Required<SpendValues> => 
 /** The overlay's policy rules, none for a repository the overlay names no rule for (FD-PROF-025). */
 export const policyRulesOf = (overlay: OverlayValues): PolicyRules => overlay.policy?.rules ?? {};
 
+/** `models.fallbackPriceUsdPerMTok` where the overlay sets none (MAMEKO-MDL-022). */
+export const MODEL_FALLBACK_PRICE_DEFAULT_USD_PER_MTOK = 75;
+
+/** One provider registry entry as the control plane's model route reads it. */
+export interface RoutedModelEntry {
+  readonly providerId: string;
+  readonly routeKind: string;
+  readonly serves: readonly ("judgment" | "transform")[];
+  readonly upstreamModel: string;
+  readonly inputPriceMicroUsdPerMTok?: number;
+  readonly outputPriceMicroUsdPerMTok?: number;
+}
+
+/**
+ * The overlay's provider registry with the fields the model route reads, each entry's in one order, so a rendered
+ * configuration is the same text whichever way the overlay was read; none where the overlay sets none.
+ */
+const routedRegistryOf = (overlay: OverlayValues): Readonly<Record<string, RoutedModelEntry>> =>
+  Object.fromEntries(
+    Object.entries(overlay.models?.registry ?? {}).map(([id, e]) => [
+      id,
+      {
+        providerId: e.providerId,
+        routeKind: e.routeKind,
+        serves: e.serves,
+        upstreamModel: e.upstreamModel,
+        ...(e.inputPriceMicroUsdPerMTok === undefined
+          ? {}
+          : { inputPriceMicroUsdPerMTok: e.inputPriceMicroUsdPerMTok }),
+        ...(e.outputPriceMicroUsdPerMTok === undefined
+          ? {}
+          : { outputPriceMicroUsdPerMTok: e.outputPriceMicroUsdPerMTok }),
+      },
+    ]),
+  );
+
 /** The values a template's placeholders resolve against (`renderValuesOf`). */
 export type RenderValues = Omit<
   OverlayValues,
@@ -275,7 +311,16 @@ export type RenderValues = Omit<
   | "provenance"
   | "scan"
   | "records"
+  | "models"
 > & {
+  /**
+   * The provider registry, none where the overlay sets none, so the model route serves no hosted call, and the fallback
+   * price at its 75 USD per million tokens default where the overlay sets none (MAMEKO-MDL-022).
+   */
+  readonly models: Omit<NonNullable<OverlayValues["models"]>, "registry"> & {
+    readonly registry: Readonly<Record<string, RoutedModelEntry>>;
+    readonly fallbackPriceUsdPerMTok: number;
+  };
   /** `records.url`, empty where the overlay sets none, so the control plane declares no record kind. */
   readonly records: { readonly url: string };
   /**
@@ -320,7 +365,8 @@ export type RenderValues = Omit<
  * supported event) from an empty one (none) (FD-INT-027), its `attestation_max_age` in days, at its default where
  * it sets none (FD-PROV-016), its scan bundle pin, empty where it pins none (FD-GATE-101), its statement retention in days, at its default where it sets none (FD-PROV-075), its advisory ecosystems,
  * none where it sets none (FD-OPS-100), its advisory snapshot
- * age, at its default where it sets none (FD-OPS-103), and its `records.url`, empty where it sets none (FD-GH-093).
+ * age, at its default where it sets none (FD-OPS-103), its `records.url`, empty where it sets none (FD-GH-093), and its
+ * provider registry, none where it sets none, with its fallback price at its default where it sets none.
  */
 export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   ...overlay,
@@ -334,6 +380,12 @@ export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
     scoped: overlay.dispatch?.scoped ?? [],
   },
   records: { url: overlay.records?.url ?? "" },
+  models: {
+    ...overlay.models,
+    registry: routedRegistryOf(overlay),
+    fallbackPriceUsdPerMTok:
+      overlay.models?.fallbackPriceUsdPerMTok ?? MODEL_FALLBACK_PRICE_DEFAULT_USD_PER_MTOK,
+  },
   scan: {
     ...overlay.scan,
     bundleDigest: overlay.scan?.bundleDigest ?? "",

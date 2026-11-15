@@ -5,6 +5,7 @@ import {
   ConfigInvalid,
   type ApiEnv,
 } from "@fractalboxdev/flare-dispatch-api/config";
+import type { WorkersAiBinding } from "@fractalboxdev/flare-dispatch-agentic";
 import { ADVISORY_MAX_AGE_DEFAULT_HOURS } from "@fractalboxdev/flare-dispatch-catalog";
 import type { ConcludeKind, QuotaObject } from "@fractalboxdev/flare-dispatch-github";
 import type { TickUnit } from "@fractalboxdev/flare-dispatch-intake";
@@ -96,6 +97,17 @@ export interface ControlPlaneEnv extends CacheEnv {
    * unset, no lease carries a deploy claim and the deploy-claim route answers `unavailable` (FD-GATE-067).
    */
   readonly DEPLOY_CLAIM_SECRET?: string;
+  /**
+   * The secret (a Worker secret) the model-lease tokens of agentic leases derive from, distinct from every other key;
+   * unset, no lease carries one and the model route answers `unavailable` (`model-gateway.ts`).
+   */
+  readonly MODEL_LEASE_SECRET?: string;
+  /** The Workers AI binding, the `workers-ai` route's only credential (FD-MDL-020). */
+  readonly AI?: WorkersAiBinding;
+  /** The rendered `{{models.registry}}`: the provider registry the model route chooses an entry from (MAMEKO-MDL-020). */
+  readonly MODEL_REGISTRY?: unknown;
+  /** The rendered `{{models.fallbackPriceUsdPerMTok}}`: the price of a hosted entry that states none (MAMEKO-MDL-022). */
+  readonly MODEL_FALLBACK_PRICE_USD_PER_MTOK?: unknown;
   /** `alerts.sink`; without it every alarm delivery fails and the alarm stays active. */
   readonly ALERT_SINK?: string;
   /** The rendered `{{spend}}`: the overlay's spend values in USD, each it leaves out at its default (FD-PROF-054). */

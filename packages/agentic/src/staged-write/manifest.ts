@@ -40,11 +40,14 @@ export const Manifest = Schema.Struct({
 });
 export type Manifest = typeof Manifest.Type;
 
-/** The artifact name of a staged write's manifest inside the execution's artifact prefix (FD-AGT-013). */
-export const STAGED_WRITE_MANIFEST = "staged-write/manifest.json";
+/**
+ * The artifact name of a staged write's manifest inside the execution's artifact prefix (FD-AGT-013). An artifact name
+ * is one key segment, `artifact/<execution_id>/<epoch>/<name>`, of letters, digits, `.`, `_` and `-` (MAMEKO-EXEC-021).
+ */
+export const STAGED_WRITE_MANIFEST = "staged-write.manifest.json";
 
 /** The artifact name of one staged blob inside the execution's artifact prefix, keyed by its SHA-256 digest. */
-export const stagedBlobName = (digest: string) => `staged-write/blobs/${digest}`;
+export const stagedBlobName = (digest: string) => `staged-write.blob.${digest}`;
 
 /** A recipe's `writeback` block (specs/runs/agentic.md § Model). */
 export const WritebackSpec = Schema.Struct({

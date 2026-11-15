@@ -24,20 +24,17 @@ import {
   type CatalogEntry,
   type DeployClaimGrant,
 } from "@fractalboxdev/flare-dispatch-catalog";
-import {
-  base64url,
-  canonicalJson,
-  derivedHmacKey,
-  fromBase64url,
-  hmacSign,
-  hmacVerify,
-  utf8,
-} from "@fractalboxdev/flare-dispatch-cache/crypto";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
-import { Option, Schema } from "effect";
+import {
+  bearerOf,
+  signLeaseToken,
+  verifyLeaseToken,
+  type LeaseTokenRefusal,
+  type LeaseTokenScope,
+} from "./lease-token.ts";
 
-const VERSION = "dc1";
 export const DEPLOY_CLAIM_TOKEN_LABEL = "flare-dispatch/deploy-claim/v1";
+const DEPLOY_CLAIM_TOKEN = { version: "dc1", label: DEPLOY_CLAIM_TOKEN_LABEL } as const;
 
 /** The bindings the deploy claim reads. */
 export interface DeployClaimEnv {
@@ -49,78 +46,20 @@ export interface DeployClaimEnv {
 }
 
 /** What a deploy-claim token binds: one execution at one epoch, until an expiry. */
-export interface DeployClaimScope {
-  readonly executionId: string;
-  readonly epoch: number;
-  /** Epoch ms: the execution's `deadline_at`. */
-  readonly expiresAt: number;
-}
+export type DeployClaimScope = LeaseTokenScope;
 
-const Payload = Schema.Struct({
-  execution_id: Schema.String,
-  epoch: Schema.Number,
-  exp: Schema.Number,
-});
-const decodePayload = Schema.decodeUnknownOption(Payload);
+export const signDeployClaimToken = (secret: string, scope: DeployClaimScope): Promise<string> =>
+  signLeaseToken(DEPLOY_CLAIM_TOKEN, secret, scope);
 
-export const signDeployClaimToken = async (
-  secret: string,
-  scope: DeployClaimScope,
-): Promise<string> => {
-  const payload = base64url(
-    utf8(
-      canonicalJson({
-        execution_id: scope.executionId,
-        epoch: scope.epoch,
-        exp: scope.expiresAt,
-      }),
-    ),
-  );
-  const key = await derivedHmacKey(secret, DEPLOY_CLAIM_TOKEN_LABEL);
-  return `${VERSION}.${payload}.${base64url(await hmacSign(key, `${VERSION}\n${payload}`))}`;
-};
-
-export type DeployClaimRefusal =
-  | "missing"
-  | "malformed"
-  | "invalid"
-  | "expired"
-  | "other-execution";
+export type DeployClaimRefusal = LeaseTokenRefusal;
 
 /** Verifies `presented` for the execution the request path names, at `nowMs`. */
-export const verifyDeployClaimToken = async (
+export const verifyDeployClaimToken = (
   secret: string,
   executionId: string,
   presented: string | null,
   nowMs: number,
-): Promise<
-  | { readonly ok: true; readonly scope: DeployClaimScope }
-  | { readonly ok: false; readonly reason: DeployClaimRefusal }
-> => {
-  if (presented === null || presented === "") return { ok: false, reason: "missing" };
-  const parts = presented.split(".");
-  if (parts.length !== 3 || parts[0] !== VERSION) return { ok: false, reason: "malformed" };
-  const [, payload, macText] = parts as [string, string, string];
-  const mac = fromBase64url(macText);
-  const body = fromBase64url(payload);
-  if (mac === undefined || mac.length !== 32 || body === undefined)
-    return { ok: false, reason: "malformed" };
-  const key = await derivedHmacKey(secret, DEPLOY_CLAIM_TOKEN_LABEL);
-  if (!(await hmacVerify(key, mac, `${VERSION}\n${payload}`)))
-    return { ok: false, reason: "invalid" };
-  let json: unknown;
-  try {
-    json = JSON.parse(new TextDecoder().decode(body));
-  } catch {
-    return { ok: false, reason: "malformed" };
-  }
-  const decoded = decodePayload(json);
-  if (Option.isNone(decoded)) return { ok: false, reason: "malformed" };
-  const p = decoded.value;
-  if (p.execution_id !== executionId) return { ok: false, reason: "other-execution" };
-  if (nowMs >= p.exp) return { ok: false, reason: "expired" };
-  return { ok: true, scope: { executionId: p.execution_id, epoch: p.epoch, expiresAt: p.exp } };
-};
+) => verifyLeaseToken(DEPLOY_CLAIM_TOKEN, secret, presented, nowMs, executionId);
 
 /** One row per execution whose deploy command was claimed, with the epoch that claimed it. */
 export const DEPLOY_CLAIM_SCHEMA = [
@@ -236,9 +175,7 @@ export const deployClaimFetch = async (
   if (secret === undefined || secret === "")
     return refuse("unavailable", "this deploy holds no deploy-claim secret");
   const executionId = decodeURIComponent(segment);
-  const auth = request.headers.get("authorization");
-  const bearer = auth === null ? null : (/^Bearer\s+(\S+)$/i.exec(auth.trim())?.[1] ?? null);
-  const verdict = await verifyDeployClaimToken(secret, executionId, bearer, now);
+  const verdict = await verifyDeployClaimToken(secret, executionId, bearerOf(request), now);
   if (!verdict.ok)
     return verdict.reason === "other-execution"
       ? refuse("forbidden", "token other-execution")

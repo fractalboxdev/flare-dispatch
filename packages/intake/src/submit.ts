@@ -18,7 +18,12 @@ import {
   trifectaAdmission,
   type DataClasses,
 } from "@fractalboxdev/flare-dispatch-agentic";
-import { executionId as newExecutionId, type AdmitAnswer } from "@fractalboxdev/mameko-coordinator";
+import {
+  executionId as newExecutionId,
+  sourceDefect,
+  type AdmitAnswer,
+} from "@fractalboxdev/mameko-coordinator";
+import type { ExecutionSource } from "@fractalboxdev/mameko-ports";
 import { Clock, Effect, Match, Schema } from "effect";
 import {
   Admission,
@@ -210,6 +215,32 @@ const dataClassRefusal = (
     Match.exhaustive,
   );
 
+/** A repository's HTTPS clone URL, which names no credential. */
+export const cloneUrlOf = (repo: string): string => `https://github.com/${repo}.git`;
+
+/**
+ * The source admission records for a request to a run that requires `Workspace` (MAMEKO-ADM-033): the repository's
+ * clone URL, the request's commit and, for a run that reads a merge base, the base its inputs name. Null for a run
+ * whose `requires` omits `Workspace`.
+ */
+export const sourceOf = (
+  s: Pick<Submission, "repo" | "sha" | "inputs"> & {
+    readonly run: Pick<IntakeRun, "requiresWorkspace" | "sourceBase">;
+  },
+): ExecutionSource | null => {
+  if (s.run.requiresWorkspace !== true) return null;
+  const base = s.run.sourceBase?.(s.inputs) ?? null;
+  return { remote: cloneUrlOf(s.repo), commit: s.sha, ...(base === null ? {} : { base }) };
+};
+
+/** What each source field admission refuses lacks (MAMEKO-ADM-033). */
+const SOURCE_DEFECTS: Readonly<Record<NonNullable<ReturnType<typeof sourceDefect>>, string>> = {
+  source: "is absent for a run that requires Workspace",
+  "source.remote": "is not an https URL without userinfo",
+  "source.commit": "is not a full commit id",
+  "source.base": "is not a full commit id",
+};
+
 /** Records a request rejected before admission (MAMEKO-ADM-093). */
 export const shed = (repo: string, run: string | null, reason: string) =>
   ShedRecorder.use((s) => s.record({ scopeId: repo, run, reason, estimatedCost: null }));
@@ -352,6 +383,17 @@ export const submit = (
       );
     }
 
+    // A source that admission would refuse is refused here, before any record or execution row exists
+    // (MAMEKO-ADM-034).
+    const source = sourceOf(s);
+    const sourceField = sourceDefect(source, s.run.requiresWorkspace === true);
+    if (sourceField !== null) {
+      yield* shed(s.repo, s.run.name, `invalid source: ${sourceField}`);
+      return yield* Effect.fail(
+        intakeError(400, "invalid_inputs", `${sourceField} ${SOURCE_DEFECTS[sourceField]}`),
+      );
+    }
+
     const classRequest: ClassRequest = {
       run: s.run,
       trigger: s.trigger,
@@ -449,6 +491,8 @@ export const submit = (
       placement: admissionPlacement(config.profile, s, className, labels, confidentiality),
       maxDurationSec: s.run.maxDurationSec,
       grants: s.run.grants ?? { setup: [], agent: [] },
+      source,
+      requiresWorkspace: s.run.requiresWorkspace === true,
       supersessionKey: supersessionKeyOf(s, classRequest, className),
       // A run that declares `serialize` names its serial group from its inputs, e.g. one `worker-deploy` target
       // (FD-GATE-063).

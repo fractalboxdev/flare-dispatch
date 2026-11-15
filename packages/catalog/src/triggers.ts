@@ -246,6 +246,7 @@ export const securityGateDecoder = () =>
               base: {
                 _tag: "TargetBranch",
                 branch: d.pullRequest.baseRef,
+                baseSha: d.pullRequest.baseSha,
               } satisfies SecurityGateBase,
             })
           : Option.none(),

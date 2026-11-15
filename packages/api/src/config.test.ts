@@ -26,6 +26,7 @@ describe("provenance key distinctness", () => {
       "CACHE_TOKEN_SECRET",
       "INSTALL_STATE_KEY",
       "DEPLOY_CLAIM_SECRET",
+      "MODEL_LEASE_SECRET",
     ]);
     // LINK_KEY is set apart from the provenance key, so the link key's own check (FD-IFC-023) passes first.
     for (const name of PROVENANCE_KEY_DISTINCT_FROM.filter((n) => n !== "LINK_KEY")) {
@@ -53,6 +54,7 @@ describe("provenance key distinctness", () => {
         CACHE_TOKEN_SECRET: "cache",
         INSTALL_STATE_KEY: "install",
         DEPLOY_CLAIM_SECRET: "deploy-claim",
+        MODEL_LEASE_SECRET: "model-lease",
       },
       ORIGIN,
     );
