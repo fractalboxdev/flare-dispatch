@@ -272,7 +272,7 @@ A proposal's **suppression key** is `<owner>/<name>:<head branch>`: the reposito
 
 ### `ci-triage-pr`
 
-- **FD-AGT-071** · phase 2 · `V-UNIT` — `ci-triage-pr` must read failed executions from the executions table and their failed job logs over the last 24 h, classify each failure with a `transform` call and write one triage report with a `judgment` call.
+- **FD-AGT-071** · phase 2 · `V-UNIT` — `ci-triage-pr` must read failed executions from the executions table and their failed job logs over the last 24 h, classify each failure with a `transform` call and write one triage report with a `judgment` call; in a Container it reads them from `GET /v1/executions` and `GET /v1/executions/:id/logs` under its lease's control-plane read token, which the egress proxy attaches under the `control-plane-read` grant ([../interfaces.md](../interfaces.md) FD-IFC-102, FD-IFC-103).
 - **FD-AGT-072** · phase 2 · `V-UNIT` — `ci-triage-pr` must stage the report as `.flare-dispatch/ci-triage-<YYYY-MM-DD>.md` on the branch `flare-dispatch/ci-triage` with the path allowlist `.flare-dispatch/**`.
 - **FD-AGT-073** · phase 2 · `V-UNIT` — When the executions read succeeds and returns no failure in the window, `ci-triage-pr` must return a `pr.close` intent for its open pull request, which the drain refuses while that branch carries a commit the GitHub App did not author ([../github-output.md](../github-output.md) FD-GH-087).
 

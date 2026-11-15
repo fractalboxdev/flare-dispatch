@@ -369,7 +369,7 @@ FlareDispatch surfaces no `resolve`, because no FlareDispatch intent kind is `re
 
 ### Access configuration and webhook silence
 
-- **FD-OPS-088** · phase 0 · `V-DEPLOY` `V-E2E-LOCAL` — The committed Access configuration must bypass Access on every path whose surface in [interfaces.md](interfaces.md) names an identity other than the Access JWT alone (webhook, dispatch, executor connect, `/health`, `/.well-known/*`, log, artifact, compile-cache, deploy-claim, model-gateway and `/v1/provenance/*` paths), and the dispatcher must run each such surface's identity check itself.
+- **FD-OPS-088** · phase 0 · `V-DEPLOY` `V-E2E-LOCAL` — The committed Access configuration must bypass Access on every path whose surface in [interfaces.md](interfaces.md) names an identity other than the Access JWT alone (webhook, dispatch, executor connect, `/health`, `/.well-known/*`, executions list, log, artifact, compile-cache, deploy-claim, model-gateway and `/v1/provenance/*` paths), and the dispatcher must run each such surface's identity check itself.
 - **FD-OPS-089** · phase 0 · `V-UNIT` `V-LIVE` — If an installation with at least one repository whose manifest enrolls a recipe has no verified webhook delivery ([intake.md](intake.md) FD-INT-031) for `alerts.webhookSilentHours`, then the control plane must raise the notify alarm `webhook-silent` naming the account login.
 
 ### Scoped identities

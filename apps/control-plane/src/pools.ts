@@ -23,6 +23,7 @@ import {
 import { LeaseStore } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import type { ControlPlaneEnv } from "./config.ts";
+import { CONTROL_PLANE_READ_CREDENTIAL, CONTROL_PLANE_READERS } from "./control-plane-read.ts";
 import { deployClaimHost } from "./deploy-claim.ts";
 import { MODEL_REQUEST_MAX_BYTES } from "./model-gateway.ts";
 
@@ -79,18 +80,24 @@ const GIT_METHODS = ["GET", "POST"];
 /** The headers a job's GitHub REST client sends beside an HTTPS client's own. */
 const GITHUB_API_HEADERS = [...CLIENT_HEADERS, "x-github-api-version"];
 
+/** The path prefix of the executions list and the log aggregate, the control-plane reads a lease's token serves. */
+export const CONTROL_PLANE_READ_PATH = "/v1/executions";
+
 /**
  * The grant catalogue each Container's outbound handler decides over (MAMEKO-ISO-021): `git-remote`, the repository's git
  * host for the checkout of the `setup` phase (FD-GATE-110); `cf-api`, the Cloudflare API under the deploy token the
  * Worker holds (FD-GATE-066); `deploy-claim`, `POST` to the dispatcher's deploy-claim route alone, where
  * `worker-deploy` presents its lease's deploy-claim token (FD-GATE-067); `model-gateway`, `POST` to the dispatcher's
- * model route alone, which an agentic recipe reaches in its `agent` phase (FD-AGT-010); and `github-api-read`, `GET` of
+ * model route alone, which an agentic recipe reaches in its `agent` phase (FD-AGT-010); `control-plane-read`, `GET`
+ * under the dispatcher's `/v1/executions` path alone, where `ci-triage-pr` reads its repository's executions and
+ * their logs under its lease's control-plane read token (FD-IFC-102, FD-IFC-103); and `github-api-read`, `GET` of
  * GitHub's repository routes with no credential, which answer a public repository's reads alone. `cf-api` carries no
  * credential on a deploy without that token, so a request under it leaves unauthenticated and the API refuses it.
  * `deploy-claim` attaches no credential. `model-gateway` attaches none either: a grant's credential is one value for
  * every lease, and the model-lease token the route takes is minted for one lease into the lease's `credentials`, which
- * no outbound handler reads, so the model route answers a Container's request `unauthenticated`. A deploy that names no
- * `PUBLIC_ORIGIN` has neither dispatcher grant, so its leases carry no deploy claim and no model route either.
+ * no outbound handler reads, so the model route answers a Container's request `unauthenticated`; the control-plane
+ * read token travels the same way under `control-plane-read`. A deploy that names no `PUBLIC_ORIGIN` has no dispatcher
+ * grant, so its leases carry no deploy claim, no model route and no control-plane read either.
  */
 export const poolGrants = (
   env: Pick<ControlPlaneEnv, "DEPLOY_API_TOKEN" | "PUBLIC_ORIGIN">,
@@ -144,6 +151,14 @@ export const poolGrants = (
             maxBodyBytes: MODEL_REQUEST_MAX_BYTES,
             headers: CLIENT_HEADERS,
           },
+          {
+            name: CONTROL_PLANE_READ_CREDENTIAL,
+            host: dispatcher,
+            methods: ["GET"],
+            pathPrefix: CONTROL_PLANE_READ_PATH,
+            maxBodyBytes: 0,
+            headers: CLIENT_HEADERS,
+          },
         ]),
   ];
 };
@@ -160,8 +175,8 @@ const GITHUB_API_READERS: ReadonlySet<string> = new Set(["triage-prs"]);
  * Each catalogue run's grant names per egress phase: the grants its spec declares; for a run that requires
  * `Workspace`, the `setup` profile's `git-remote` base grant (FD-PROF-050), through which the executor checks the
  * lease's source out before the job starts; for an agentic recipe that calls models, the `agent` profile's
- * `model-gateway` base grant, so its `agent` phase reaches the model route; and for a run of `GITHUB_API_READERS`,
- * `github-api-read`.
+ * `model-gateway` base grant, so its `agent` phase reaches the model route; for a run of `CONTROL_PLANE_READERS`,
+ * `control-plane-read` in its `agent` phase; and for a run of `GITHUB_API_READERS`, `github-api-read`.
  */
 export const RUN_GRANTS: PoolControllerSettings["runGrants"] = Object.fromEntries(
   Object.values(RUN_CATALOG).map(({ spec, agentic }) => [
@@ -176,6 +191,7 @@ export const RUN_GRANTS: PoolControllerSettings["runGrants"] = Object.fromEntrie
       agent: [
         ...spec.grants.agent,
         ...(agentic?.declaration.needsModel === true ? ["model-gateway"] : []),
+        ...(CONTROL_PLANE_READERS.has(spec.name) ? [CONTROL_PLANE_READ_CREDENTIAL] : []),
         ...(GITHUB_API_READERS.has(spec.name) ? ["github-api-read"] : []),
       ],
     },

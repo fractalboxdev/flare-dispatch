@@ -38,6 +38,7 @@ import { isolateServices, presignerLayer } from "./composition.ts";
 import { leaseCache, presignOnFrame } from "./cache.ts";
 import { leaseCacheAt } from "./cache-execution.ts";
 import { leaseCloudValues, withCloudLease } from "./cloud-lease.ts";
+import { leaseReadCredentials } from "./control-plane-read.ts";
 import { leaseDeployClaim, withDeployClaim } from "./deploy-claim.ts";
 import { leaseModelCredentials } from "./model-gateway.ts";
 import { prProposeOnFrame } from "./pr-propose.ts";
@@ -163,7 +164,7 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
    * input carries as its `deadlineAt` (FD-GATE-007). A `worker-deploy` input carries the deploy claim minted for the
    * execution at the placement's epoch (FD-GATE-067), and an agentic or scan input its executor values
    * (`cloud-lease.ts`). An agentic lease that calls models carries its model-lease token in `credentials`
-   * (`model-gateway.ts`). A payload that carries a write credential fails the grant
+   * (`model-gateway.ts`), and a `ci-triage-pr` lease its control-plane read token (`control-plane-read.ts`). A payload that carries a write credential fails the grant
    * (FD-AGT-008). The nonce is 128 random bits bound to the execution and the placement's epoch (FD-PROV-010).
    */
   leaseFields: (executionId: string): Promise<ClaimedLease> =>
@@ -201,14 +202,13 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
           }),
         );
         // An agentic lease that calls models carries its model-lease token among its credentials, where the egress
-        // proxy attaches it to the model route (FD-AGT-010); the input carries none.
-        const credentials = yield* Effect.promise(() =>
-          leaseModelCredentials(bindings, entry, {
-            executionId,
-            epoch: row.epoch,
-            expiresAt: row.deadline_at,
-          }),
-        );
+        // proxy attaches it to the model route (FD-AGT-010), and a `ci-triage-pr` lease its control-plane read token,
+        // which the proxy attaches to the executions and log routes (FD-IFC-102); the input carries neither.
+        const scope = { executionId, epoch: row.epoch, expiresAt: row.deadline_at };
+        const credentials = {
+          ...(yield* Effect.promise(() => leaseModelCredentials(bindings, entry, scope))),
+          ...(yield* Effect.promise(() => leaseReadCredentials(bindings, entry, scope))),
+        };
         // An agentic or scan lease's input carries the executor values the Container's runner builds its Layers from.
         const presign = presignWith(bindings);
         const cloud = yield* Effect.promise(() =>

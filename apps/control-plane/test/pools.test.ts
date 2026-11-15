@@ -193,6 +193,50 @@ describe("Container pools", () => {
     ]);
   });
 
+  it("[FD-IFC-102] [FD-IFC-103] control-plane-read covers GET under the dispatcher's executions path alone, in ci-triage-pr's agent phase alone", () => {
+    const settings = poolSettings(env({ PUBLIC_ORIGIN: "https://ci.example.com/" }), profile);
+    const agent = launchGrants(settings, "ci-triage-pr").agent;
+    expect(agent.map((g) => g.name)).toEqual(["model-gateway", "control-plane-read"]);
+    expect(agent.find((g) => g.name === "control-plane-read")).toMatchObject({
+      host: "ci.example.com",
+      methods: ["GET"],
+      pathPrefix: "/v1/executions",
+      maxBodyBytes: 0,
+    });
+    // The lease's token is the credential; the grant carries no value of its own.
+    expect(agent.find((g) => g.name === "control-plane-read")!.credential).toBeUndefined();
+    expect(launchGrants(settings, "ci-triage-pr").setup.map((g) => g.name)).toEqual(["git-remote"]);
+    const request = (method: string, path: string, host = "ci.example.com") =>
+      decide(
+        { scheme: "https", host, method, path, bodyBytes: 0, headers: ["accept", "authorization"] },
+        agent,
+        "enforce",
+      );
+    for (const path of [
+      "/v1/executions?repository=acme%2Fapp&status=done&finished_since=0&limit=200",
+      "/v1/executions/01JEXEC0000000000000000000/logs?format=text",
+    ])
+      expect(request("GET", path), path).toEqual({
+        _tag: "Admit",
+        grant: "control-plane-read",
+        credential: undefined,
+      });
+    expect(request("POST", "/v1/executions/01JEXEC0000000000000000000/cancel")._tag).toBe("Deny");
+    expect(request("GET", "/v1/ops/health")._tag).toBe("Deny");
+    expect(request("GET", "/v1/artifacts/a1")._tag).toBe("Deny");
+    expect(request("GET", "/v1/executions", "api.github.com")._tag).toBe("Deny");
+    // No other run holds the grant in either phase.
+    for (const run of Object.keys(RUN_CATALOG).filter((r) => r !== "ci-triage-pr")) {
+      const grants = launchGrants(settings, run);
+      expect(
+        [...grants.setup, ...grants.agent].map((g) => g.name),
+        run,
+      ).not.toContain("control-plane-read");
+    }
+    // A deploy that names no public origin has no dispatcher host to grant.
+    expect(launchGrants(poolSettings(env(), profile), "ci-triage-pr").agent).toEqual([]);
+  });
+
   it("[FD-ARCH-001] the launch keys are the secret's P-256 private JWK and its public half, and none for any other value", async () => {
     const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
       "sign",

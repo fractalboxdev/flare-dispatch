@@ -50,6 +50,27 @@ export const ownedByCaller = (id: string) =>
     if (foreign) return yield* apiError("execution_not_found", `no execution ${id}`);
   });
 
+/**
+ * The repository a listing reads: the query's, or for a lease's control-plane read token its own repository, where a
+ * query naming any other answers `forbidden` (FD-IFC-102).
+ */
+export const listedRepository = (
+  requested: string | undefined,
+): Effect.Effect<string | undefined, ApiError, CurrentIdentity> =>
+  Effect.gen(function* () {
+    const identity = yield* CurrentIdentity;
+    return yield* Match.value(identity).pipe(
+      Match.tag("Lease", ({ repository }) =>
+        requested === undefined || requested.toLowerCase() === repository.toLowerCase()
+          ? Effect.succeed<string | undefined>(repository)
+          : Effect.fail(
+              apiError("forbidden", `the lease reads only the executions of ${repository}`),
+            ),
+      ),
+      Match.orElse(() => Effect.succeed(requested)),
+    );
+  });
+
 /** Holds the answer until the execution is `done` or the wait ends (FD-IFC-040). */
 export const awaitExecution = (id: string, waitSeconds: number) =>
   Effect.gen(function* () {
@@ -106,12 +127,13 @@ export const ExecutionsHandlers = HttpApiBuilder.group(FlareDispatchApi, "execut
   handlers
     .handle("list", ({ query }) =>
       Effect.gen(function* () {
+        const repository = yield* listedRepository(query.repository);
         const executions = yield* Executions;
         const limit = query.limit ?? DEFAULT_PAGE;
         const { rows, more } = yield* executions.list({
           limit,
           ...(query.run === undefined ? {} : { run: query.run }),
-          ...(query.repository === undefined ? {} : { repository: query.repository }),
+          ...(repository === undefined ? {} : { repository }),
           ...(query.status === undefined ? {} : { status: query.status }),
           ...(query.class === undefined ? {} : { class: query.class }),
           ...(query.executor_kind === undefined ? {} : { executorKind: query.executor_kind }),

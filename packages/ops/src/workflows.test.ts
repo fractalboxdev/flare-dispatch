@@ -317,6 +317,7 @@ describe("Access configuration", () => {
       "executor connect",
       "health",
       "well-known",
+      "executions list",
       "log aggregate",
       "log",
       "artifact",
@@ -332,6 +333,7 @@ describe("Access configuration", () => {
       "/v1/executors/connect",
       "/health",
       "/.well-known/openid-configuration",
+      "/v1/executions",
       "/v1/executions/e1/logs",
       "/v1/executions/e1/logs/run.log",
       "/v1/artifacts/a1",
@@ -344,8 +346,8 @@ describe("Access configuration", () => {
       expect(bypassed(path)).toBe(true);
     for (const path of [
       "/",
-      "/v1/executions",
       "/v1/executions/e1",
+      "/v1/executions/e1/failure-summary",
       "/v1/ops/health",
       "/v1/spend",
       "/v1/github/install/new",

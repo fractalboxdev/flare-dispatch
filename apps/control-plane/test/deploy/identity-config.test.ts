@@ -31,6 +31,7 @@ const gated = (surface: Surface): boolean =>
     Match.tagsExhaustive({
       Access: () => true,
       AccessOrActions: () => true,
+      AccessOrLease: () => false,
       Dispatch: () => false,
       AccessIfPresent: () => false,
       Link: () => false,
@@ -95,7 +96,7 @@ describe("fd deploy and the dispatcher's identity gate", () => {
     expect(GATED.length).toBeGreaterThan(20);
     expect(GATED).toEqual(
       expect.arrayContaining([
-        { method: "GET", path: "/v1/executions" },
+        { method: "GET", path: "/v1/executions/x/failure-summary" },
         { method: "POST", path: "/v1/ops/halt" },
       ]),
     );

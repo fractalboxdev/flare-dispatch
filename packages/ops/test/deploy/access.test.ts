@@ -119,7 +119,7 @@ describe("the committed Access configuration", () => {
         path: b.path,
         status: 200,
       });
-    for (const path of ["/", "/v1/ops/health", "/v1/executions", "/v1/spend", "/mcp"])
+    for (const path of ["/", "/v1/ops/health", "/v1/executions/01X", "/v1/spend", "/mcp"])
       expect({ path, status: (await edge(w, path)).status }).toEqual({ path, status: 302 });
   });
 

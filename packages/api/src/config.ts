@@ -84,13 +84,15 @@ export interface ApiEnv {
   readonly LOG_KEY?: string;
   /**
    * The other capability secrets: compile-cache tokens (FD-CACHE-057), install states (FD-OPS-073),
-   * `worker-deploy`'s deploy-claim tokens (specs/runs/gate.md FD-GATE-067) and the model route's model-lease tokens.
+   * `worker-deploy`'s deploy-claim tokens (specs/runs/gate.md FD-GATE-067), the model route's model-lease tokens and
+   * the control-plane read tokens of `ci-triage-pr` leases (FD-IFC-102).
    */
   readonly COMPILE_CACHE_SECRET?: string;
   readonly CACHE_TOKEN_SECRET?: string;
   readonly INSTALL_STATE_KEY?: string;
   readonly DEPLOY_CLAIM_SECRET?: string;
   readonly MODEL_LEASE_SECRET?: string;
+  readonly CONTROL_PLANE_READ_SECRET?: string;
   /** The verdict record signing key, which signs each job and verdict record (specs/github-output.md FD-GH-099). */
   readonly RECORDS_SIGNING_KEY?: string;
 }
@@ -205,6 +207,7 @@ export const PROVENANCE_KEY_DISTINCT_FROM = [
   "INSTALL_STATE_KEY",
   "DEPLOY_CLAIM_SECRET",
   "MODEL_LEASE_SECRET",
+  "CONTROL_PLANE_READ_SECRET",
 ] as const satisfies ReadonlyArray<keyof ApiEnv>;
 
 /**

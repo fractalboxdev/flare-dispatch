@@ -1,7 +1,7 @@
 // The identity checks of specs/interfaces.md § Surfaces and their identity gates: the Cloudflare Access JWT, the GitHub
-// Actions OIDC token and the link token. Each answers an identity or an error from the error model; none has a mode
+// Actions OIDC token, the link token and a Container lease's control-plane read token. Each answers an identity or an error from the error model; none has a mode
 // that passes a request without one (FD-IFC-015).
-import { Context, Effect, Match } from "effect";
+import { Context, Effect, Match, Option } from "effect";
 import { ApiConfig, type ScopedDispatch } from "./config.ts";
 import { apiError, type ApiError } from "./errors.ts";
 import { ACTIONS_ISSUER, ACTIONS_JWKS } from "@fractalboxdev/flare-dispatch-github/jwks";
@@ -36,12 +36,45 @@ export interface LinkHolder {
   readonly objectId: string;
 }
 
+/**
+ * A Container lease, as its control-plane read token identifies it: one execution of one repository at its current
+ * epoch. It reads only that repository's executions and their logs (FD-IFC-102, FD-IFC-103).
+ */
+export interface LeaseHolder {
+  readonly _tag: "Lease";
+  readonly id: string;
+  readonly executionId: string;
+  readonly epoch: number;
+  readonly repository: string;
+}
+
 /** A surface whose route checks its own credential, or that needs none. */
 export interface Unidentified {
   readonly _tag: "Unidentified";
 }
 
-export type Identity = AccessIdentity | ActionsIdentity | LinkHolder | Unidentified;
+export type Identity = AccessIdentity | ActionsIdentity | LinkHolder | LeaseHolder | Unidentified;
+
+/**
+ * The verifier of control-plane read tokens. The mounting package provides it, because the token names an execution
+ * whose epoch and repository only the control plane's records hold; a refusal is an error from the error model.
+ */
+export class LeaseReadTokens extends Context.Service<
+  LeaseReadTokens,
+  { readonly verify: (token: string) => Effect.Effect<LeaseHolder, ApiError> }
+>()("@fractalboxdev/flare-dispatch-api/LeaseReadTokens") {}
+
+/**
+ * A control-plane read token as the bearer: the lease it names, or `unauthenticated` on a deploy that verifies no such
+ * token (FD-IFC-102).
+ */
+export const authenticateLease = (bearer: string): Effect.Effect<LeaseHolder, ApiError> =>
+  Effect.gen(function* () {
+    const tokens = yield* Effect.serviceOption(LeaseReadTokens);
+    if (Option.isNone(tokens))
+      return yield* apiError("unauthenticated", "this deployment verifies no lease token");
+    return yield* tokens.value.verify(bearer);
+  });
 
 export class CurrentIdentity extends Context.Service<CurrentIdentity, Identity>()(
   "@fractalboxdev/flare-dispatch-api/CurrentIdentity",

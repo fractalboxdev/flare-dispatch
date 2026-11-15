@@ -102,6 +102,12 @@ export interface ControlPlaneEnv extends CacheEnv {
    * unset, no lease carries one and the model route answers `unavailable` (`model-gateway.ts`).
    */
   readonly MODEL_LEASE_SECRET?: string;
+  /**
+   * The secret (a Worker secret) the control-plane read tokens of `ci-triage-pr` leases derive from, distinct from
+   * every other key; unset, no lease carries one and the executions and log routes take no lease token
+   * (`control-plane-read.ts`).
+   */
+  readonly CONTROL_PLANE_READ_SECRET?: string;
   /** The Workers AI binding, the `workers-ai` route's only credential (FD-MDL-020). */
   readonly AI?: WorkersAiBinding;
   /** The rendered `{{models.registry}}`: the provider registry the model route chooses an entry from (MAMEKO-MDL-020). */

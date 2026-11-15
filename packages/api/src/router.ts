@@ -27,6 +27,7 @@ import {
   authenticateAccess,
   authenticateActions,
   authenticateDispatch,
+  authenticateLease,
   authenticateLink,
   CurrentIdentity,
   inGroup,
@@ -67,8 +68,21 @@ export type Surface =
    * unidentified caller the statements of public repositories alone (FD-IFC-053, FD-IFC-054).
    */
   | { readonly _tag: "AccessIfPresent" }
-  /** An Access JWT, or a link token for the object the path parameter `param` names (FD-IFC-017). */
-  | { readonly _tag: "Link"; readonly purpose: LinkPurpose; readonly param: string }
+  /**
+   * An Access JWT, or a control-plane read token as the bearer: a Container lease's read of its own repository's
+   * executions (FD-IFC-102).
+   */
+  | { readonly _tag: "AccessOrLease" }
+  /**
+   * An Access JWT, or a link token for the object the path parameter `param` names (FD-IFC-017); with `lease`, also a
+   * control-plane read token as the bearer, which the route serves only its own repository's executions (FD-IFC-103).
+   */
+  | {
+      readonly _tag: "Link";
+      readonly purpose: LinkPurpose;
+      readonly param: string;
+      readonly lease?: true;
+    }
   /** The route verifies its own credential: a webhook HMAC, a connect signature, a cache or per-lease token. */
   | { readonly _tag: "OwnCredential" }
   /** `/health` and `/.well-known/*`. */
@@ -263,7 +277,18 @@ const surfaceCheck = (
         readAccessJwt(request) === undefined
           ? Effect.succeed<Identity>({ _tag: "Unidentified" })
           : accessCheck(request, { _tag: "Access", group: "any" }),
-      Link: (s) => authenticateLink(request, s.purpose, params[s.param] ?? ""),
+      AccessOrLease: () => {
+        const bearer = readBearer(request);
+        return bearer === undefined
+          ? accessCheck(request, { _tag: "Access", group: "any" })
+          : authenticateLease(bearer);
+      },
+      Link: (s) => {
+        const bearer = s.lease === true ? readBearer(request) : undefined;
+        return bearer === undefined
+          ? authenticateLink(request, s.purpose, params[s.param] ?? "")
+          : authenticateLease(bearer);
+      },
       OwnCredential: () => Effect.succeed<Identity>({ _tag: "Unidentified" }),
       Public: () => Effect.succeed<Identity>({ _tag: "Unidentified" }),
     }),
