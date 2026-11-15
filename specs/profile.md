@@ -117,7 +117,7 @@ Besides the class, `resolveClass` returns the label `untrusted-input` for a requ
 
 ### Pools and browser sessions
 
-Each pool's admission cap is the runtime adapter's configuration, which `poolAdmissionCaps` holds; a Container pool's is strictly below its Container class's `max_instances`. The `control` pool has no Container class: its runs run in the pool controller's Durable Objects. The profile's `pools` partitions each cap by class.
+Each pool's admission cap is the runtime adapter's configuration, which `poolAdmissionCaps` holds; a Container pool's is strictly below its Container class's `max_instances`. The `control` pool has no Container class: its runs run in the pool controller's Durable Objects. It claims only placements whose run requires no job sandbox, and intake pins each run only the `control` pool serves (`canary`, `deploy-smoke` and `offload-test`) to it, so no other pool or device claims one ([MAMEKO-LEASE-101](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/placement-leases.md)). The profile's `pools` partitions each cap by class.
 
 | Pool | Admission cap | `batch` at most | `interactive` at most | `required` | Other |
 | --- | --- | --- | --- | --- | --- |
@@ -125,7 +125,7 @@ Each pool's admission cap is the runtime adapter's configuration, which `poolAdm
 | `agent` | 8 | 6 | 6 | at most 8, at least 2 kept | — |
 | `browser` | 16 | 4 | 10 | at most 16, at least 2 kept | — |
 | `release` | 8 | — | — | — | `reserved_for: release` |
-| `control` | 16 | — | — | — | no class cap |
+| `control` | 16 | 2 | 4 | at most 6, at least 1 kept | `release` at most 4 |
 
 `browser_sessions` caps the hosted browser sessions at 10 in total: `batch` at most 1, `interactive` at most 2, `required` at most 10 with 1 kept.
 
@@ -340,7 +340,7 @@ FlareDispatch's phase n document is compared with the reference profile's form f
 
 ### Pools and browser sessions
 
-- **FD-PROF-032** · phase 0 · `V-UNIT` `V-CONF` — The profile's `pools` must partition the Container pools as § Pools and browser sessions states: `lean` with `batch` at most 4 and `interactive` at most 8; `agent` with `batch` at most 6, `interactive` at most 6 and `required` at most 8 with 2 kept; `browser` with `batch` at most 4, `interactive` at most 10 and `required` at most 16 with 2 kept; `release` reserved for `release`; and `control` with no class cap, and `poolAdmissionCaps` must declare every one of those pools with the admission cap the profile validator reads ([MAMEKO-ADM-047](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/admission-qos.md), [MAMEKO-PROF-035](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/profiles.md)).
+- **FD-PROF-032** · phase 0 · `V-UNIT` `V-CONF` — The profile's `pools` must partition the Container pools as § Pools and browser sessions states: `lean` with `batch` at most 4 and `interactive` at most 8; `agent` with `batch` at most 6, `interactive` at most 6 and `required` at most 8 with 2 kept; `browser` with `batch` at most 4, `interactive` at most 10 and `required` at most 16 with 2 kept; `release` reserved for `release`; and `control` with `batch` at most 2, `interactive` at most 4, `required` at most 6 with 1 kept and `release` at most 4, and `poolAdmissionCaps` must declare every one of those pools with the admission cap the profile validator reads ([MAMEKO-ADM-047](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/admission-qos.md), [MAMEKO-PROF-035](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/profiles.md)).
 - **FD-PROF-033** · phase 0 · `V-DEPLOY` — The deploy drift check must fail a deploy in which a Container pool's admission cap (`lean` 48, `agent` 8, `browser` 16, `release` 8 by default) is at or above its Container class's `max_instances`; the `control` pool has no Container class ([MAMEKO-ADM-048](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/admission-qos.md)).
 - **FD-PROF-034** · phase 0 · `V-UNIT` `V-CONF` — The profile must cap browser sessions at 10 in total, `batch` at most 1, `interactive` at most 2 and `required` at most 10 with 1 kept ([MAMEKO-ADM-049](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/admission-qos.md)).
 

@@ -108,7 +108,16 @@ export interface IntakeRun {
    * 400 `invalid_inputs`. A run without it takes its inputs as the caller sent them.
    */
   readonly bindCommit?: (inputs: unknown, commit: DispatchCommit) => CommitBinding;
+  /**
+   * The pool whose executor alone claims the run's executions: `control` for a run whose catalogue entry lists the
+   * `control` executor alone, which requires no job sandbox (MAMEKO-LEASE-101, MAMEKO-ADM-050). Absent, any eligible
+   * executor claims it, and the run requires a job sandbox.
+   */
+  readonly pool?: typeof CONTROL_POOL_NAME;
 }
+
+/** The `control` pool, whose runner runs each run program in a Durable Object with no Container (MAMEKO-EXEC-057). */
+export const CONTROL_POOL_NAME = "control";
 
 /** The schema the inputs a caller names must pass: the run's `callerInput`, else its `input`. */
 export const callerInputOf = (run: IntakeRun): Schema.Decoder<unknown> =>

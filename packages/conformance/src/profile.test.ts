@@ -72,7 +72,11 @@ describe("the profile each deployment's configuration source supplies, through m
           reservedFor: null,
         },
         { name: "release", caps: {}, reservedFor: "release" },
-        { name: "control", caps: {}, reservedFor: null },
+        {
+          name: "control",
+          caps: { batch: [2, 0], interactive: [4, 0], required: [6, 1], release: [4, 0] },
+          reservedFor: null,
+        },
       ]);
       // poolAdmissionCaps declares every pool the profile names, and no other.
       expect(Object.keys(poolAdmissionCaps).sort()).toEqual(loaded.pools.map((p) => p.name).sort());

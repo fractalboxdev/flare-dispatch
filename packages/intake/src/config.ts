@@ -149,6 +149,15 @@ export interface IntakeAdmitInput {
    * the control plane takes as the execution's infrastructure retries (FD-PROF-009, MAMEKO-ADM-083). Absent counts as 0.
    */
   readonly runRetries?: number;
+  /**
+   * The pool whose executor alone may claim the execution, for a run only that pool serves; null or absent lets any
+   * eligible executor claim it (MAMEKO-LEASE-101).
+   */
+  readonly pool?: string | null;
+  /**
+   * Whether the run requires a job sandbox, which the `control` pool never serves; true when absent (MAMEKO-ADM-050).
+   */
+  readonly sandbox?: boolean;
 }
 
 /** Admission did not answer: the store transaction failed, and nothing was written. */
@@ -377,6 +386,8 @@ export const d1Admission = (db: D1Like, profile: Profile, ports: AdmissionPorts 
           },
           supersessionKey: input.supersessionKey ?? null,
           serialKey: input.serialKey ?? null,
+          ...(input.pool === undefined || input.pool === null ? {} : { pinnedPool: input.pool }),
+          ...(input.sandbox === undefined ? {} : { sandbox: input.sandbox }),
           ...(cls?.retries === "run" && input.runRetries !== undefined
             ? { runRetries: input.runRetries }
             : {}),

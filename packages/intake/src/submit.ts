@@ -508,6 +508,8 @@ export const submit = (
       // A `release` execution's infrastructure retries are its run's declared `retries` (FD-PROF-009).
       runRetries: s.run.retries,
       ...(s.opsRun === true ? { opsRun: true } : {}),
+      // A run only the `control` pool serves is pinned to it and requires no job sandbox (MAMEKO-LEASE-101).
+      ...(s.run.pool === undefined ? {} : { pool: s.run.pool, sandbox: false }),
     };
 
     // Inside the run's cooldown window the request is held before admission, and the minute tick admits it once the
