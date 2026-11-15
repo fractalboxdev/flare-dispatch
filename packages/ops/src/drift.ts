@@ -18,6 +18,7 @@ import {
   type PolicyRules,
   type ValidationContext,
 } from "@fractalboxdev/flare-dispatch-profile";
+import { CONTROL_POOL } from "@fractalboxdev/mameko-kernel";
 import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { Effect, Schema } from "effect";
 import {
@@ -196,8 +197,16 @@ export const containerClassOf = (pool: string): string =>
   `${pool.charAt(0).toUpperCase()}${pool.slice(1)}Pool`;
 
 /**
- * Each pool's admission cap must be strictly below its Container class's `max_instances` (FD-OPS-020, FD-PROF-033,
- * MAMEKO-ADM-048); a pool with no Container class fails too (FD-ARCH-001).
+ * The pools a Container class backs: every declared pool but `control`, whose runs run in the pool controller's
+ * Durable Objects with no Container (MAMEKO-EXEC-057).
+ */
+export const containerPools = (
+  caps: Readonly<Record<string, { readonly admission_cap: number }>> = poolAdmissionCaps,
+): readonly string[] => Object.keys(caps).filter((pool) => pool !== CONTROL_POOL);
+
+/**
+ * Each Container pool's admission cap must be strictly below its Container class's `max_instances` (FD-OPS-020,
+ * FD-PROF-033, MAMEKO-ADM-048); a Container pool with no Container class fails too (FD-ARCH-001).
  */
 export const admissionCapCheck = (
   worker: string,
@@ -205,7 +214,8 @@ export const admissionCapCheck = (
   caps: Readonly<Record<string, { readonly admission_cap: number }>> = poolAdmissionCaps,
 ): readonly Finding[] => {
   const containers = arr(rendered["containers"]);
-  return Object.entries(caps).flatMap(([pool, { admission_cap }]) => {
+  return containerPools(caps).flatMap((pool) => {
+    const { admission_cap } = caps[pool]!;
     const cls = containerClassOf(pool);
     const c = containers.find((x) => x["class_name"] === cls);
     if (c === undefined)

@@ -278,7 +278,7 @@ describe("fd deploy over the scan bundle", () => {
     const key = await signingKey("bundle-2026");
     const now = Date.now();
     const keys = [keyEntry(key, now - HOUR, now + HOUR)];
-    const image = "infra/v2/Dockerfile.gate (control-plane.containers.LeanPool, control-plane.containers.AgentPool, control-plane.containers.BrowserPool, control-plane.containers.ReleasePool, control-plane.containers.ControlPool)";
+    const image = "infra/v2/Dockerfile.gate (control-plane.containers.LeanPool, control-plane.containers.AgentPool, control-plane.containers.BrowserPool, control-plane.containers.ReleasePool)";
     for (const [versions, text] of [
       [{ "osv-scanner": "~1.9.0" }, `scanners.osv-scanner.versions: the image ${image} holds osv-scanner 2.7.0, outside scanners.osv-scanner.versions ~1.9.0`],
       [{ gitleaks: "<8.30.0" }, `scanners.gitleaks.versions: the image ${image} holds gitleaks 8.30.1, outside scanners.gitleaks.versions <8.30.0`],

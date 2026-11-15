@@ -385,6 +385,12 @@ export const channelConfig = (profile: Profile): ExecutorChannelEnv["MAMEKO_CHAN
   classRetries: Object.fromEntries(
     profile.classes.flatMap((c) => (c.retries === undefined ? [] : [[c.name, c.retries]])),
   ),
+  // The kinds generated `on: accepted`, `pr.propose` among them, which the accept inserts in its transaction from the
+  // channel's `acceptedPayload` (MAMEKO-OUT-060, FD-AGT-034), and the class ranks their rows carry.
+  acceptedKinds: Object.fromEntries(
+    Object.entries(profile.intent_kinds).filter(([, kind]) => kind.on === "accepted"),
+  ),
+  classRanks: Object.fromEntries(profile.classes.map((c) => [c.name, c.rank])),
   executorKind: "device",
   planeShare: deviceSlotDefaults.total,
 });

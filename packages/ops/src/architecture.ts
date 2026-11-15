@@ -3,13 +3,12 @@
 // no executor holds or receives (FD-ARCH-004, FD-ARCH-005) and when each class's workflow starts (FD-ARCH-019).
 import {
   deploymentOf,
-  poolAdmissionCaps,
   type Deployment,
   type Phase,
   type Profile,
 } from "@fractalboxdev/flare-dispatch-profile";
 import { Message } from "@fractalboxdev/mameko-protocol";
-import { containerClassOf, type Finding } from "./drift.ts";
+import { containerClassOf, containerPools, type Finding } from "./drift.ts";
 import type { WorkerConfig } from "./render.ts";
 
 const fail = (check: string, path: string, detail: string): Finding => ({
@@ -60,7 +59,7 @@ export const architectureFindings = (
           `Durable Object class ${c} is not bound`,
         ),
       ),
-    ...Object.keys(poolAdmissionCaps)
+    ...containerPools()
       .map(containerClassOf)
       .filter((c) => !containers.has(c))
       .map((c) =>

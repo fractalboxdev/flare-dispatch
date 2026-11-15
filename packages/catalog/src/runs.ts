@@ -6,7 +6,6 @@ import {
   type CloudAgenticServices,
 } from "@fractalboxdev/flare-dispatch-agentic/executor";
 import {
-  defineRun,
   type Artifact,
   type Exec,
   type Intents,
@@ -17,12 +16,10 @@ import {
 import { Effect, Layer } from "effect";
 import { runCheck } from "./check.ts";
 import { processGateExec, type GateExec } from "./command.ts";
-import { runDeploySmoke } from "./deploy-smoke.ts";
 import { ExecutionLease, type LeaseLayerFailure } from "./execution-lease.ts";
 import { githubReadLayer, type GithubRead } from "./github-read.ts";
 import {
   CheckInput,
-  DeploySmokeInput,
   GateJobInput,
   OffloadTestInput,
   OxlintInput,
@@ -35,13 +32,12 @@ import { runGateJob } from "./job.ts";
 import { runOffloadTest } from "./offload-test.ts";
 import { runOxlint } from "./oxlint.ts";
 import { localContentArtifacts, type GateArtifacts } from "./ports.ts";
-import { toRunResult } from "./reasons.ts";
+import { canaryRun, deploySmokeRun } from "./control-runs.ts";
+import { defineGateRun } from "./gate-run.ts";
 import { runSandboxImage } from "./sandbox-image.ts";
 import { runSecurityGate, runSecurityRescan, type ScanServices } from "./security-gate.ts";
 import {
   checkSpec,
-  classRanks,
-  deploySmokeSpec,
   gateJobSpec,
   lookupRun,
   offloadTestSpec,
@@ -51,45 +47,17 @@ import {
   securityRescanSpec,
   workerDeploySpec,
   type ExecutorKind,
-  type RunSpecFields,
 } from "./spec.ts";
 import { runWorkerDeploy, type DeployLedger } from "./worker-deploy.ts";
 
-/**
- * One gate run through `defineRun`, with its body beside the definition, so an executor whose services depend on the
- * lease builds them inside each execution around the same body.
- */
-const define = <I extends Parameters<typeof defineRun>[0]["input"], R>(
-  spec: RunSpecFields,
-  input: I,
-  body: (input: I["Type"]) => Effect.Effect<Parameters<typeof toRunResult>[0], never, R>,
-) => {
-  const run = (i: I["Type"]) => body(i).pipe(Effect.map(toRunResult));
-  return {
-    ...defineRun(
-      {
-        ...spec,
-        input,
-        requires: [...spec.requires],
-        labels: [...spec.labels],
-        constraints: [...spec.constraints],
-        grants: { setup: [...spec.grants.setup], agent: [...spec.grants.agent] },
-        outputPaths: [...spec.outputPaths],
-        intentKinds: [...spec.intentKinds],
-      },
-      run,
-      { classRanks },
-    ),
-    body: run,
-  };
-};
+const define = defineGateRun;
 
 export const checkRun = define(checkSpec, CheckInput, runCheck);
 export const oxlintRun = define(oxlintSpec, OxlintInput, runOxlint);
 export const gateJobRun = define(gateJobSpec, GateJobInput, runGateJob);
 export const offloadTestRun = define(offloadTestSpec, OffloadTestInput, (i) => runOffloadTest(i));
 export const workerDeployRun = define(workerDeploySpec, WorkerDeployInput, runWorkerDeploy);
-export const deploySmokeRun = define(deploySmokeSpec, DeploySmokeInput, (i) => runDeploySmoke(i));
+export { deploySmokeRun };
 export const sandboxImageRun = define(sandboxImageSpec, SandboxImageInput, runSandboxImage);
 export const securityGateRun = define(securityGateSpec, SecurityGateInput, runSecurityGate);
 export const securityRescanRun = define(securityRescanSpec, SecurityRescanInput, runSecurityRescan);
@@ -106,6 +74,7 @@ export const registry = [
   securityGateRun,
   securityRescanRun,
   ...agenticRuns,
+  canaryRun,
 ] as const;
 
 /** Which executor kinds serve a run, from its catalogue entry. */

@@ -84,6 +84,9 @@ importers:
       '@fractalboxdev/mameko-ports':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/ports
+      '@fractalboxdev/mameko-runner':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/runner
       '@fractalboxdev/mameko-store-sqlite':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/store-sqlite

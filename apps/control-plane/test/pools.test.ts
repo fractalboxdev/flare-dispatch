@@ -19,9 +19,20 @@ const env = (extra: Partial<ControlPlaneEnv> = {}) =>
   ({ R2_ACCOUNT_ID: "0123abcd", ...extra }) as unknown as ControlPlaneEnv;
 
 describe("Container pools", () => {
-  it("[FD-ARCH-001] declares one Container pool per Container class, each partitioned by the profile's pools entry", () => {
+  it("[FD-ARCH-001] declares one Container pool per Container class and the control pool, each partitioned by the profile's pools entry", () => {
     const settings = poolSettings(env(), profile);
-    expect(Object.keys(settings.pools).sort()).toEqual(["agent", "browser", "lean", "release"]);
+    expect(Object.keys(settings.pools).sort()).toEqual([
+      "agent",
+      "browser",
+      "control",
+      "lean",
+      "release",
+    ]);
+    // The control pool's container is the pool controller's own binding, and the profile gives it no class.
+    expect(settings.pools["control"]).toEqual({
+      container: "POOL_CONTROLLER",
+      partition: { cap: 16, classes: {} },
+    });
     expect(settings.pools["lean"]).toEqual({
       container: "LEAN_POOL",
       partition: {

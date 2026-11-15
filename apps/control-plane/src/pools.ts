@@ -1,6 +1,7 @@
-// The Container pools of the `cloudflare` executor kind (specs/architecture.md § Components, specs/profile.md § Pools and
-// browser sessions): each pool's declaration for mameko's composition, the `PoolController` settings derived from the
-// profile, the grant catalogue a Container's outbound handler decides over, and the launch keys.
+// The pools of the `cloudflare` executor kind (specs/architecture.md § Components, specs/profile.md § Pools and browser
+// sessions), the Container pools and the `control` pool: each pool's declaration for mameko's composition, the
+// `PoolController` settings derived from the profile, the grant catalogue a Container's outbound handler decides over,
+// and the launch keys.
 import {
   DEPLOY_CLAIM_ROUTE,
   MODEL_GATEWAY_PATH,
@@ -14,6 +15,7 @@ import {
   type PoolDeclaration,
 } from "@fractalboxdev/mameko-coordinator";
 import type { Grant } from "@fractalboxdev/mameko-egress";
+import { CONTROL_POOL } from "@fractalboxdev/mameko-kernel";
 import {
   d1LeaseStore,
   poolControllerSettings,
@@ -24,7 +26,11 @@ import { LeaseStore } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import type { ControlPlaneEnv } from "./config.ts";
 import { deployClaimHost } from "./deploy-claim.ts";
-import { MODEL_REQUEST_MAX_BYTES } from "./model-gateway.ts";
+import {
+  MODEL_LEASE_CREDENTIAL,
+  MODEL_REQUEST_MAX_BYTES,
+  mintModelLeaseCredential,
+} from "./model-gateway.ts";
 
 /**
  * Each Container pool's Container binding and `max_instances`, as `wrangler.jsonc` declares its Container class. The
@@ -40,11 +46,15 @@ const POOL_CONTAINERS: Readonly<
 };
 
 /**
- * The Container pools the composition declares, by pool name. The `control` pool runs a run program in its Durable
- * Object with no Container (MAMEKO-EXEC-057), so it is not a Container pool.
+ * The `control` pool's declaration: its `container` is the pool controller's own binding, whose objects run each
+ * lease's run program with no Container (MAMEKO-EXEC-057). No Container class backs it, so `max_instances` bounds
+ * nothing but the admission cap's validation (MAMEKO-ADM-048).
  */
+const CONTROL_DECLARATION = { container: "POOL_CONTROLLER", maxInstances: 32 } as const;
+
+/** The pools the composition declares, by pool name: each Container pool and the `control` pool. */
 export const POOL_DECLARATIONS: Readonly<Record<string, PoolDeclaration>> = Object.fromEntries(
-  Object.entries(POOL_CONTAINERS).map(([name, p]) => [
+  Object.entries({ ...POOL_CONTAINERS, [CONTROL_POOL]: CONTROL_DECLARATION }).map(([name, p]) => [
     name,
     {
       admission_cap: poolAdmissionCaps[name]!.admission_cap,
@@ -87,10 +97,9 @@ const GITHUB_API_HEADERS = [...CLIENT_HEADERS, "x-github-api-version"];
  * model route alone, which an agentic recipe reaches in its `agent` phase (FD-AGT-010); and `github-api-read`, `GET` of
  * GitHub's repository routes with no credential, which answer a public repository's reads alone. `cf-api` carries no
  * credential on a deploy without that token, so a request under it leaves unauthenticated and the API refuses it.
- * `deploy-claim` attaches no credential. `model-gateway` attaches none either: a grant's credential is one value for
- * every lease, and the model-lease token the route takes is minted for one lease into the lease's `credentials`, which
- * no outbound handler reads, so the model route answers a Container's request `unauthenticated`. A deploy that names no
- * `PUBLIC_ORIGIN` has neither dispatcher grant, so its leases carry no deploy claim and no model route either.
+ * `deploy-claim` attaches no credential. `model-gateway` names no credential here: it is a minted grant, whose
+ * credential the controller issues for each launch, the lease's model-lease token (`MINTED_GRANTS`). A deploy that
+ * names no `PUBLIC_ORIGIN` has neither dispatcher grant, so its leases carry no deploy claim and no model route either.
  */
 export const poolGrants = (
   env: Pick<ControlPlaneEnv, "DEPLOY_API_TOKEN" | "PUBLIC_ORIGIN">,
@@ -182,10 +191,46 @@ export const RUN_GRANTS: PoolControllerSettings["runGrants"] = Object.fromEntrie
   ]),
 );
 
-/** The `PoolController` class's settings: each pool's partition under the profile, the grants and the R2 endpoint. */
+/**
+ * The grants whose credential the controller mints for each launch (MAMEKO-ISO-052, MAMEKO-HOST-050): `model-gateway`,
+ * whose credential is the lease's model-lease token, on a deploy with the model-lease secret and the dispatcher grant.
+ */
+export const mintedGrants = (
+  env: Pick<ControlPlaneEnv, "DEPLOY_API_TOKEN" | "PUBLIC_ORIGIN" | "MODEL_LEASE_SECRET">,
+): readonly string[] =>
+  env.MODEL_LEASE_SECRET !== undefined &&
+  env.MODEL_LEASE_SECRET !== "" &&
+  poolGrants(env).some((g) => g.name === MODEL_LEASE_CREDENTIAL)
+    ? [MODEL_LEASE_CREDENTIAL]
+    : [];
+
+/**
+ * The credential the controller mints for one launch's grant (MAMEKO-HOST-050): the `model-gateway` grant carries the
+ * lease's model-lease token as a bearer credential, expiring at the lease's `deadline_at`. `mintedGrants` names no
+ * other grant, so any other is refused.
+ */
+export const mintPoolCredential =
+  (env: Pick<ControlPlaneEnv, "MODEL_LEASE_SECRET">) =>
+  (
+    grant: string,
+    lease: { readonly executionId: string; readonly epoch: number; readonly deadlineAt: number },
+  ): Promise<{ readonly credential: string; readonly expiresAt: number }> =>
+    grant === MODEL_LEASE_CREDENTIAL
+      ? mintModelLeaseCredential(env, {
+          executionId: lease.executionId,
+          epoch: lease.epoch,
+          expiresAt: lease.deadlineAt,
+        })
+      : Promise.reject(new Error(`grant ${grant}: no credential minter is bound`));
+
+/**
+ * The `PoolController` class's settings: each pool's partition under the profile, the grants, the minted grants and
+ * the R2 endpoint.
+ */
 export const poolSettings = (env: ControlPlaneEnv, profile: Profile): PoolControllerSettings =>
   poolControllerSettings(profile, POOL_DECLARATIONS, {
     grants: poolGrants(env),
+    mintedGrants: mintedGrants(env),
     runGrants: RUN_GRANTS,
     objectStoreHost:
       env.R2_ACCOUNT_ID === undefined || env.R2_ACCOUNT_ID === ""
@@ -242,12 +287,20 @@ export const wakePools = async (
   return pools;
 };
 
-/** Writes each declared pool's `executors` row before the first request, admission or tick (MAMEKO-LEASE-003). */
-export const registerPools = (env: Pick<ControlPlaneEnv, "DB">, profile: Profile): Promise<void> =>
+/**
+ * Writes each declared pool's `executors` row before the first request, admission or tick (MAMEKO-LEASE-003): the
+ * `control` pool's always, and each Container pool's on a deploy that can launch its Containers.
+ */
+export const registerPools = (
+  env: Pick<ControlPlaneEnv, "DB">,
+  profile: Profile,
+  containers: boolean,
+): Promise<void> =>
   Effect.runPromise(
     Effect.gen(function* () {
       const lease = yield* LeaseStore;
       for (const [name, declaration] of Object.entries(POOL_DECLARATIONS))
-        yield* lease.register(poolRegistration(profile, name, declaration));
+        if (containers || name === CONTROL_POOL)
+          yield* lease.register(poolRegistration(profile, name, declaration));
     }).pipe(Effect.provide(d1LeaseStore(env.DB))),
   );

@@ -28,7 +28,6 @@ export {
   PoolController,
   TransparencyLog,
 } from "./durable-objects.ts";
-export { ControlPool } from "./deferred-objects.ts";
 export {
   AgentPool,
   BrowserPool,
@@ -51,8 +50,9 @@ const migrate = (env: ControlPlaneEnv) =>
     await Effect.runPromise(migrateIntake(env.DB));
     await migrateLocalStore(env.DB);
     await migrateDeployClaims(env.DB);
-    // Each Container pool's executor row, on a deploy that can launch its Containers (MAMEKO-LEASE-003).
-    if (launchKeysOf(env) !== null) await registerPools(env, profileOf(env));
+    // The control pool's executor row, and each Container pool's on a deploy that can launch its Containers
+    // (MAMEKO-LEASE-003).
+    await registerPools(env, profileOf(env), launchKeysOf(env) !== null);
   })().catch((e: unknown) => {
     migrated = undefined;
     throw e;

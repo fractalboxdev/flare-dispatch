@@ -104,6 +104,10 @@ export const intakeSettings = (env: ControlPlaneEnv): IntakeSettings => {
     confidentiality: repositoryConfidentiality(env),
     policyRules: policyRulesFor(env),
     writeCredentialIn: writeCredentialIn(env),
+    // The fixture repository whose canary-branch push admits the canary (FD-OPS-039).
+    ...((env.GITHUB_FIXTURE_REPO?.trim() ?? "") === ""
+      ? {}
+      : { canaryRepo: env.GITHUB_FIXTURE_REPO!.trim() }),
   };
 };
 

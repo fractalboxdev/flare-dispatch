@@ -924,7 +924,10 @@ describe("a production deployment", () => {
     expect(body.error).toBe("registration_refused");
     expect(body.message).toContain("key-store");
     const db = await production.getD1Database("DB");
-    expect((await db.prepare("select * from mameko_executors").all()).results).toEqual([]);
+    // The deploy's own pools are its only executors.
+    expect(
+      (await db.prepare("select * from mameko_executors where kind <> 'cloudflare'").all()).results,
+    ).toEqual([]);
   });
 });
 

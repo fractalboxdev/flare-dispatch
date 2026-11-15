@@ -6,14 +6,13 @@
 // a GitHub in memory), the only place a repository write happens (specs/runs/agentic.md FD-AGT-009).
 //
 // `pr.propose` is a control-plane kind (specs/profile.md § Intent kinds): its row is the `prProposePayload` binding's
-// answer for the accepted result, never an executor's batch. mameko at the pinned commit runs no binding at accept, so
-// the scenario stages that answer for the lease's epoch the way the binding would.
+// answer for the accepted result, never an executor's batch. The staged write is the manifest in the artifact store
+// at the lease's epoch, and the channel's accept inserts the row in its own transaction (MAMEKO-OUT-060).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
 import {
   GitData,
-  prProposePayload,
+  STAGED_WRITE_MANIFEST,
   WRITE_KINDS,
   writebackRecordsLayer,
   type Manifest,
@@ -203,7 +202,9 @@ const outboxOf = async (id: string) =>
     await (
       await db()
     )
-      .prepare("select intent_key, kind, state from mameko_outbox where execution_id = ? order by id")
+      .prepare(
+        "select intent_key, kind, state from mameko_outbox where execution_id = ? order by id",
+      )
       .bind(id)
       .all()
   ).results as unknown as readonly OutboxRow[];
@@ -357,30 +358,10 @@ describe("an agentic result's repository writes on the composed control plane", 
         .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
     );
 
-    // The `prProposePayload` binding's answer for a success result with a staged write, at the lease's epoch.
-    const proposal = prProposePayload({
-      executionId: id,
-      run: "spec-drift-pr",
-      repo,
-      outcome: "success",
-      stagedWrite: MANIFEST,
-    });
-    if (proposal._tag !== "payload") throw new Error("expected a pr.propose payload");
-    const json = JSON.stringify(proposal.payload);
-    await d1
-      .prepare(
-        `insert into mameko_staged_intents (execution_id, epoch, intent_key, kind, limit_key, payload_json, payload_digest, effect_class)
-         values (?, ?, 'cp:pr:propose', 'pr.propose', ?, ?, ?, ?)`,
-      )
-      .bind(
-        id,
-        epoch,
-        REPO,
-        json,
-        createHash("sha256").update(json).digest("hex"),
-        profile.intent_kinds["pr.propose"]!.effect_class,
-      )
-      .run();
+    // The staged write: the manifest in the artifact store at the lease's epoch.
+    await (
+      await plane.getR2Bucket("CACHE")
+    ).put(artifactPath(id, epoch, STAGED_WRITE_MANIFEST), JSON.stringify(MANIFEST));
 
     // No outbox row exists before the result is accepted.
     expect((await outboxOf(id)).filter((r) => r.kind !== "check.open")).toEqual([]);
@@ -396,6 +377,17 @@ describe("an agentic result's repository writes on the composed control plane", 
       artifacts: [],
     });
     expect(await socket.next("exec.result.ack")).toMatchObject({ status: "accepted" });
+    // The accept inserted the pr.propose row in its transaction: it exists once the ack answers.
+    expect(
+      (
+        await d1
+          .prepare(
+            "select intent_key from mameko_outbox where kind = 'pr.propose' and execution_id = ?",
+          )
+          .bind(id)
+          .all()
+      ).results,
+    ).toEqual([{ intent_key: "cp:pr:propose" }]);
 
     const rows = await appliedOutbox(id);
     const writes = rows.filter((r) => (WRITE_KINDS as readonly string[]).includes(r.kind));

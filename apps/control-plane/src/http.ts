@@ -57,7 +57,7 @@ import {
   OpsStore,
   runOpsMigrations,
 } from "@fractalboxdev/flare-dispatch-ops";
-import { Clock, Context, Effect, Layer } from "effect";
+import { Clock, Context, Effect, Layer, Match } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { ArtifactsHandlers, cacheReads, LogsHandlers } from "./cache.ts";
 import { isolateServices, type IsolateServices } from "./composition.ts";
@@ -65,6 +65,7 @@ import { apiEnvOf, deployment, profileOf, type ControlPlaneEnv } from "./config.
 import { failureSummaries } from "./failure-summary.ts";
 import { appOptionsOf } from "./github.ts";
 import { intakeCancellation, intakePort } from "./intake-port.ts";
+import { revokeDevice } from "./operator-revoke.ts";
 import { spendViewOf } from "./spend.ts";
 
 /** Intake's webhook route, below the `/v1/` mount: the request and the path below it, as `handleIntake` takes them. */
@@ -125,16 +126,21 @@ const handler = toFetchHandler(router, { shared: JwksSourceLive });
 const POSTURE_TIER = "unmanaged" as const;
 
 /**
- * The liveness report reads the operability package's record; the operator operations need mameko's operator
- * transaction, which this deploy does not supply, so each answers `unavailable`. The control state is that
+ * The liveness report reads the operability package's record. `revoke` goes through mameko's operator transaction
+ * (`operator-revoke.ts`); every other operator operation answers `unavailable`. The control state is that
  * transaction's state too: the read answers `unavailable` rather than `run`, so a `containment` identity's `halt-cloud`
  * is never checked against a guessed state (FD-IFC-097).
  */
 const operations = (env: ControlPlaneEnv) =>
   Layer.succeed(Operations)({
-    apply: () =>
-      Effect.fail(
-        apiError("unavailable", "operator operations need mameko's operator transaction"),
+    apply: (operation, call) =>
+      Match.value(operation).pipe(
+        Match.tag("revoke", ({ executor }) => revokeDevice(env.DB, executor, call)),
+        Match.orElse(() =>
+          Effect.fail(
+            apiError("unavailable", "operator operations need mameko's operator transaction"),
+          ),
+        ),
       ),
     controlState: Effect.fail(
       apiError("unavailable", "the control state needs mameko's operator transaction"),

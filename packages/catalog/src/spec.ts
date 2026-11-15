@@ -14,6 +14,7 @@ import {
 import { buildProfile, deploymentOf, type Deployment } from "@fractalboxdev/flare-dispatch-profile";
 import type { Capability } from "@fractalboxdev/mameko-run";
 import { Match, SchemaAST, type Schema } from "effect";
+import { canaryEntry } from "./canary.ts";
 import {
   CHECK_MAX_DURATION_SEC,
   CheckInput,
@@ -487,7 +488,11 @@ const agenticEntries: Readonly<Record<string, CatalogEntry>> = Object.fromEntrie
   }),
 );
 
-const entries: Readonly<Record<string, CatalogEntry>> = { ...gateEntries, ...agenticEntries };
+const entries: Readonly<Record<string, CatalogEntry>> = {
+  ...gateEntries,
+  ...agenticEntries,
+  [canaryEntry.spec.name]: canaryEntry,
+};
 
 /** Every run of the catalogue by name, the registry the deploy's registry validator checks (FD-GATE-113). */
 export const RUN_CATALOG: Readonly<Record<string, CatalogEntry>> = entries;
