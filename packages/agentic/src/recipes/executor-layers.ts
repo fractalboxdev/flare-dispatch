@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
+import { validArtifactName } from "@fractalboxdev/flare-dispatch-cache/artifact-names";
 import { Intents } from "@fractalboxdev/mameko-run";
 import { Effect, Layer } from "effect";
 import { pathInvalid } from "../staged-write/gate.ts";
@@ -195,14 +196,9 @@ export const stagedWritesLayer = (
       }).pipe(Effect.mapError((e) => new StageFailed({ detail: `${e.step}: ${e.detail}` }))),
   });
 
-/** An artifact name the artifact store accepts (FD-CACHE-070): the name grammar, with no `.`, `..` or empty segment. */
-const ARTIFACT_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
-const validArtifactName = (name: string) =>
-  ARTIFACT_NAME.test(name) && !name.split("/").some((s) => s === ".." || s === "." || s === "");
-
 /**
- * `Artifacts` over the execution's artifact store: each `dashboard` artifact goes byte for byte, with its SHA-256
- * digest, under the lease's artifact prefix through `sink`, and `put` answers nothing a run could publish. The store's
+ * `Artifacts` over the execution's artifact store: each `dashboard` artifact whose name is one artifact-name segment
+ * (FD-CACHE-070) goes byte for byte, with its SHA-256 digest, under the lease's artifact prefix through `sink`, and `put` answers nothing a run could publish. The store's
  * only reader is the dashboard's authenticated artifact route (FD-AGT-059).
  */
 export const artifactsLayer = (sink: ArtifactSink): Layer.Layer<Artifacts> =>

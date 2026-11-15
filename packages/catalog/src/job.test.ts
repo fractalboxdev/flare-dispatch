@@ -1,4 +1,10 @@
-import { Effect, Layer, Option } from "effect";
+import {
+  Manifest,
+  STAGED_WRITE_MANIFEST,
+  stagedBlobName,
+} from "@fractalboxdev/flare-dispatch-agentic";
+import { validArtifactName } from "@fractalboxdev/flare-dispatch-cache/artifact-names";
+import { Effect, Layer, Option, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { runCheck } from "./check.ts";
 import { CommandExit } from "./command.ts";
@@ -190,7 +196,7 @@ describe("a gate job", () => {
     expect(calls).toEqual(["restore pnpm-store"]);
   });
 
-  it("[FD-GATE-081] stages the changed files that match writeback paths on a flare-dispatch/ branch", async () => {
+  it("[FD-GATE-081] [FD-CACHE-070] stages the changed files that match writeback paths on a flare-dispatch/ branch, under one-segment artifact names the pr.propose reader decodes", async () => {
     const status = " M test/fixtures/a.json\0?? test/fixtures/new.json\0 M src/index.ts\0";
     const exec = fakeExec([{ match: "git status", output: status }], {
       "test/fixtures/a.json": '{"a":1}\n',
@@ -206,19 +212,20 @@ describe("a gate job", () => {
       ).pipe(Effect.provide(withFakes(exec, artifacts))),
     );
     expect(outcome).toEqual({ _tag: "success" });
-    const manifest = JSON.parse(artifacts.uploads.get("staged-write.json")!) as {
-      branch: string;
-      baseCommit: string;
-      entries: { path: string; digest: string }[];
-    };
+    const manifest = Schema.decodeUnknownSync(Manifest)(
+      JSON.parse(artifacts.uploads.get(STAGED_WRITE_MANIFEST)!),
+    );
     expect(manifest.branch).toBe("flare-dispatch/fixtures");
+    expect(manifest.baseBranch).toBe("main");
     expect(manifest.baseCommit).toBe(SHA);
     expect(manifest.entries.map((e) => e.path)).toEqual([
       "test/fixtures/a.json",
       "test/fixtures/new.json",
     ]);
     for (const e of manifest.entries)
-      expect(artifacts.uploads.has(`staged-write/blobs/${e.digest}`)).toBe(true);
+      expect(artifacts.uploads.has(stagedBlobName(e.digest))).toBe(true);
+    expect(artifacts.uploads.get(stagedBlobName(manifest.entries[0]!.digest))).toBe('{"a":1}\n');
+    for (const name of artifacts.uploads.keys()) expect(validArtifactName(name), name).toBe(true);
     expect(writebackBranch("flare-dispatch/x")).toBe("flare-dispatch/x");
   });
 
@@ -237,10 +244,7 @@ describe("a gate job", () => {
       ),
     );
     expect(outcome).toEqual({ _tag: "failure", reason: "exit: 1" });
-    expect(artifacts.uploads.has("staged-write.json")).toBe(false);
-    expect([...artifacts.uploads.keys()].some((k) => k.startsWith("staged-write/blobs/"))).toBe(
-      false,
-    );
+    expect([...artifacts.uploads.keys()].some((k) => k.startsWith("staged-write."))).toBe(false);
     expect(exec.ran.some((r) => r.command.includes("git status"))).toBe(false);
   });
 });

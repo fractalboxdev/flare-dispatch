@@ -115,11 +115,13 @@ describe("artifacts", () => {
     expect(value(await commit(w))).toEqual({ status: "duplicate", artifact_id: id });
   });
 
-  it("[FD-CACHE-070] a name outside the grammar or with a .. segment is InvalidArtifactName", async () => {
-    for (const bad of ["../x", "a/../b", "/abs", ".hidden", "a//b", "x".repeat(201), "sp ace"])
+  it("[FD-CACHE-070] a name that is not one segment of up to 128 letters, digits, ., _ and - is InvalidArtifactName", async () => {
+    for (const bad of ["../x", "a/../b", "/abs", ".hidden", "coverage/lcov.info", "x".repeat(129), "sp ace", "sha256:ab", ""])
       expect(validArtifactName(bad)).toBe(false);
-    for (const good of ["report.html", "coverage/lcov.info", "a-b_c.d"]) expect(validArtifactName(good)).toBe(true);
-    expect(failureOf(await begin(world(), { name: "a/../b" }))).toMatchObject({ _tag: "InvalidArtifactName" });
+    for (const good of ["report.html", "a-b_c.d", "_x", "-x", "x".repeat(128), `staged-write.blob.${"a".repeat(64)}`])
+      expect(validArtifactName(good)).toBe(true);
+    expect(failureOf(await begin(world(), { name: "coverage/lcov.info" }))).toMatchObject({ _tag: "InvalidArtifactName" });
+    expect(failureOf(await begin(world(), { name: "x".repeat(129) }))).toMatchObject({ _tag: "InvalidArtifactName" });
   });
 
   it("[FD-CACHE-071] an artifact commit at an epoch other than the current one is stale", async () => {
@@ -154,7 +156,7 @@ describe("artifacts", () => {
     expect(new Set(plan.slice(0, -1).map((p) => p.length)).size).toBe(1);
   });
 
-  it("[FD-CACHE-073] a browse expansion with an entry over 32 MiB, over 256 MiB in total or over 4000 entries is ArtifactTooLarge", async () => {
+  it("[FD-CACHE-073] a browse expansion with an entry over 32 MiB, over 256 MiB in total or over 4000 entries is ArtifactTooLarge; an entry path with a .. segment is InvalidArtifactName", async () => {
     const w = world();
     for (const browse of [
       [{ path: "a", size: 32 * MiB + 1 }],
@@ -162,8 +164,19 @@ describe("artifacts", () => {
       Array.from({ length: 4001 }, (_, i) => ({ path: `f${i}`, size: 1 })),
     ])
       expect(failureOf(await begin(w, { browse }))).toMatchObject({ _tag: "ArtifactTooLarge" });
-    const ok = value(await begin(w, { browse: [{ path: "index.html", size: 3 }] }));
+    const ok = value(
+      await begin(w, {
+        browse: [
+          { path: "index.html", size: 3 },
+          { path: "assets/app.js", size: 3 },
+        ],
+      }),
+    );
     expect(ok.status === "ok" && ok.urls.some((u) => u.path === "index.html")).toBe(true);
+    expect(ok.status === "ok" && ok.urls.some((u) => u.path === "assets/app.js")).toBe(true);
+    expect(failureOf(await begin(w, { browse: [{ path: "a/../b", size: 1 }] }))).toMatchObject({
+      _tag: "InvalidArtifactName",
+    });
   });
 
   it("[FD-CACHE-074] an execution's artifacts past 2 GiB are ArtifactTooLarge", async () => {

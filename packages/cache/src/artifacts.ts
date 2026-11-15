@@ -3,6 +3,7 @@
 // the R2 path is never exposed. A browse expansion's files sit under `<path>.browse/`.
 import type { ExecutorKind } from "@fractalboxdev/mameko-kernel";
 import { Context, Effect, Schema } from "effect";
+import { validArtifactName, validBrowsePath } from "./artifact-names.ts";
 import { random128 } from "./crypto.ts";
 import { CacheClock, CacheLeases, DEFAULT_BYTE_BOUNDS, type ByteBounds } from "./lease.ts";
 import { CacheBucket } from "./manifest.ts";
@@ -86,11 +87,7 @@ export class ArtifactRefused extends Schema.TaggedError<ArtifactRefused>()("Arti
   reason: Schema.String,
 }) {}
 
-const NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
-
-/** FD-CACHE-070: the name grammar, with no `..` segment. */
-export const validArtifactName = (name: string) =>
-  NAME.test(name) && !name.split("/").some((s) => s === ".." || s === "." || s === "");
+export { ARTIFACT_NAME, validArtifactName, validBrowsePath } from "./artifact-names.ts";
 
 /** FD-CACHE-069: 128 random bits from the platform's cryptographically secure generator. */
 export const newArtifactId = random128;
@@ -113,7 +110,7 @@ export const checkBrowseExpansion = (
       return yield* Effect.fail(new ArtifactTooLarge({ reason: `${entries.length} entries` }));
     let total = 0;
     for (const e of entries) {
-      if (!validArtifactName(e.path))
+      if (!validBrowsePath(e.path))
         return yield* Effect.fail(new InvalidArtifactName({ name: e.path }));
       if (e.size > BROWSE_BOUNDS.maxEntryBytes)
         return yield* Effect.fail(
@@ -581,7 +578,7 @@ export const serveArtifact = async (
       artifactId: row.artifact_id,
       executorId: row.producer_executor_id,
     };
-  if (browsePath !== undefined && (row.browse !== 1 || !validArtifactName(browsePath)))
+  if (browsePath !== undefined && (row.browse !== 1 || !validBrowsePath(browsePath)))
     return { _tag: "Missing" };
   const object = await deps.bucket.get(
     browsePath === undefined ? row.r2_path : `${row.r2_path}.browse/${browsePath}`,

@@ -401,7 +401,7 @@ describe("the cloud executor's agentic layers", () => {
     expect([...stored.keys()]).toEqual([]);
   });
 
-  it("[FD-AGT-059] refuses an artifact name outside the store's grammar and a store that fails", async () => {
+  it("[FD-AGT-059] [FD-CACHE-070] refuses an artifact name that is not one segment of the store's grammar, and a store that fails", async () => {
     const put = (layer: Layer.Layer<Artifacts>, name: string) =>
       Effect.runPromise(
         Effect.result(
@@ -414,8 +414,10 @@ describe("the cloud executor's agentic layers", () => {
     );
     expect((await put(ok, "../escape"))._tag).toBe("Failure");
     expect((await put(ok, "a/./b"))._tag).toBe("Failure");
-    expect((await put(ok, "review/diff.txt"))._tag).toBe("Success");
-    expect(keys).toEqual(["artifact/x1/1/review/diff.txt"]);
+    expect((await put(ok, "review/diff.txt"))._tag).toBe("Failure");
+    expect((await put(ok, "x".repeat(129)))._tag).toBe("Failure");
+    expect((await put(ok, "review.diff.txt"))._tag).toBe("Success");
+    expect(keys).toEqual(["artifact/x1/1/review.diff.txt"]);
     const down = artifactsLayer({ put: async () => Promise.reject(new Error("R2 down")) });
     expect((await put(down, "pr-review.diff"))._tag).toBe("Failure");
   });
