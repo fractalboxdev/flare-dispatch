@@ -24,6 +24,7 @@ import { FlareDispatchLivenessMonitor } from "@fractalboxdev/flare-dispatch-ops/
 import {
   ExecutionEngine as MamekoExecutionEngine,
   ExecutorChannel as MamekoExecutorChannel,
+  type ChannelSocket as MamekoChannelSocket,
   type ClaimedLease,
 } from "@fractalboxdev/mameko-host-cloudflare";
 import type { ExecutorKind } from "@fractalboxdev/mameko-kernel";
@@ -32,7 +33,7 @@ import { DurableObject } from "cloudflare:workers";
 import { Context, Effect, Match } from "effect";
 import { guardLease } from "./agentic.ts";
 import { isolateServices, presignerLayer } from "./composition.ts";
-import { leaseCache } from "./cache.ts";
+import { leaseCache, presignOnFrame } from "./cache.ts";
 import { leaseCacheAt } from "./cache-execution.ts";
 import { type ChannelSocket, cloudStatementOnFrame } from "./provenance.ts";
 import { imageDigestOf, invalidateLeaseNonce, leaseNonce, requestLeaseFields } from "./lease.ts";
@@ -68,11 +69,27 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
   }
 
   /**
-   * Each frame goes through mameko's channel first. An `exec.result` that the accept compare-and-set accepted from a
-   * cloud executor then gets its cloud-builder statement, signed with the provenance key and queued for the
-   * transparency log (FD-PROV-008, FD-PROV-009); the placement row, not the frame, decides whether it was accepted.
+   * An `exec.presign` for cache objects under an entry's writer prefix or for log segments is answered by
+   * FlareDispatch's presign policy (FD-CACHE-047); every other frame goes through mameko's channel first. An
+   * `exec.result` that the accept compare-and-set accepted from a cloud executor then gets its cloud-builder statement,
+   * signed with the provenance key and queued for the transparency log (FD-PROV-008, FD-PROV-009); the placement row,
+   * not the frame, decides whether it was accepted.
    */
   override async webSocketMessage(ws: unknown, message: string | ArrayBuffer): Promise<void> {
+    const socket = ws as MamekoChannelSocket;
+    // A failure is reported on the socket, as mameko's channel reports one, never dropped.
+    const presigned = await presignOnFrame(
+      this.bindings,
+      (socket.deserializeAttachment() as { readonly executorId: string }).executorId,
+      message,
+      Date.now(),
+    ).catch((error: unknown) => ({
+      type: "session.error",
+      code: "internal",
+      ref: null,
+      message: String(error),
+    }));
+    if (presigned !== null) return socket.send(JSON.stringify(presigned));
     await super.webSocketMessage(ws, message);
     await cloudStatementOnFrame(this.bindings, ws as ChannelSocket, message, Date.now());
   }
