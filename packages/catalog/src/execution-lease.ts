@@ -1,5 +1,5 @@
 // The lease one execution runs under, as the cloud executor's per-lease Layers read it: the execution id and epoch of
-// the run payload, and the input the run decoded, which carries the values the control plane wrote for the lease
+// the run payload, the run it executes, and the input the run decoded, which carries the values the control plane wrote for the lease
 // (`cloudLease`). `runsFor` provides it inside each execution, so one run-catalogue bundle serves every lease.
 import { Context, Schema } from "effect";
 
@@ -8,6 +8,8 @@ export class ExecutionLease extends Context.Service<
   {
     readonly executionId: string;
     readonly epoch: number;
+    /** The catalogue name of the run the lease executes. */
+    readonly run: string;
     /** The run's input as its schema decoded it. */
     readonly input: unknown;
   }

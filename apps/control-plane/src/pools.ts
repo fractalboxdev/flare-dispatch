@@ -25,6 +25,11 @@ import {
 import { LeaseStore } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import type { ControlPlaneEnv } from "./config.ts";
+import {
+  CONTROL_PLANE_READ_CREDENTIAL,
+  CONTROL_PLANE_READERS,
+  mintControlPlaneReadCredential,
+} from "./control-plane-read.ts";
 import { deployClaimHost } from "./deploy-claim.ts";
 import {
   MODEL_LEASE_CREDENTIAL,
@@ -89,17 +94,23 @@ const GIT_METHODS = ["GET", "POST"];
 /** The headers a job's GitHub REST client sends beside an HTTPS client's own. */
 const GITHUB_API_HEADERS = [...CLIENT_HEADERS, "x-github-api-version"];
 
+/** The path prefix of the executions list and the log aggregate, the control-plane reads a lease's token serves. */
+export const CONTROL_PLANE_READ_PATH = "/v1/executions";
+
 /**
  * The grant catalogue each Container's outbound handler decides over (MAMEKO-ISO-021): `git-remote`, the repository's git
  * host for the checkout of the `setup` phase (FD-GATE-110); `cf-api`, the Cloudflare API under the deploy token the
  * Worker holds (FD-GATE-066); `deploy-claim`, `POST` to the dispatcher's deploy-claim route alone, where
  * `worker-deploy` presents its lease's deploy-claim token (FD-GATE-067); `model-gateway`, `POST` to the dispatcher's
- * model route alone, which an agentic recipe reaches in its `agent` phase (FD-AGT-010); and `github-api-read`, `GET` of
+ * model route alone, which an agentic recipe reaches in its `agent` phase (FD-AGT-010); `control-plane-read`, `GET`
+ * under the dispatcher's `/v1/executions` path alone, where `ci-triage-pr` reads its repository's executions and
+ * their logs under its lease's control-plane read token (FD-IFC-102, FD-IFC-103); and `github-api-read`, `GET` of
  * GitHub's repository routes with no credential, which answer a public repository's reads alone. `cf-api` carries no
  * credential on a deploy without that token, so a request under it leaves unauthenticated and the API refuses it.
- * `deploy-claim` attaches no credential. `model-gateway` names no credential here: it is a minted grant, whose
- * credential the controller issues for each launch, the lease's model-lease token (`MINTED_GRANTS`). A deploy that
- * names no `PUBLIC_ORIGIN` has neither dispatcher grant, so its leases carry no deploy claim and no model route either.
+ * `deploy-claim` attaches no credential. `model-gateway` and `control-plane-read` name no credential here: each is a
+ * minted grant, whose credential the controller issues for each launch, the lease's model-lease token and its
+ * control-plane read token (`mintedGrants`). A deploy that names no `PUBLIC_ORIGIN` has no dispatcher grant, so its
+ * leases carry no deploy claim, no model route and no control-plane read either.
  */
 export const poolGrants = (
   env: Pick<ControlPlaneEnv, "DEPLOY_API_TOKEN" | "PUBLIC_ORIGIN">,
@@ -153,6 +164,14 @@ export const poolGrants = (
             maxBodyBytes: MODEL_REQUEST_MAX_BYTES,
             headers: CLIENT_HEADERS,
           },
+          {
+            name: CONTROL_PLANE_READ_CREDENTIAL,
+            host: dispatcher,
+            methods: ["GET"],
+            pathPrefix: CONTROL_PLANE_READ_PATH,
+            maxBodyBytes: 0,
+            headers: CLIENT_HEADERS,
+          },
         ]),
   ];
 };
@@ -161,16 +180,23 @@ export const poolGrants = (
  * The runs whose `agent` phase reads GitHub's repository routes with no credential: `triage-prs` reads a repository's
  * open pull requests, their check runs and reviews, and declares `outbound`. `triage-issues` reads issues, untrusted
  * input beside private data, so a host beyond the model gateway in its `agent` phase would complete the trifecta
- * (FD-AGT-005); it holds none.
+ * (FD-AGT-005); it holds none there.
  */
 const GITHUB_API_READERS: ReadonlySet<string> = new Set(["triage-prs"]);
+
+/**
+ * The runs whose `setup` phase reads GitHub's repository routes: `triage-issues` reads its open issues to a workspace
+ * file before the setup phase ends, and its `agent` phase reads only that file (FD-AGT-005, FD-AGT-074).
+ */
+const SETUP_GITHUB_API_READERS: ReadonlySet<string> = new Set(["triage-issues"]);
 
 /**
  * Each catalogue run's grant names per egress phase: the grants its spec declares; for a run that requires
  * `Workspace`, the `setup` profile's `git-remote` base grant (FD-PROF-050), through which the executor checks the
  * lease's source out before the job starts; for an agentic recipe that calls models, the `agent` profile's
- * `model-gateway` base grant, so its `agent` phase reaches the model route; and for a run of `GITHUB_API_READERS`,
- * `github-api-read`.
+ * `model-gateway` base grant, so its `agent` phase reaches the model route; for a run of `CONTROL_PLANE_READERS`,
+ * `control-plane-read` in its `agent` phase; for a run of `GITHUB_API_READERS`, `github-api-read` in its `agent`
+ * phase; and for a run of `SETUP_GITHUB_API_READERS`, `github-api-read` in its `setup` phase alone.
  */
 export const RUN_GRANTS: PoolControllerSettings["runGrants"] = Object.fromEntries(
   Object.values(RUN_CATALOG).map(({ spec, agentic }) => [
@@ -180,11 +206,13 @@ export const RUN_GRANTS: PoolControllerSettings["runGrants"] = Object.fromEntrie
         ...new Set([
           ...(spec.requires.includes("Workspace") ? ["git-remote"] : []),
           ...spec.grants.setup,
+          ...(SETUP_GITHUB_API_READERS.has(spec.name) ? ["github-api-read"] : []),
         ]),
       ],
       agent: [
         ...spec.grants.agent,
         ...(agentic?.declaration.needsModel === true ? ["model-gateway"] : []),
+        ...(CONTROL_PLANE_READERS.has(spec.name) ? [CONTROL_PLANE_READ_CREDENTIAL] : []),
         ...(GITHUB_API_READERS.has(spec.name) ? ["github-api-read"] : []),
       ],
     },
@@ -192,36 +220,50 @@ export const RUN_GRANTS: PoolControllerSettings["runGrants"] = Object.fromEntrie
 );
 
 /**
- * The grants whose credential the controller mints for each launch (MAMEKO-ISO-052, MAMEKO-HOST-050): `model-gateway`,
- * whose credential is the lease's model-lease token, on a deploy with the model-lease secret and the dispatcher grant.
+ * The grants whose credential the controller mints for each launch (MAMEKO-ISO-052, MAMEKO-HOST-050), each on a deploy
+ * with its dispatcher grant and its secret: `model-gateway`, whose credential is the lease's model-lease token, and
+ * `control-plane-read`, whose credential is the lease's control-plane read token.
  */
 export const mintedGrants = (
-  env: Pick<ControlPlaneEnv, "DEPLOY_API_TOKEN" | "PUBLIC_ORIGIN" | "MODEL_LEASE_SECRET">,
-): readonly string[] =>
-  env.MODEL_LEASE_SECRET !== undefined &&
-  env.MODEL_LEASE_SECRET !== "" &&
-  poolGrants(env).some((g) => g.name === MODEL_LEASE_CREDENTIAL)
-    ? [MODEL_LEASE_CREDENTIAL]
-    : [];
+  env: Pick<
+    ControlPlaneEnv,
+    "DEPLOY_API_TOKEN" | "PUBLIC_ORIGIN" | "MODEL_LEASE_SECRET" | "CONTROL_PLANE_READ_SECRET"
+  >,
+): readonly string[] => {
+  const granted = new Set(poolGrants(env).map((g) => g.name));
+  const held = (secret: string | undefined) => secret !== undefined && secret !== "";
+  return [
+    ...(granted.has(MODEL_LEASE_CREDENTIAL) && held(env.MODEL_LEASE_SECRET)
+      ? [MODEL_LEASE_CREDENTIAL]
+      : []),
+    ...(granted.has(CONTROL_PLANE_READ_CREDENTIAL) && held(env.CONTROL_PLANE_READ_SECRET)
+      ? [CONTROL_PLANE_READ_CREDENTIAL]
+      : []),
+  ];
+};
 
 /**
- * The credential the controller mints for one launch's grant (MAMEKO-HOST-050): the `model-gateway` grant carries the
- * lease's model-lease token as a bearer credential, expiring at the lease's `deadline_at`. `mintedGrants` names no
- * other grant, so any other is refused.
+ * The credential the controller mints for one launch's grant (MAMEKO-HOST-050), as a bearer credential expiring at the
+ * lease's `deadline_at`: the `model-gateway` grant's model-lease token and the `control-plane-read` grant's read token.
+ * `mintedGrants` names no other grant, so any other is refused.
  */
 export const mintPoolCredential =
-  (env: Pick<ControlPlaneEnv, "MODEL_LEASE_SECRET">) =>
+  (env: Pick<ControlPlaneEnv, "MODEL_LEASE_SECRET" | "CONTROL_PLANE_READ_SECRET">) =>
   (
     grant: string,
     lease: { readonly executionId: string; readonly epoch: number; readonly deadlineAt: number },
-  ): Promise<{ readonly credential: string; readonly expiresAt: number }> =>
-    grant === MODEL_LEASE_CREDENTIAL
-      ? mintModelLeaseCredential(env, {
-          executionId: lease.executionId,
-          epoch: lease.epoch,
-          expiresAt: lease.deadlineAt,
-        })
-      : Promise.reject(new Error(`grant ${grant}: no credential minter is bound`));
+  ): Promise<{ readonly credential: string; readonly expiresAt: number }> => {
+    const scope = {
+      executionId: lease.executionId,
+      epoch: lease.epoch,
+      expiresAt: lease.deadlineAt,
+    };
+    return grant === MODEL_LEASE_CREDENTIAL
+      ? mintModelLeaseCredential(env, scope)
+      : grant === CONTROL_PLANE_READ_CREDENTIAL
+        ? mintControlPlaneReadCredential(env, scope)
+        : Promise.reject(new Error(`grant ${grant}: no credential minter is bound`));
+  };
 
 /**
  * The `PoolController` class's settings: each pool's partition under the profile, the grants, the minted grants and

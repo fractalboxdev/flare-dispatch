@@ -12,7 +12,11 @@
 //   the request's `authorization` (MAMEKO-ISO-052, MAMEKO-HOST-050).
 // - A call routes by the repository's confidentiality mode: a scope that is not `non-confidential` reaches no hosted
 //   model (MAMEKO-MDL-008), so the call is `model_route_refused`. A hosted call goes to the first entry of the provider
-//   registry that serves its tier on a route kind this deploy holds: `workers-ai` through the `AI` binding (FD-MDL-020).
+//   registry that serves its tier on a route kind this deploy holds: `workers-ai` through the `AI` binding, and
+//   `bedrock` where the deploy names `models.bedrock.region` and `models.bedrock.roleArn` and holds the Worker secrets
+//   `BEDROCK_ACCESS_KEY_ID` and `BEDROCK_SECRET_ACCESS_KEY` (FD-MDL-020). The `bedrock` route signs each InvokeModel
+//   with SigV4 under the role's credentials from an STS `AssumeRole` signed under those secrets, reused until 5 min
+//   before they expire (FD-MDL-024, FD-MDL-070).
 // - Spend: the gateway reserves the call maximum against the execution's model allowance in `model_calls` before the
 //   upstream request and settles at the provider-reported cost (MAMEKO-MDL-025 to MAMEKO-MDL-028), pricing a
 //   `workers-ai` entry only at its stated rate (FD-MDL-021). The model-call record goes to the Worker log with no
@@ -24,6 +28,8 @@ import {
   type ErrorCode,
 } from "@fractalboxdev/flare-dispatch-api";
 import {
+  bedrockRoute,
+  cachedAssumeRole,
   FD_ROUTE_KINDS,
   sendFdHostedCall,
   Tier,
@@ -43,7 +49,13 @@ import { Effect, Match, Option, Schema } from "effect";
 import { MODEL_COMPLETIONS_PATH } from "./cloud-lease.ts";
 import { deployment } from "./config.ts";
 import { repositoryConfidentiality, type ConfidentialityEnv } from "./dev-repository.ts";
-import { bearerOf, signLeaseToken, verifyLeaseToken, type LeaseTokenScope } from "./lease-token.ts";
+import {
+  bearerOf,
+  leaseTokensRevoked,
+  signLeaseToken,
+  verifyLeaseToken,
+  type LeaseTokenScope,
+} from "./lease-token.ts";
 
 /** The largest model request the route reads, and the `model-gateway` grant passes. */
 export const MODEL_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
@@ -65,6 +77,13 @@ export interface ModelGatewayEnv extends ConfidentialityEnv {
   readonly MODEL_REGISTRY?: unknown;
   /** The rendered `{{models.fallbackPriceUsdPerMTok}}`, 75 where the overlay sets none (MAMEKO-MDL-022). */
   readonly MODEL_FALLBACK_PRICE_USD_PER_MTOK?: unknown;
+  /** The rendered `{{models.bedrock.region}}`: the region of the `bedrock` route's STS and Bedrock runtime endpoints. */
+  readonly MODEL_BEDROCK_REGION?: unknown;
+  /** The rendered `{{models.bedrock.roleArn}}`: the role the control plane assumes for the `bedrock` route. */
+  readonly MODEL_BEDROCK_ROLE_ARN?: unknown;
+  /** The Worker secrets the `AssumeRole` call is signed with; neither reaches an executor. */
+  readonly BEDROCK_ACCESS_KEY_ID?: string;
+  readonly BEDROCK_SECRET_ACCESS_KEY?: string;
 }
 
 export const signModelLeaseToken = (secret: string, scope: LeaseTokenScope): Promise<string> =>
@@ -104,61 +123,6 @@ export const mintModelLeaseCredential = async (
   };
 };
 
-/** The leases whose model-lease tokens are revoked: one row per execution and epoch, kept while the token can live. */
-const REVOCATION_SCHEMA = [
-  `create table if not exists fd_model_lease_revocations (
-    execution_id text not null,
-    epoch integer not null,
-    revoked_at integer not null,
-    primary key (execution_id, epoch))`,
-] as const;
-
-const revocationsMigrated = new WeakMap<object, Promise<unknown>>();
-
-const migrateRevocations = (db: D1Like): Promise<unknown> => {
-  const existing = revocationsMigrated.get(db);
-  if (existing !== undefined) return existing;
-  const run = (async () => {
-    for (const sql of REVOCATION_SCHEMA) await db.prepare(sql).run();
-  })().catch((e: unknown) => {
-    revocationsMigrated.delete(db);
-    throw e;
-  });
-  revocationsMigrated.set(db, run);
-  return run;
-};
-
-/**
- * Revokes the model-lease token of the execution's lease at `epoch` as the lease ends (MAMEKO-ISO-053,
- * MAMEKO-HOST-052): the route answers that token `lease_stale` from then on, whatever the placement row says.
- */
-export const revokeModelLease = async (
-  db: D1Like,
-  executionId: string,
-  epoch: number,
-  now: number,
-): Promise<void> => {
-  await migrateRevocations(db);
-  await db
-    .prepare(
-      `insert into fd_model_lease_revocations (execution_id, epoch, revoked_at) values (?, ?, ?)
-       on conflict (execution_id, epoch) do nothing`,
-    )
-    .bind(executionId, epoch, now)
-    .run();
-};
-
-const revoked = async (db: D1Like, executionId: string, epoch: number): Promise<boolean> => {
-  await migrateRevocations(db);
-  const { results } = await db
-    .prepare(
-      "select 1 as revoked from fd_model_lease_revocations where execution_id = ? and epoch = ?",
-    )
-    .bind(executionId, epoch)
-    .all();
-  return results.length > 0;
-};
-
 /** One provider registry entry as the `MODEL_REGISTRY` var carries it (MAMEKO-MDL-020). */
 const RegistryEntry = Schema.Struct({
   providerId: Schema.NonEmptyString,
@@ -192,11 +156,87 @@ const fallbackPriceOf = (env: Pick<ModelGatewayEnv, "MODEL_FALLBACK_PRICE_USD_PE
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 };
 
-/** The registered route kinds this deploy holds a route for: `workers-ai` with the `AI` binding. */
+/** A var's text, trimmed; none where it is unset, empty or not text. */
+const textOf = (raw: unknown): string | undefined => {
+  const value = varValue(raw) ?? raw;
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+};
+
+/** The role session name the `bedrock` route's `AssumeRole` calls carry, which the role's CloudTrail records show. */
+export const BEDROCK_SESSION_NAME = "flare-dispatch-model-gateway";
+
+/**
+ * The assumed role's credentials by `fetch`, region, role and base key, kept for the isolate's lifetime so a call
+ * reuses them until they near expiry (FD-MDL-070).
+ */
+const assumedRoles = new WeakMap<
+  typeof globalThis.fetch,
+  Map<string, ReturnType<typeof cachedAssumeRole>>
+>();
+
+type HostedRoute = ReturnType<typeof bedrockRoute>;
+
+/** The `bedrock` route where the deploy names its region and role and holds the base secrets; none otherwise. */
+const bedrockOf = (
+  env: Pick<
+    ModelGatewayEnv,
+    | "MODEL_BEDROCK_REGION"
+    | "MODEL_BEDROCK_ROLE_ARN"
+    | "BEDROCK_ACCESS_KEY_ID"
+    | "BEDROCK_SECRET_ACCESS_KEY"
+  >,
+  fetch: typeof globalThis.fetch,
+): HostedRoute | undefined => {
+  const region = textOf(env.MODEL_BEDROCK_REGION);
+  const roleArn = textOf(env.MODEL_BEDROCK_ROLE_ARN);
+  const accessKeyId = env.BEDROCK_ACCESS_KEY_ID;
+  const secretAccessKey = env.BEDROCK_SECRET_ACCESS_KEY;
+  if (
+    region === undefined ||
+    roleArn === undefined ||
+    accessKeyId === undefined ||
+    accessKeyId === "" ||
+    secretAccessKey === undefined ||
+    secretAccessKey === ""
+  )
+    return undefined;
+  const byFetch = assumedRoles.get(fetch) ?? new Map();
+  assumedRoles.set(fetch, byFetch);
+  const key = `${region}\n${roleArn}\n${accessKeyId}`;
+  const credentials =
+    byFetch.get(key) ??
+    cachedAssumeRole({
+      region,
+      roleArn,
+      sessionName: BEDROCK_SESSION_NAME,
+      credentials: { accessKeyId, secretAccessKey },
+      fetch,
+    });
+  byFetch.set(key, credentials);
+  return bedrockRoute({ region, credentials, fetch });
+};
+
+/**
+ * The registered route kinds this deploy holds a route for: `workers-ai` with the `AI` binding, and `bedrock` with its
+ * region, role and base secrets.
+ */
 const routesOf = (
-  env: Pick<ModelGatewayEnv, "AI">,
-): Partial<Record<FdRouteKind, ReturnType<typeof workersAiRoute>>> =>
-  env.AI === undefined ? {} : { "workers-ai": workersAiRoute(env.AI) };
+  env: Pick<
+    ModelGatewayEnv,
+    | "AI"
+    | "MODEL_BEDROCK_REGION"
+    | "MODEL_BEDROCK_ROLE_ARN"
+    | "BEDROCK_ACCESS_KEY_ID"
+    | "BEDROCK_SECRET_ACCESS_KEY"
+  >,
+  fetch: typeof globalThis.fetch,
+): Partial<Record<FdRouteKind, HostedRoute>> => {
+  const bedrock = bedrockOf(env, fetch);
+  return {
+    ...(env.AI === undefined ? {} : { "workers-ai": workersAiRoute(env.AI) }),
+    ...(bedrock === undefined ? {} : { bedrock }),
+  };
+};
 
 const isRouteKind = (kind: string): kind is FdRouteKind =>
   (FD_ROUTE_KINDS as readonly string[]).includes(kind);
@@ -265,6 +305,7 @@ export const modelGatewayFetch = async (
   request: Request,
   env: ModelGatewayEnv,
   now: number = Date.now(),
+  fetch: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<Response | null> => {
   const { pathname } = new URL(request.url);
   if (!pathname.startsWith(MODEL_GATEWAY_PATH)) return null;
@@ -281,7 +322,8 @@ export const modelGatewayFetch = async (
     return refuse("lease_stale", "token epoch is not current");
   if (execution.status !== "pending" && execution.status !== "running")
     return refuse("lease_stale", "execution is terminal");
-  if (await revoked(env.DB, executionId, epoch)) return refuse("lease_stale", "token revoked");
+  if (await leaseTokensRevoked(env.DB, executionId, epoch))
+    return refuse("lease_stale", "token revoked");
 
   const length = Number(request.headers.get("content-length") ?? "0");
   if (length > MODEL_REQUEST_MAX_BYTES)
@@ -310,7 +352,7 @@ export const modelGatewayFetch = async (
   const route = routeModelCall({ mode, tier: call.tier, location: { kind: "cloud" } });
   if (route._tag !== "Hosted")
     return refuse("model_route_refused", `a ${mode} repository reaches no hosted model`);
-  const routes = routesOf(env);
+  const routes = routesOf(env, fetch);
   const entry = registryOf(env).find(
     (e) =>
       e.serves.includes(call.tier) && isRouteKind(e.routeKind) && routes[e.routeKind] !== undefined,

@@ -62,6 +62,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { ArtifactsHandlers, cacheReads, LogsHandlers } from "./cache.ts";
 import { isolateServices, type IsolateServices } from "./composition.ts";
 import { apiEnvOf, deployment, profileOf, type ControlPlaneEnv } from "./config.ts";
+import { leaseReadTokens } from "./control-plane-read.ts";
 import { failureSummaries } from "./failure-summary.ts";
 import { floorCanaryLayer } from "./floor-canary.ts";
 import { appOptionsOf } from "./github.ts";
@@ -287,6 +288,7 @@ const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateS
     policies(env),
     statements(env),
     statementVisibility.pipe(Layer.provide(Layer.succeedContext(isolate))),
+    leaseReadTokens(env),
   );
 
 /** One request through the router, with the isolate's services and the ones its routes read. */

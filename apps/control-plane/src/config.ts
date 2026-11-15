@@ -102,12 +102,24 @@ export interface ControlPlaneEnv extends CacheEnv {
    * unset, no lease carries one and the model route answers `unavailable` (`model-gateway.ts`).
    */
   readonly MODEL_LEASE_SECRET?: string;
+  /**
+   * The secret (a Worker secret) the control-plane read tokens of `ci-triage-pr` leases derive from, distinct from
+   * every other key; unset, no lease carries one and the executions and log routes take no lease token
+   * (`control-plane-read.ts`).
+   */
+  readonly CONTROL_PLANE_READ_SECRET?: string;
   /** The Workers AI binding, the `workers-ai` route's only credential (FD-MDL-020). */
   readonly AI?: WorkersAiBinding;
   /** The rendered `{{models.registry}}`: the provider registry the model route chooses an entry from (MAMEKO-MDL-020). */
   readonly MODEL_REGISTRY?: unknown;
   /** The rendered `{{models.fallbackPriceUsdPerMTok}}`: the price of a hosted entry that states none (MAMEKO-MDL-022). */
   readonly MODEL_FALLBACK_PRICE_USD_PER_MTOK?: unknown;
+  /** The rendered `{{models.bedrock.region}}` and `{{models.bedrock.roleArn}}`: the `bedrock` route (FD-MDL-070). */
+  readonly MODEL_BEDROCK_REGION?: unknown;
+  readonly MODEL_BEDROCK_ROLE_ARN?: unknown;
+  /** The Worker secrets the `bedrock` route's `AssumeRole` call is signed with (FD-MDL-070). */
+  readonly BEDROCK_ACCESS_KEY_ID?: string;
+  readonly BEDROCK_SECRET_ACCESS_KEY?: string;
   /** `alerts.sink`; without it every alarm delivery fails and the alarm stays active. */
   readonly ALERT_SINK?: string;
   /** The rendered `{{spend}}`: the overlay's spend values in USD, each it leaves out at its default (FD-PROF-054). */

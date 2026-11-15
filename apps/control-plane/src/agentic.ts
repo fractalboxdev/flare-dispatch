@@ -21,6 +21,7 @@ import {
   type WriteCredentials,
 } from "@fractalboxdev/flare-dispatch-agentic";
 import { artifactPath } from "@fractalboxdev/flare-dispatch-cache";
+import { lookupRun } from "@fractalboxdev/flare-dispatch-catalog";
 import {
   d1IntakeStore,
   IntakeConfig,
@@ -41,7 +42,8 @@ import {
 } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer, Match } from "effect";
 import { leaseCacheAt, type LeaseOf } from "./cache-execution.ts";
-import type { ControlPlaneEnv } from "./config.ts";
+import { deployment, type ControlPlaneEnv } from "./config.ts";
+import { CONTROL_PLANE_READ_CREDENTIAL, leaseReadCredentials } from "./control-plane-read.ts";
 import { boundFetch } from "./github.ts";
 
 let migrated: Promise<unknown> | undefined;
@@ -155,8 +157,9 @@ export const reuseInputsLayer = Layer.effect(
 );
 
 /**
- * The compile-cache token of every lease the execution held, recomputed from intake's record: the one credential a
- * lease carries (FD-AGT-029). A missing record fails the read, so the secret scan never runs without them.
+ * The compile-cache token of every lease the execution held, recomputed from intake's record, and for a run of
+ * `CONTROL_PLANE_READERS` each lease's control-plane read token (FD-AGT-029). A missing record fails the read, so the
+ * secret scan never runs without them.
  */
 export const issuedCredentials = (env: ControlPlaneEnv) => (executionId: string) =>
   Effect.gen(function* () {
@@ -181,13 +184,17 @@ export const issuedCredentials = (env: ControlPlaneEnv) => (executionId: string)
     const execution = yield* Effect.tryPromise({
       try: async () =>
         (
-          await env.DB.prepare(`select deadline_at from mameko_executions where id = ?1`)
+          await env.DB.prepare(`select run, deadline_at from mameko_executions where id = ?1`)
             .bind(executionId)
             .all()
-        ).results[0] as { deadline_at: number } | undefined,
+        ).results[0] as { run: string; deadline_at: number } | undefined,
       catch: (cause) => failed(String(cause)),
     });
     if (execution === undefined) return yield* failed(`no execution row for ${executionId}`);
+    const entry = Match.value(lookupRun(deployment(env), execution.run)).pipe(
+      Match.tag("Available", ({ entry }) => entry),
+      Match.orElse(() => null),
+    );
     const tokens: string[] = [];
     for (const lease of leases) {
       const grant = yield* Effect.tryPromise({
@@ -196,6 +203,14 @@ export const issuedCredentials = (env: ControlPlaneEnv) => (executionId: string)
       });
       const token = grant.upload_grant.compile_cache?.token;
       if (token !== undefined) tokens.push(token);
+      const read = (yield* Effect.promise(() =>
+        leaseReadCredentials(env, entry, {
+          executionId,
+          epoch: lease.epoch,
+          expiresAt: execution.deadline_at,
+        }),
+      ))[CONTROL_PLANE_READ_CREDENTIAL];
+      if (read !== undefined) tokens.push(read);
     }
     return tokens;
   }).pipe(Effect.provide(d1IntakeStore(env.DB)));

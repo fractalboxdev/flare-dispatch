@@ -16,12 +16,12 @@ Requirement counts and ID ranges come from the requirement lines under `specs/`;
 
 | Phase | Goal | Requirements | Waits on | Gate to the next phase |
 | --- | --- | --- | --- | --- |
-| 0 | Measure the bet: the cloud path on `host-cloudflare` with the profile, the GitHub appliers and the installation rate limit, so no capacity path concludes `neutral`, and warm runs on an owned device measured against the best cloud setup | 521 | mameko phase 0 | A warm run reaches its verdict at least 30% faster than the best cloud setup |
+| 0 | Measure the bet: the cloud path on `host-cloudflare` with the profile, the GitHub appliers and the installation rate limit, so no capacity path concludes `neutral`, and warm runs on an owned device measured against the best cloud setup | 522 | mameko phase 0 | A warm run reaches its verdict at least 30% faster than the best cloud setup |
 | 1 | Batch on owned devices: mameko's device bundle and FlareDispatch's device extension, capacity leases and the local scheduler; only `batch` runs locally | 54 | mameko phase 1 | Owned devices take most eligible `batch` executions for 14 days with no verdict audit disagreement |
-| 2 | Interactive with cloud placement: `interactive` runs local first with a 300 s claim deadline, egress profiles, staged writeback and rehearsal reuse | 136 | mameko phase 2 | `interactive` p95 time to verdict is no worse than cloud-only |
+| 2 | Interactive with cloud placement: `interactive` runs local first with a 300 s claim deadline, egress profiles, staged writeback and rehearsal reuse | 139 | mameko phase 2 | `interactive` p95 time to verdict is no worse than cloud-only |
 | 3 | Required checks: `required` runs local first with a 60 s claim deadline, firm cloud holds, preemption at step boundaries and the AWS launcher as a floor | 25 | mameko phase 3; the firm-hold rate | `required` p95 time to verdict is within 60 s of cloud-only |
 | 4 | Harden and generalise: provenance tiers, confidential mode with local models, macOS VM jobs, the `gha` launcher and device-aware placement | 100 | mameko phase 4; the DSSE signing purpose | — |
-| All | | 836 | | |
+| All | | 840 | | |
 
 ```mermaid
 stateDiagram-v2
@@ -145,7 +145,7 @@ Until step 1, every `/v1/ops/*` operator operation answers `unavailable` and adm
 
 **Waits on.** mameko phase 0: the kernels, the DO-SQLite engine backend, the `host-cloudflare` stores, admission, the outbox and the spend holds.
 
-**Closes** 521 requirements:
+**Closes** 522 requirements:
 
 | Area | Requirements | IDs |
 | --- | --- | --- |
@@ -154,7 +154,7 @@ Until step 1, every `/v1/ops/*` operator operation answers `unavailable` and adm
 | `GH` | 63 | 001–018, 020–029, 031, 045–048, 052, 056–063, 065–068, 075–076, 078–092 |
 | `INT` | 46 | 001, 003–004, 009–011, 015–036, 039–043, 049–058, 064–065, 067 |
 | `IFC` | 66 | 001–030, 032–033, 035–044, 046–047, 049–052, 055–062, 064–068, 070, 076, 082–084 |
-| `MDL` | 4 | 020–022, 024 |
+| `MDL` | 5 | 020–022, 024, 070 |
 | `OPS` | 59 | 001–017, 019–031, 036, 038–046, 050, 053, 056–057, 064, 067–070, 072–078, 083, 088–089 |
 | `PROF` | 48 | 001–024, 026–030, 032–034, 037, 044–048, 054–058, 060, 062–065 |
 | `PROV` | 2 | 049–050 |
@@ -205,18 +205,18 @@ Until step 1, every `/v1/ops/*` operator operation answers `unavailable` and adm
 
 **Waits on.** mameko phase 2: interactive work local-first with cloud placement after its claim deadline, the egress profiles, the model gateway and the local model route on devices.
 
-**Closes** 136 requirements:
+**Closes** 139 requirements:
 
 | Area | Requirements | IDs |
 | --- | --- | --- |
 | `CACHE` | 1 | 014 |
 | `GH` | 11 | 077, 093–102 |
 | `INT` | 4 | 062–063, 071–072 |
-| `IFC` | 16 | 072–074, 089–101 |
+| `IFC` | 18 | 072–074, 089–103 |
 | `LOCAL` | 14 | 077–089, 094 |
 | `OPS` | 14 | 090–103 |
 | `PROF` | 4 | 031, 066–068 |
-| `AGT` | 38 | 001, 005–007, 010, 029–033, 045–047, 049–062, 068–073, 089–093 |
+| `AGT` | 39 | 001, 005–007, 010, 029–033, 045–047, 049–062, 068–073, 089–094 |
 | `GATE` | 34 | 081, 083–115 |
 
 **Gate 2.**

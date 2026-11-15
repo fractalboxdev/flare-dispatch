@@ -26,9 +26,14 @@ export const ACCESS_BYPASS: readonly BypassPath[] = [
   { path: "/health", surface: "health", identity: "none" },
   { path: "/.well-known/*", surface: "well-known", identity: "none" },
   {
+    path: "/v1/executions",
+    surface: "executions list",
+    identity: "control-plane read token, or Access JWT",
+  },
+  {
     path: "/v1/executions/*/logs",
     surface: "log aggregate",
-    identity: "link token, or Access JWT",
+    identity: "link token, control-plane read token, or Access JWT",
   },
   { path: "/v1/executions/*/logs/*", surface: "log", identity: "link token, or Access JWT" },
   { path: "/v1/artifacts/*", surface: "artifact", identity: "link token, or Access JWT" },

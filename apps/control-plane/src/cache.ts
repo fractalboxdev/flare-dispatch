@@ -96,11 +96,20 @@ export const leaseCache = async (
 const unavailable = (what: string) =>
   Response.json(errorBody(apiError("unavailable", what), crypto.randomUUID()), { status: 503 });
 
-/** An execution's status, its placement's epoch and executor, and the repository intake recorded it under. */
+/**
+ * An execution's status, its tenant scope, its placement's epoch and executor, and the repository intake recorded it
+ * under.
+ */
 const executionStatus = (db: D1Like, id: string) =>
-  first<{ status: string; epoch: number | null; executor_id: string | null; repo: string | null }>(
+  first<{
+    status: string;
+    scope_id: string;
+    epoch: number | null;
+    executor_id: string | null;
+    repo: string | null;
+  }>(
     db,
-    `select e.status, p.epoch, p.executor_id, i.repo from mameko_executions e
+    `select e.status, e.scope_id, p.epoch, p.executor_id, i.repo from mameko_executions e
        left join mameko_placements p on p.execution_id = e.id
        left join intake_records i on i.execution_id = e.id
      where e.id = ?`,
@@ -317,13 +326,16 @@ export const artifactReader =
           viewer.operator ||
           (await dispatcherOf(db, row.execution_id))?.toLowerCase() === id.toLowerCase(),
         Actions: () => false,
+        Lease: () => false,
         Unidentified: () => false,
       }),
     );
 
 /**
  * The log and artifact reads the router's handlers call once the gate has identified the caller: an Access identity
- * or a link token bound to the execution or artifact (FD-IFC-017). Each answers an error from the error model.
+ * or a link token bound to the execution or artifact (FD-IFC-017). A log read under a lease's control-plane read token
+ * names the lease's repository as `repository`, and an execution of any other answers `execution_not_found`
+ * (FD-IFC-103). Each answers an error from the error model.
  */
 export class CacheReads extends Context.Service<
   CacheReads,
@@ -332,6 +344,7 @@ export class CacheReads extends Context.Service<
       request: Request,
       executionId: string,
       file: string | undefined,
+      repository?: string,
     ) => Effect.Effect<Response, ApiError>;
     readonly artifact: (
       request: Request,
@@ -366,7 +379,7 @@ export const cacheReads = (env: ControlPlaneEnv & CacheEnv): Layer.Layer<CacheRe
   const artifactDeps = { db, bucket, now: Date.now, terminal };
   const migratedDb = Effect.promise(() => migrateCache(env.DB));
   return Layer.succeed(CacheReads)({
-    logs: (request, executionId, file) =>
+    logs: (request, executionId, file, repository) =>
       Effect.gen(function* () {
         const read = yield* Effect.promise(() =>
           serveLogs(
@@ -376,7 +389,10 @@ export const cacheReads = (env: ControlPlaneEnv & CacheEnv): Layer.Layer<CacheRe
               bucket,
               execution: async (id) => {
                 const s = await executionStatus(env.DB, id);
-                return s === undefined
+                const foreign =
+                  repository !== undefined &&
+                  s?.scope_id.toLowerCase() !== repository.toLowerCase();
+                return s === undefined || foreign
                   ? null
                   : {
                       terminal: isTerminal(s),
@@ -447,11 +463,27 @@ const currentViewer = Effect.gen(function* () {
   return { identity, operator } satisfies ArtifactViewer;
 });
 
+/** The repository a lease's control-plane read token confines a read to; none for any other caller (FD-IFC-103). */
+const leaseRepository = Effect.gen(function* () {
+  const identity = yield* CurrentIdentity;
+  return Match.value(identity).pipe(
+    Match.tag("Lease", ({ repository }) => repository),
+    Match.orElse(() => undefined),
+  );
+});
+
 /** The logs group's handlers (FD-CACHE-083). */
 export const LogsHandlers = HttpApiBuilder.group(FlareDispatchApi, "logs", (handlers) =>
   handlers
     .handle("aggregate", ({ params, request }) =>
-      response(CacheReads.use((reads) => reads.logs(sourceOf(request), params.id, undefined))),
+      response(
+        Effect.gen(function* () {
+          const repository = yield* leaseRepository;
+          return yield* CacheReads.use((reads) =>
+            reads.logs(sourceOf(request), params.id, undefined, repository),
+          );
+        }),
+      ),
     )
     .handle("file", ({ params, request }) =>
       response(CacheReads.use((reads) => reads.logs(sourceOf(request), params.id, params.file))),

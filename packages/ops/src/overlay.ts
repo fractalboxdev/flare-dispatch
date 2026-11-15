@@ -134,6 +134,12 @@ export const OverlayValues = Schema.Struct({
       fallbackPriceUsdPerMTok: opt(Usd),
       bucketShares: opt(Schema.Record(Schema.String, Schema.Number)),
       breaker: opt(Schema.Number),
+      /**
+       * The `bedrock` route's region and the role the control plane assumes for it (specs/model-gateway.md
+       * FD-MDL-070); the `AssumeRole` call is signed with the Worker secrets `BEDROCK_ACCESS_KEY_ID` and
+       * `BEDROCK_SECRET_ACCESS_KEY`.
+       */
+      bedrock: opt(Schema.Struct({ region: NonEmpty, roleArn: NonEmpty })),
     }),
   ),
   /**
@@ -317,9 +323,11 @@ export type RenderValues = Omit<
    * The provider registry, none where the overlay sets none, so the model route serves no hosted call, and the fallback
    * price at its 75 USD per million tokens default where the overlay sets none (MAMEKO-MDL-022).
    */
-  readonly models: Omit<NonNullable<OverlayValues["models"]>, "registry"> & {
+  readonly models: Omit<NonNullable<OverlayValues["models"]>, "registry" | "bedrock"> & {
     readonly registry: Readonly<Record<string, RoutedModelEntry>>;
     readonly fallbackPriceUsdPerMTok: number;
+    /** The `bedrock` route's region and role, each empty where the overlay sets none, so the route is not held. */
+    readonly bedrock: { readonly region: string; readonly roleArn: string };
   };
   /** `records.url`, empty where the overlay sets none, so the control plane declares no record kind. */
   readonly records: { readonly url: string };
@@ -366,7 +374,8 @@ export type RenderValues = Omit<
  * it sets none (FD-PROV-016), its scan bundle pin, empty where it pins none (FD-GATE-101), its statement retention in days, at its default where it sets none (FD-PROV-075), its advisory ecosystems,
  * none where it sets none (FD-OPS-100), its advisory snapshot
  * age, at its default where it sets none (FD-OPS-103), its `records.url`, empty where it sets none (FD-GH-093), and its
- * provider registry, none where it sets none, with its fallback price at its default where it sets none.
+ * provider registry, none where it sets none, with its fallback price at its default where it sets none and the
+ * `bedrock` route's region and role, empty where it sets none (FD-MDL-070).
  */
 export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   ...overlay,
@@ -385,6 +394,10 @@ export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
     registry: routedRegistryOf(overlay),
     fallbackPriceUsdPerMTok:
       overlay.models?.fallbackPriceUsdPerMTok ?? MODEL_FALLBACK_PRICE_DEFAULT_USD_PER_MTOK,
+    bedrock: {
+      region: overlay.models?.bedrock?.region ?? "",
+      roleArn: overlay.models?.bedrock?.roleArn ?? "",
+    },
   },
   scan: {
     ...overlay.scan,
@@ -453,6 +466,10 @@ export const placeholderOverlay: OverlayValues = {
         inputPriceMicroUsdPerMTok: 3_000_000,
         outputPriceMicroUsdPerMTok: 15_000_000,
       },
+    },
+    bedrock: {
+      region: "us-east-1",
+      roleArn: "arn:aws:iam::000000000000:role/flare-dispatch-bedrock",
     },
   },
 };

@@ -48,6 +48,7 @@ export const LINK_KEY = "e2e-link-key";
 export const COMPILE_CACHE_SECRET = "e2e-compile-cache-secret";
 export const DEPLOY_CLAIM_SECRET = "e2e-deploy-claim-secret";
 export const MODEL_LEASE_SECRET = "e2e-model-lease-secret";
+export const CONTROL_PLANE_READ_SECRET = "e2e-control-plane-read-secret";
 
 const MANIFEST = {
   version: 1,
@@ -288,6 +289,7 @@ export const startStack = async (options: StackOptions = {}): Promise<Stack> => 
       COMPILE_CACHE_SECRET,
       DEPLOY_CLAIM_SECRET,
       MODEL_LEASE_SECRET,
+      CONTROL_PLANE_READ_SECRET,
       LINK_KEY,
       ...(options.publicOrigin === true ? { PUBLIC_ORIGIN: front.url } : {}),
       ...options.secrets,

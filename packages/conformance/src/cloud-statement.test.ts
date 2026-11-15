@@ -59,7 +59,7 @@ const REPO = "acme/widgets";
 /** The gate image digest the deploy pins, which a cloud lease names. */
 const GATE_IMAGE = sha(0xa11);
 const ARTIFACTS: Readonly<Record<string, string>> = {
-  "dist/app.tgz": "the built application",
+  "app.tgz": "the built application",
   "sbom.json": '{"packages":[]}',
 };
 
@@ -394,7 +394,7 @@ describe("the cloud builder's statement of an accepted cloud execution", () => {
     const statement = payloadOf(envelope);
     // Each subject digest is the SHA-256 of the bytes R2 holds, not the digest the upload declared.
     expect(statement.subject).toEqual([
-      { name: "dist/app.tgz", digest: { sha256: await hexOf(ARTIFACTS["dist/app.tgz"]!) } },
+      { name: "app.tgz", digest: { sha256: await hexOf(ARTIFACTS["app.tgz"]!) } },
       { name: "sbom.json", digest: { sha256: await hexOf(ARTIFACTS["sbom.json"]!) } },
     ]);
     // `check` is a gate recipe, so its statement is a test result whatever run kind the attestation names.
