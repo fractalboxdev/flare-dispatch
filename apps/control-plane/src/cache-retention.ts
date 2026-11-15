@@ -36,7 +36,7 @@ export const LEDGER_END_SCHEMA = [
     finished_at integer not null,
     attempted_at integer not null)`,
   `create index if not exists cache_ledger_end_retry_finished on cache_ledger_end_retry (finished_at)`,
-  `create index if not exists cache_ledger_end_finished on executions (finished_at, id)
+  `create index if not exists cache_ledger_end_finished on mameko_executions (finished_at, id)
     where finished_at is not null`,
 ];
 
@@ -77,7 +77,7 @@ export const LEDGER_END_BATCH = 100;
  * the step has not tried, oldest end first, then those whose call failed, least recently tried first. Only an
  * execution intake recorded has a repository, and so a ledger to hold its reservations.
  */
-export const NEWLY_TERMINAL = `select e.id, r.repo, e.deadline_at, e.finished_at from executions e
+export const NEWLY_TERMINAL = `select e.id, r.repo, e.deadline_at, e.finished_at from mameko_executions e
   join intake_records r on r.execution_id = e.id
   left join cache_ledger_end_retry f on f.execution_id = e.id
   where e.finished_at >= ? and e.${TERMINAL}
@@ -159,7 +159,7 @@ export const executionEndedAt =
     (
       (
         await db
-          .prepare(`select finished_at as at from executions where id = ? and ${TERMINAL}`)
+          .prepare(`select finished_at as at from mameko_executions where id = ? and ${TERMINAL}`)
           .bind(id)
           .all()
       ).results[0] as { readonly at: number | null } | undefined

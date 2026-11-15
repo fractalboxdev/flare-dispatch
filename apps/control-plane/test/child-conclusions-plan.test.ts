@@ -33,7 +33,7 @@ describe("the child-conclusions read", () => {
     await Effect.runPromise(migrateChildConclusions(db));
     const now = 10 * 86_400_000;
     db.sqlite
-      .exec(`insert into executions (id, scope_id, run, class, status, enqueued_at, finished_at)
+      .exec(`insert into mameko_executions (id, scope_id, run, class, status, enqueued_at, finished_at)
       values ('old-parent', 'acme/app', 'offload-test', 'required', 'success', 0, ${now - 3 * 86_400_000}),
         ('new-parent', 'acme/app', 'offload-test', 'required', 'success', 0, ${now - 10_000})`);
     const old = Array.from(
@@ -43,7 +43,7 @@ describe("the child-conclusions read", () => {
     const children = [...old, "new-child", "already-concluded"];
     for (const id of children)
       db.sqlite
-        .prepare(`insert into executions (id, scope_id, run, class, status, reason, enqueued_at, parent_id)
+        .prepare(`insert into mameko_executions (id, scope_id, run, class, status, reason, enqueued_at, parent_id)
         values (?, 'acme/app', 'gate-job', 'required', 'cancelled', 'parent-ended', 0, ?)`)
         .run(id, id === "new-child" ? "new-parent" : "old-parent");
     const makeRow = (id: string, kind: string, key: string) => ({
@@ -84,7 +84,7 @@ describe("the child-conclusions read", () => {
     expect(await Effect.runPromise(insertChildConclusions(db, kind, now + 120_000))).toEqual([]);
     expect(
       db.sqlite
-        .prepare("select count(*) as n from outbox where intent_key = 'cp:check:conclude'")
+        .prepare("select count(*) as n from mameko_outbox where intent_key = 'cp:check:conclude'")
         .get(),
     ).toMatchObject({ n: children.length - 1 });
   });

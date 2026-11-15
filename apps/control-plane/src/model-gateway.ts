@@ -152,8 +152,8 @@ const executionOf = async (db: D1Like, executionId: string) =>
   (
     await db
       .prepare(
-        `select e.status, e.run, e.scope_id, p.epoch from executions e
-         left join placements p on p.execution_id = e.id where e.id = ?`,
+        `select e.status, e.run, e.scope_id, p.epoch from mameko_executions e
+         left join mameko_placements p on p.execution_id = e.id where e.id = ?`,
       )
       .bind(executionId)
       .all()

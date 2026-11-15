@@ -75,8 +75,8 @@ const attempts = (h: Harness, run: string) =>
   h
     .rows(
       `select r.attempt, e.status, e.reason,
-         (select count(*) from placements p where p.execution_id = e.id) as placed
-       from intake_records r join executions e on e.id = r.execution_id where r.run = ? order by r.attempt`,
+         (select count(*) from mameko_placements p where p.execution_id = e.id) as placed
+       from intake_records r join mameko_executions e on e.id = r.execution_id where r.run = ? order by r.attempt`,
       run,
     )
     .map((r) => ({
@@ -92,8 +92,8 @@ const outcomes = (h: Harness, sha = HEAD) =>
     h
       .rows(
         `select r.run, e.status, e.reason, r.not_before,
-           (select count(*) from placements p where p.execution_id = e.id) as placed
-         from intake_records r join executions e on e.id = r.execution_id where r.sha = ?`,
+           (select count(*) from mameko_placements p where p.execution_id = e.id) as placed
+         from intake_records r join mameko_executions e on e.id = r.execution_id where r.sha = ?`,
         sha,
       )
       .map((r) => [
@@ -122,7 +122,7 @@ describe("the trifecta rule at admission", () => {
     });
     expect(h.recorded.started).toEqual([]);
     // Neither execution reached placement. Their failure rows close the checks without any admitted check.open.
-    expect(h.rows("select kind from outbox")).toEqual([
+    expect(h.rows("select kind from mameko_outbox")).toEqual([
       { kind: "check.conclude" },
       { kind: "check.conclude" },
     ]);
@@ -226,7 +226,7 @@ describe("the trifecta rule at admission", () => {
       if (outbound)
         expect(
           h.rows(
-            "select kind, state from outbox where execution_id = ? and kind = 'check.conclude'",
+            "select kind, state from mameko_outbox where execution_id = ? and kind = 'check.conclude'",
             held,
           ),
         ).toEqual([{ kind: "check.conclude", state: "pending" }]);
@@ -254,7 +254,7 @@ describe("the trifecta rule at admission", () => {
     expect(
       h.rows(
         `select r.input_associations_json, e.status, e.reason from intake_records r
-         join executions e on e.id = r.execution_id where r.execution_id = ?`,
+         join mameko_executions e on e.id = r.execution_id where r.execution_id = ?`,
         id,
       ),
     ).toEqual([

@@ -40,7 +40,7 @@ describe("a job matrix parent under a replayed workflow", () => {
         firstRun.map((a) => ({ ...a, answer: "Duplicate" })),
       );
       expect(
-        journal.db.sqlite.prepare("select count(*) as n from executions").get() as { n: number },
+        journal.db.sqlite.prepare("select count(*) as n from mameko_executions").get() as { n: number },
       ).toEqual({ n: JOB_KEYS.length });
       expect(first.effects.filter((e) => e.kind === "github")).toEqual([]);
       expect(journal.gh.runs).toEqual([]);

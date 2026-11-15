@@ -49,7 +49,7 @@ describe("dispatch.followOn", () => {
     // and its key waits with the held request until admission.
     expect(
       h.rows(
-        `select canonical from dedup_keys where canonical like ?1
+        `select canonical from mameko_dedup_keys where canonical like ?1
          union all
          select json_extract(admit_json, '$.dedup.canonical') from intake_held
          where json_extract(admit_json, '$.dedup.canonical') like ?1`,
@@ -166,7 +166,7 @@ describe("ops intents", () => {
     await Effect.runPromise(insertOpsIntent(db, intent));
     expect(
       db.sqlite
-        .prepare("select execution_id, scope_id, intent_key, kind, limit_key, state from outbox")
+        .prepare("select execution_id, scope_id, intent_key, kind, limit_key, state from mameko_outbox")
         .all(),
     ).toEqual([
       {

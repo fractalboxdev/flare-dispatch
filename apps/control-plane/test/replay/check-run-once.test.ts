@@ -31,10 +31,10 @@ const execution: Execution = {
 const snapshot = (p: Plane): ReadonlyMap<string, string> =>
   new Map([
     ...p
-      .rows<{ id: string }>("select * from outbox")
+      .rows<{ id: string }>("select * from mameko_outbox")
       .map((r) => [`outbox ${r.id}`, JSON.stringify(r)] as const),
     ...p
-      .rows<{ id: string }>("select * from executions")
+      .rows<{ id: string }>("select * from mameko_executions")
       .map((r) => [`executions ${r.id}`, JSON.stringify(r)] as const),
   ]);
 

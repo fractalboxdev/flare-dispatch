@@ -52,7 +52,7 @@ describe("pr-review's review comment under a replayed workflow", () => {
       ]);
       expect(
         p.rows(
-          "select execution_id, state, external_ref from outbox where kind = 'comment' order by execution_id",
+          "select execution_id, state, external_ref from mameko_outbox where kind = 'comment' order by execution_id",
         ),
       ).toEqual([
         { execution_id: FIRST, state: "applied", external_ref: String(comments[0]!.id) },

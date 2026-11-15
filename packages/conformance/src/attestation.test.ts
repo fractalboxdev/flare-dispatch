@@ -80,7 +80,7 @@ const enroll = async (verify: Verify, publicKey: string, evidence: unknown) => {
     }).pipe(Effect.provide(registry)),
   );
   const row = await (db as unknown as D1Database)
-    .prepare("select key_store, attested_at from executors where executor_id = ?")
+    .prepare("select key_store, attested_at from mameko_executors where executor_id = ?")
     .bind("attested-device")
     .first<{ key_store: string; attested_at: number | null }>();
   const answer = Exit.isSuccess(exit)

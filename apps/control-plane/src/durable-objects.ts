@@ -173,9 +173,9 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
         if (record === null) return yield* new ExecutionInputsMissing({ executionId });
         const { results } = yield* Effect.promise(() =>
           bindings.DB.prepare(
-            `select e.run, e.scope_id, e.deadline_at, p.epoch, x.kind from executions e
-             left join placements p on p.execution_id = e.id
-             left join executors x on x.executor_id = p.executor_id where e.id = ?`,
+            `select e.run, e.scope_id, e.deadline_at, p.epoch, x.kind from mameko_executions e
+             left join mameko_placements p on p.execution_id = e.id
+             left join mameko_executors x on x.executor_id = p.executor_id where e.id = ?`,
           )
             .bind(executionId)
             .all(),

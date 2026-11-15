@@ -98,9 +98,9 @@ export interface Journal {
 const snapshot = (db: TestD1): ReadonlyMap<string, string> =>
   new Map(
     [
-      ["outbox", "select * from outbox"],
-      ["executions", "select * from executions"],
-      ["placements", "select * from placements"],
+      ["outbox", "select * from mameko_outbox"],
+      ["executions", "select * from mameko_executions"],
+      ["placements", "select * from mameko_placements"],
     ].flatMap(([table, sql]) =>
       (db.sqlite.prepare(sql!).all() as Record<string, unknown>[]).map(
         (r) => [`${table} ${r["id"] ?? r["execution_id"]}`, JSON.stringify(r)] as const,
@@ -115,12 +115,12 @@ const leased = async (): Promise<Journal> => {
   for (const e of EXECUTIONS) {
     db.sqlite
       .prepare(
-        `insert into executions (id, scope_id, run, class, status, enqueued_at) values (?, 'acme/app', 'spec-drift-pr', 'batch', 'running', ?)`,
+        `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at) values (?, 'acme/app', 'spec-drift-pr', 'batch', 'running', ?)`,
       )
       .run(e.id, NOW);
     db.sqlite
       .prepare(
-        `insert into placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, ?)`,
+        `insert into mameko_placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, ?)`,
       )
       .run(e.id, EPOCH, EXECUTOR);
     if (e.staged)

@@ -86,7 +86,7 @@ const probesOnly = (deps: TickDeps): TickDeps => {
 };
 
 const outbox = async (env: ControlPlaneEnv) =>
-  (await env.DB.prepare("select id, kind, limit_key, payload_json from outbox order by id").all())
+  (await env.DB.prepare("select id, kind, limit_key, payload_json from mameko_outbox order by id").all())
     .results as { id: string; kind: string; limit_key: string; payload_json: string }[];
 
 afterEach(() => {
@@ -256,7 +256,7 @@ describe("the probes' rows against the GitHub applier", () => {
         T0,
       ),
     );
-    const [row] = (await db.prepare("select payload_json from outbox").all()).results as {
+    const [row] = (await db.prepare("select payload_json from mameko_outbox").all()).results as {
       payload_json: string;
     }[];
     const decoded = Schema.decodeUnknownExit(SidePayloads["canary.push"])(
@@ -306,7 +306,7 @@ describe("the probes' rows against the GitHub applier", () => {
         Effect.provide(Layer.succeed(AlarmPort, { deliver: () => Effect.void })),
       ),
     );
-    const rows = (await db.prepare("select id, limit_key, payload_json from outbox").all())
+    const rows = (await db.prepare("select id, limit_key, payload_json from mameko_outbox").all())
       .results as { id: string; limit_key: string; payload_json: string }[];
     expect(rows.map((r) => [r.id, r.limit_key])).toEqual([
       ["app/ops:redeliver:70001", APP_LIMIT_KEY],

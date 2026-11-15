@@ -138,7 +138,7 @@ export const executionsReadLayer = (config: ExecutionsReadConfig): Layer.Layer<E
         try: async () => {
           const { results } = await config.db
             .prepare(
-              `select id, run, reason, finished_at from executions
+              `select id, run, reason, finished_at from mameko_executions
                 where scope_id = ? and status = 'failure' and finished_at >= ?
                 order by finished_at desc, id`,
             )
@@ -165,8 +165,8 @@ export const executionsReadLayer = (config: ExecutionsReadConfig): Layer.Layer<E
         try: async () => {
           const { results } = await config.db
             .prepare(
-              `select p.accepted_epoch, p.epoch from executions e
-             left join placements p on p.execution_id = e.id
+              `select p.accepted_epoch, p.epoch from mameko_executions e
+             left join mameko_placements p on p.execution_id = e.id
              where e.id = ? and e.status = 'failure'`,
             )
             .bind(executionId)

@@ -136,7 +136,7 @@ export const simulateCooldownChecks = async (seed: number): Promise<CooldownChec
       const done = pending[Math.floor(random() * pending.length)];
       if (done !== undefined)
         h.db.sqlite
-          .prepare("update executions set status = 'success' where id = ?")
+          .prepare("update mameko_executions set status = 'success' where id = ?")
           .run(done.id as string);
       trace.push(`finish ${done === undefined ? "none" : "one"}`);
     }
@@ -150,7 +150,7 @@ export const simulateCooldownChecks = async (seed: number): Promise<CooldownChec
 
   const applied = new Set(
     h
-      .rows("select execution_id from outbox where kind = 'check.open' and state = 'applied'")
+      .rows("select execution_id from mameko_outbox where kind = 'check.open' and state = 'applied'")
       .map((r) => r.execution_id as string),
   );
   reached.held = heldIds.size;

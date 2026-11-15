@@ -32,7 +32,7 @@ describe("an accepted result's pr.propose row under a replayed accept and workfl
       expect(recorded).toEqual(["exec-staged@1", "exec-nothing-staged@1", "exec-failed@1"]);
       const rows = db.sqlite
         .prepare(
-          "select execution_id, intent_key, payload_json, state from outbox where kind = 'pr.propose' order by id",
+          "select execution_id, intent_key, payload_json, state from mameko_outbox where kind = 'pr.propose' order by id",
         )
         .all() as { execution_id: string; payload_json: string }[];
       expect(rows.map((r) => ({ ...r, payload_json: JSON.parse(r.payload_json) }))).toEqual([
@@ -55,7 +55,7 @@ describe("an accepted result's pr.propose row under a replayed accept and workfl
       // Each execution's outcome row is written once, by the first run's apply-outbox stage.
       expect(
         db.sqlite
-          .prepare("select execution_id, kind from outbox where tier = 'outcome' order by id")
+          .prepare("select execution_id, kind from mameko_outbox where tier = 'outcome' order by id")
           .all(),
       ).toEqual([
         { execution_id: "exec-failed", kind: "check.conclude" },

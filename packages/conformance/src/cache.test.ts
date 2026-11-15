@@ -218,7 +218,7 @@ const leaseOf = async (
     .bind(JSON.stringify(trigger), JSON.stringify(inputs(JSON.parse(row!.inputs_json))), id)
     .run();
   await d1
-    .prepare("update executions set deadline_at = ? where id = ?")
+    .prepare("update mameko_executions set deadline_at = ? where id = ?")
     .bind(Date.now() + 3_600_000, id)
     .run();
   const socket = await connect(mf, executorId, device.keys);

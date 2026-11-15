@@ -75,10 +75,10 @@ const decodeCursor = (c: string): { at: number; id: string } | null => {
 const EXECUTION_SELECT = `select e.id, e.run, e.scope_id, e.class, e.status, e.reason, e.enqueued_at,
               p.state as placement, p.epoch, p.executor_id, x.kind as executor_kind,
               r.hold_micro_usd, r.metered_micro_usd
-       from executions e
-       left join placements p on p.execution_id = e.id
-       left join executors x on x.executor_id = p.executor_id
-       left join reservations r on r.execution_id = e.id`;
+       from mameko_executions e
+       left join mameko_placements p on p.execution_id = e.id
+       left join mameko_executors x on x.executor_id = p.executor_id
+       left join mameko_reservations r on r.execution_id = e.id`;
 
 const executionRowOf = (r: Record<string, unknown>): ExecutionRow => ({
   id: r["id"] as string,
@@ -161,7 +161,7 @@ export const executionDetail = async (db: D1Like, id: string): Promise<Execution
   const { results: rows } = await db
     .prepare(
       `select id, kind, state, attempts, external_ref, last_error, inserted_at, applied_at
-       from outbox where execution_id = ? order by inserted_at, id`,
+       from mameko_outbox where execution_id = ? order by inserted_at, id`,
     )
     .bind(id)
     .all();
@@ -205,13 +205,13 @@ export const classFigures = async (
   now: number,
 ): Promise<readonly ClassFigures[]> => {
   const { results: queued } = await db
-    .prepare("select class, enqueued_at from executions where status = 'pending'")
+    .prepare("select class, enqueued_at from mameko_executions where status = 'pending'")
     .all();
   const { results: placed } = await db
     .prepare(
       `select e.class, coalesce(x.kind, 'unregistered') as kind, count(*) as n
-       from executions e join placements p on p.execution_id = e.id
-       left join executors x on x.executor_id = p.executor_id
+       from mameko_executions e join mameko_placements p on p.execution_id = e.id
+       left join mameko_executors x on x.executor_id = p.executor_id
        where e.enqueued_at >= ? and p.executor_id is not null
        group by e.class, kind`,
     )
@@ -275,13 +275,13 @@ export const fleet = async (db: D1Like, now: number): Promise<readonly FleetRow[
     .prepare(
       `select x.executor_id, x.kind, x.drain, x.quarantine, x.slots_json,
               coalesce(h.last_heartbeat_at, x.last_heartbeat_at) as heartbeat
-       from executors x left join executor_heartbeats h on h.executor_id = x.executor_id
+       from mameko_executors x left join mameko_executor_heartbeats h on h.executor_id = x.executor_id
        order by x.executor_id`,
     )
     .all();
   const { results: leased } = await db
     .prepare(
-      `select p.executor_id, e.class, count(*) as n from placements p join executions e on e.id = p.execution_id
+      `select p.executor_id, e.class, count(*) as n from mameko_placements p join mameko_executions e on e.id = p.execution_id
        where p.state = 'leased' group by p.executor_id, e.class`,
     )
     .all();

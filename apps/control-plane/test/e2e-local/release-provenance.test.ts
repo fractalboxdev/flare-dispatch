@@ -184,7 +184,7 @@ const outboxRowOf = async (executionId: string) => {
   const db = await stack.mf.getD1Database("DB");
   return db
     .prepare(
-      "select state, last_error from outbox where execution_id = ? and kind = 'release.publish'",
+      "select state, last_error from mameko_outbox where execution_id = ? and kind = 'release.publish'",
     )
     .bind(executionId)
     .first();

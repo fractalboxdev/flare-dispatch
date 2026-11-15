@@ -130,10 +130,10 @@ describe("the staged write on R2 and D1 under workerd", () => {
     const bucket = await mf.getR2Bucket("CACHE");
     await runD1Migrations(db);
     for (const sql of [
-      "insert into executions (id, scope_id, run, status, enqueued_at) values ('x1', 'scope', 'spec-drift-pr', 'success', 0)",
-      `insert into executors (executor_id, kind, posture_tier, labels_json, slots_json)
+      "insert into mameko_executions (id, scope_id, run, status, enqueued_at) values ('x1', 'scope', 'spec-drift-pr', 'success', 0)",
+      `insert into mameko_executors (executor_id, kind, posture_tier, labels_json, slots_json)
          values ('e1', 'cloudflare', 'unmanaged', '[]', '{}')`,
-      "insert into placements (execution_id, state, epoch, executor_id, accepted_epoch) values ('x1', 'accepted', 2, 'e1', 2)",
+      "insert into mameko_placements (execution_id, state, epoch, executor_id, accepted_epoch) values ('x1', 'accepted', 2, 'e1', 2)",
     ])
       await db.prepare(sql).run();
 

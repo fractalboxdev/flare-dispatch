@@ -19,8 +19,8 @@ export { CHILD_CONCLUDE_KEY };
  * they are created on every start, after mameko's migrations.
  */
 export const CHILD_CONCLUSIONS_INDEXES: readonly string[] = [
-  `create index if not exists executions_finished on executions (finished_at)`,
-  `create index if not exists executions_parent on executions (parent_id)`,
+  `create index if not exists executions_finished on mameko_executions (finished_at)`,
+  `create index if not exists executions_parent on mameko_executions (parent_id)`,
 ];
 
 /** Creates `CHILD_CONCLUSIONS_INDEXES` on a store mameko's migrations have run on. */
@@ -63,11 +63,11 @@ export const CHILD_CONCLUSIONS_BATCH = 100;
  * `cross join` keeps the indexed parent-finished / child-parent traversal, ordered oldest first.
  */
 export const CHILDREN = `select c.id, c.scope_id, c.class, c.status, c.reason, 0 as concluded
-  from executions p cross join executions c on c.parent_id = p.id
+  from mameko_executions p cross join mameko_executions c on c.parent_id = p.id
   where p.finished_at <= ? and p.status not in ('pending', 'running')
-    and exists (select 1 from outbox o where o.execution_id = c.id and o.intent_key = 'cp:check:open')
-    and not exists (select 1 from outbox o where o.execution_id = c.id and o.intent_key = '${CHILD_CONCLUDE_KEY}')
-    and not exists (select 1 from outbox o where o.execution_id = c.id and o.kind = 'check.conclude' and o.state = 'applied')
+    and exists (select 1 from mameko_outbox o where o.execution_id = c.id and o.intent_key = 'cp:check:open')
+    and not exists (select 1 from mameko_outbox o where o.execution_id = c.id and o.intent_key = '${CHILD_CONCLUDE_KEY}')
+    and not exists (select 1 from mameko_outbox o where o.execution_id = c.id and o.kind = 'check.conclude' and o.state = 'applied')
   order by p.finished_at, c.id limit ?`;
 
 /** A child's own verdict: none while it is not terminal, and none when the parent-ended cascade cancelled it. */

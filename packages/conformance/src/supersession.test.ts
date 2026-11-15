@@ -80,7 +80,7 @@ const plane = async () => {
   const row = async (id: string) =>
     (
       await db
-        .prepare("select status, reason, supersession_key as key from executions where id = ?")
+        .prepare("select status, reason, supersession_key as key from mameko_executions where id = ?")
         .bind(id)
         .all()
     ).results[0] as { status: string; reason: string | null; key: string | null } | undefined;

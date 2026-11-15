@@ -172,7 +172,7 @@ const pullRequestLease = async (): Promise<Lease> => {
     .bind(JSON.stringify({ _tag: "PullRequest", number: 47 }), id)
     .run();
   await d1
-    .prepare("update executions set deadline_at = ? where id = ?")
+    .prepare("update mameko_executions set deadline_at = ? where id = ?")
     .bind(Date.now() + 3_600_000, id)
     .run();
   const socket = await connect(plane, executorId, device.keys);

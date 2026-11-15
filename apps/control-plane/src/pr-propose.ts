@@ -99,7 +99,7 @@ export const insertAcceptedPrPropose = (
         stores.db
           .prepare(
             `select p.state, p.accepted_epoch, p.executor_id, e.scope_id, e.run, e.class
-             from placements p join executions e on e.id = p.execution_id where p.execution_id = ?`,
+             from mameko_placements p join mameko_executions e on e.id = p.execution_id where p.execution_id = ?`,
           )
           .bind(executionId)
           .all(),

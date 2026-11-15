@@ -178,7 +178,7 @@ const enrollment = async (deployment: Deployment, phase: Phase, verified?: boole
     );
     const row = (
       await db
-        .prepare("select key_store, attested_at from executors where executor_id = ?")
+        .prepare("select key_store, attested_at from mameko_executors where executor_id = ?")
         .bind(executorId)
         .all()
     ).results[0] as { key_store: string; attested_at: number | null } | undefined;

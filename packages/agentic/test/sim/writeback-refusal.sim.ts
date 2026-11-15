@@ -173,7 +173,7 @@ const faultyD1 = (db: D1Like, faults: ReadonlySet<number>) => {
   let writes = 0;
   const wrap = (sql: string, s: ReturnType<D1Like["prepare"]>): ReturnType<D1Like["prepare"]> => {
     const guard = <A>(f: () => Promise<A>) => {
-      if (!/^\s*update outbox/i.test(sql)) return f();
+      if (!/^\s*update mameko_outbox/i.test(sql)) return f();
       const ordinal = writes++;
       return faults.has(ordinal) ? Promise.reject(new Error("D1_ERROR: injected")) : f();
     };
@@ -204,7 +204,7 @@ export const runScenario = async (seed: number): Promise<Observation> => {
   try {
     await t.db
       .prepare(
-        "insert into executions (id, scope_id, run, class, status, enqueued_at) values (?, 'acme/app', ?, 'batch', 'success', ?)",
+        "insert into mameko_executions (id, scope_id, run, class, status, enqueued_at) values (?, 'acme/app', ?, 'batch', 'success', ?)",
       )
       .bind(EXECUTION, RUN, T0)
       .run();

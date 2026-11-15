@@ -68,7 +68,7 @@ describe("the control plane's conclude facts", () => {
     await seedExecution(db, "exec-1");
     db.sqlite
       .prepare(
-        "update executions set status = 'skipped', reason = 'not-applicable: draft-pr' where id = ?",
+        "update mameko_executions set status = 'skipped', reason = 'not-applicable: draft-pr' where id = ?",
       )
       .run("exec-1");
     expect(await factsOf(envOf(db), "exec-1")).toMatchObject({

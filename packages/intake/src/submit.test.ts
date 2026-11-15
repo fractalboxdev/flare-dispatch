@@ -19,7 +19,7 @@ const SHA = "e".repeat(40);
 const opened = (h: Awaited<ReturnType<typeof harness>>, executionId: string) =>
   h
     .rows(
-      "select intent_key, kind, tier, payload_json from outbox where execution_id = ? order by id",
+      "select intent_key, kind, tier, payload_json from mameko_outbox where execution_id = ? order by id",
       executionId,
     )
     .map((r) => ({
@@ -42,7 +42,7 @@ describe("the check.open row admission inserts", () => {
       },
     ]);
     // The row's insertion marks the execution as having opened its surface (MAMEKO-OUT-055).
-    expect(h.rows("select surface_opened from executions where id = ?", executionId)).toEqual([
+    expect(h.rows("select surface_opened from mameko_executions where id = ?", executionId)).toEqual([
       { surface_opened: 1 },
     ]);
   });
@@ -118,7 +118,7 @@ describe("local-only work", () => {
       labels_json: '["local-only"]',
     });
     expect(opened(h, executionId)).toEqual([]);
-    expect(h.rows("select surface_opened from executions where id = ?", executionId)).toEqual([
+    expect(h.rows("select surface_opened from mameko_executions where id = ?", executionId)).toEqual([
       { surface_opened: 0 },
     ]);
   });

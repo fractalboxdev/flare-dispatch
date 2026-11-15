@@ -184,7 +184,7 @@ export const canaryStage = async (
   const { results } = await db
     .prepare(
       `select e.id, e.status, e.surface_delivered_at, p.state as placement
-       from executions e left join placements p on p.execution_id = e.id
+       from mameko_executions e left join mameko_placements p on p.execution_id = e.id
        where e.run = ? and e.scope_id = ? and e.enqueued_at >= ? order by e.enqueued_at desc limit 1`,
     )
     .bind(CANARY_RUN, config.fixtureRepo, pushedAt)

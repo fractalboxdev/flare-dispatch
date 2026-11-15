@@ -42,7 +42,7 @@ const drain = (deploy: AppDeploy, now: number) =>
 const outbox = (deploy: AppDeploy) =>
   deploy.db.sqlite
     .prepare(
-      "select intent_key, kind, state, external_ref from outbox where kind = 'dispatch.followOn'",
+      "select intent_key, kind, state, external_ref from mameko_outbox where kind = 'dispatch.followOn'",
     )
     .all();
 
@@ -68,13 +68,13 @@ describe("the dispatch.followOn row under a replayed apply", () => {
     await insert(deploy);
     deploy.db.sqlite
       .prepare(
-        `update outbox set state = 'in_flight', claim_token = 'lost', claim_expires_at = ?, external_ref = null,
+        `update mameko_outbox set state = 'in_flight', claim_token = 'lost', claim_expires_at = ?, external_ref = null,
            applied_at = null where kind = 'dispatch.followOn'`,
       )
       .run(NOW + 2_000);
     for (let pass = 1; pass <= 4; pass++) await drain(deploy, NOW + pass * 15 * 60_000);
     expect(
-      deploy.db.sqlite.prepare("select sends from outbox where kind = 'dispatch.followOn'").all(),
+      deploy.db.sqlite.prepare("select sends from mameko_outbox where kind = 'dispatch.followOn'").all(),
     ).toEqual([{ sends: 2 }]);
 
     expect(outbox(deploy)).toEqual([
@@ -86,7 +86,7 @@ describe("the dispatch.followOn row under a replayed apply", () => {
       },
     ]);
     expect(deploy.children()).toEqual([child]);
-    expect(deploy.db.sqlite.prepare("select canonical from dedup_keys").all()).toEqual([
+    expect(deploy.db.sqlite.prepare("select canonical from mameko_dedup_keys").all()).toEqual([
       { canonical: `${PARENT}/${INTENT_KEY}` },
     ]);
     expect(deploy.starts.map((p) => p.executionId)).toEqual([child!.execution_id]);

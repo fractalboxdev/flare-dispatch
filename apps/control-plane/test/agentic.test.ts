@@ -180,11 +180,11 @@ describe("the issued-credential read", () => {
       ),
     );
     for (const sql of [
-      "insert into executions (id, scope_id, run, status, enqueued_at, deadline_at) values ('x1', 'acme/widgets', 'spec-drift-pr', 'success', 0, 1900000000000)",
-      `insert into executors (executor_id, kind, posture_tier, labels_json, slots_json)
+      "insert into mameko_executions (id, scope_id, run, status, enqueued_at, deadline_at) values ('x1', 'acme/widgets', 'spec-drift-pr', 'success', 0, 1900000000000)",
+      `insert into mameko_executors (executor_id, kind, posture_tier, labels_json, slots_json)
          values ('c1', 'cloudflare', 'unmanaged', '[]', '{}')`,
-      "insert into placements (execution_id, state, epoch, executor_id, accepted_epoch) values ('x1', 'accepted', 2, 'c1', 2)",
-      `insert into lease_records (execution_id, epoch, class, executor_id, executor_kind, "end", ended_at)
+      "insert into mameko_placements (execution_id, state, epoch, executor_id, accepted_epoch) values ('x1', 'accepted', 2, 'c1', 2)",
+      `insert into mameko_lease_records (execution_id, epoch, class, executor_id, executor_kind, "end", ended_at)
          values ('x1', 1, 'batch', 'd1', 'device', 'reclaimed', 5)`,
     ])
       await db.prepare(sql).run();
@@ -356,9 +356,9 @@ describe("the mounted local registration port", () => {
       ]);
       // Admission places it under `local-only` and reserves no cloud spend for it.
       expect(
-        rows("select constraints, estimated_cost_micro_usd from executions where id = ?"),
+        rows("select constraints, estimated_cost_micro_usd from mameko_executions where id = ?"),
       ).toEqual([{ constraints: '["local-only"]', estimated_cost_micro_usd: 0 }]);
-      expect(rows("select intent_key from outbox where execution_id = ?")).toEqual([]);
+      expect(rows("select intent_key from mameko_outbox where execution_id = ?")).toEqual([]);
       expect(rows("select tree_hash from fd_local_registrations where execution_id = ?")).toEqual([
         { tree_hash: "tree-1" },
       ]);

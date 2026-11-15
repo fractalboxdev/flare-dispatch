@@ -203,7 +203,7 @@ const outboxOf = async (id: string) =>
     await (
       await db()
     )
-      .prepare("select intent_key, kind, state from outbox where execution_id = ? order by id")
+      .prepare("select intent_key, kind, state from mameko_outbox where execution_id = ? order by id")
       .bind(id)
       .all()
   ).results as unknown as readonly OutboxRow[];
@@ -341,7 +341,7 @@ describe("an agentic result's repository writes on the composed control plane", 
     const staged = (
       await d1
         .prepare(
-          "select intent_key, kind, epoch, committed from staged_intents where execution_id = ? order by intent_key",
+          "select intent_key, kind, epoch, committed from mameko_staged_intents where execution_id = ? order by intent_key",
         )
         .bind(id)
         .all()
@@ -369,7 +369,7 @@ describe("an agentic result's repository writes on the composed control plane", 
     const json = JSON.stringify(proposal.payload);
     await d1
       .prepare(
-        `insert into staged_intents (execution_id, epoch, intent_key, kind, limit_key, payload_json, payload_digest, effect_class)
+        `insert into mameko_staged_intents (execution_id, epoch, intent_key, kind, limit_key, payload_json, payload_digest, effect_class)
          values (?, ?, 'cp:pr:propose', 'pr.propose', ?, ?, ?, ?)`,
       )
       .bind(

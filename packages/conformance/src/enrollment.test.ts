@@ -236,7 +236,7 @@ const workerAnswer = async (mf: Miniflare, headers: Record<string, string>) => {
 /** The executor row columns, as the coordinator's registry stores them. */
 const executorRow = async (db: D1Like, executorId: string) =>
   (db as unknown as D1Database)
-    .prepare("select * from executors where executor_id = ?")
+    .prepare("select * from mameko_executors where executor_id = ?")
     .bind(executorId)
     .first<Record<string, unknown>>();
 
@@ -378,11 +378,11 @@ describe("the executor connect route", () => {
     const quarantined = await enroll(plane.mf, "quarantined-device");
     const revoked = await enroll(plane.mf, "revoked-device");
     await sql
-      .prepare("update executors set quarantine = 1 where executor_id = ?")
+      .prepare("update mameko_executors set quarantine = 1 where executor_id = ?")
       .bind("quarantined-device")
       .run();
     await sql
-      .prepare("update executors set revoked_at = ? where executor_id = ?")
+      .prepare("update mameko_executors set revoked_at = ? where executor_id = ?")
       .bind(Date.now(), "revoked-device")
       .run();
     for (const [executorId, device, reason] of [

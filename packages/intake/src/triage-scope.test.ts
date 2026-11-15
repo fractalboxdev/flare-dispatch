@@ -36,8 +36,8 @@ describe("triage issue scope", () => {
     ).toEqual({ status: 400, code: "invalid_inputs" });
     expect(h.executions()).toEqual([]);
     expect(h.records()).toEqual([]);
-    expect(h.rows("select * from dedup_keys")).toEqual([]);
-    expect(h.rows("select * from placements")).toEqual([]);
+    expect(h.rows("select * from mameko_dedup_keys")).toEqual([]);
+    expect(h.rows("select * from mameko_placements")).toEqual([]);
   });
 
   it("admits the same repository with case-insensitive owner and name", async () => {
@@ -45,7 +45,7 @@ describe("triage issue scope", () => {
     const inputs = { repo: { owner: "ACME", name: "App" } };
     const answer = await admit(h, authenticated({ run: "triage-issues", label: null, inputs }));
     expect(
-      h.rows("select scope_id from executions where id = ?", answer.executionId)[0]!.scope_id,
+      h.rows("select scope_id from mameko_executions where id = ?", answer.executionId)[0]!.scope_id,
     ).toBe(REPO);
     expect(JSON.parse(String(h.records()[0]!.inputs_json))).toEqual(inputs);
   });
@@ -92,8 +92,8 @@ describe("triage pull-request scope", () => {
     ).toEqual({ status: 400, code: "invalid_inputs" });
     expect(h.executions()).toEqual([]);
     expect(h.records()).toEqual([]);
-    expect(h.rows("select * from dedup_keys")).toEqual([]);
-    expect(h.rows("select * from placements")).toEqual([]);
+    expect(h.rows("select * from mameko_dedup_keys")).toEqual([]);
+    expect(h.rows("select * from mameko_placements")).toEqual([]);
   });
 
   it("admits a pull-request digest for the same repository with case-insensitive owner and name", async () => {
@@ -101,7 +101,7 @@ describe("triage pull-request scope", () => {
     const inputs = { repo: { owner: "ACME", name: "App" }, baseBranch: "main" };
     const answer = await admit(h, authenticated({ run: "triage-prs", label: null, inputs }));
     expect(
-      h.rows("select scope_id from executions where id = ?", answer.executionId)[0]!.scope_id,
+      h.rows("select scope_id from mameko_executions where id = ?", answer.executionId)[0]!.scope_id,
     ).toBe(REPO);
     expect(JSON.parse(String(h.records()[0]!.inputs_json))).toEqual(inputs);
   });

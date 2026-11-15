@@ -210,7 +210,7 @@ const verdicts = (db: D1Like, windowMs: number, now: number) =>
   query<KillLineVerdict>(
     db,
     `select e.run as run, p.accepted_kind as kind, e.finished_at - e.enqueued_at as ms
-     from executions e join placements p on p.execution_id = e.id
+     from mameko_executions e join mameko_placements p on p.execution_id = e.id
      where e.class = 'required' and e.status in ('success', 'failure')
        and e.finished_at is not null and p.accepted_kind is not null
        and e.finished_at > ? and e.finished_at <= ?`,
@@ -238,7 +238,7 @@ export const readKillLines = (db: D1Like, now: number) =>
     const availability = yield* query<EligibleCount>(
       db,
       `select count(*) as eligible, coalesce(sum(p.accepted_kind = ?), 0) as on_device
-       from executions e join placements p on p.execution_id = e.id
+       from mameko_executions e join mameko_placements p on p.execution_id = e.id
        where p.accepted_kind is not null and e.finished_at is not null
          and e.finished_at > ? and e.finished_at <= ?
          and (p.eligible_kinds is null

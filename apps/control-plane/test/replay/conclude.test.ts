@@ -62,10 +62,10 @@ const drain = (db: TestD1, gh: ReturnType<typeof fakeGithub>, now: number) =>
 const snapshot = (db: TestD1) => ({
   outbox: db.sqlite
     .prepare(
-      "select execution_id, intent_key, kind, tier, payload_json, state, attempts, external_ref from outbox order by id",
+      "select execution_id, intent_key, kind, tier, payload_json, state, attempts, external_ref from mameko_outbox order by id",
     )
     .all(),
-  executions: db.sqlite.prepare("select id, status, reason from executions order by id").all(),
+  executions: db.sqlite.prepare("select id, status, reason from mameko_executions order by id").all(),
 });
 
 const OUTCOMES: readonly ExecutionOutcome[] = [

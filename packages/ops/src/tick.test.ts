@@ -123,7 +123,7 @@ const tick = (env: TickEnv, d: TickDeps, now: number) => Effect.runPromise(minut
 const outbox = async () =>
   (
     await t.db
-      .prepare("select id, kind, limit_key, execution_id, state from outbox order by id")
+      .prepare("select id, kind, limit_key, execution_id, state from mameko_outbox order by id")
       .all()
   ).results as {
     id: string;
@@ -381,13 +381,13 @@ describe("minute tick", () => {
     ] as const) {
       await t.db
         .prepare(
-          "insert into executions (id, scope_id, run, class, status, enqueued_at, finished_at) values (?, 'acme/app', 'check', 'required', 'success', ?, ?)",
+          "insert into mameko_executions (id, scope_id, run, class, status, enqueued_at, finished_at) values (?, 'acme/app', 'check', 'required', 'success', ?, ?)",
         )
         .bind(id, T0 - 60_000 - ms, T0 - 60_000)
         .run();
       await t.db
         .prepare(
-          "insert into placements (execution_id, state, epoch, accepted_kind, eligible_kinds) values (?, 'accepted', 1, ?, ?)",
+          "insert into mameko_placements (execution_id, state, epoch, accepted_kind, eligible_kinds) values (?, 'accepted', 1, ?, ?)",
         )
         .bind(id, kind, JSON.stringify([kind]))
         .run();
@@ -423,13 +423,13 @@ describe("minute tick", () => {
     ] as const) {
       await t.db
         .prepare(
-          "insert into executions (id, scope_id, run, class, status, enqueued_at, finished_at) values (?, 'acme/app', 'check', 'required', 'success', ?, ?)",
+          "insert into mameko_executions (id, scope_id, run, class, status, enqueued_at, finished_at) values (?, 'acme/app', 'check', 'required', 'success', ?, ?)",
         )
         .bind(id, T0 - 60_000 - ms, T0 - 60_000)
         .run();
       await t.db
         .prepare(
-          "insert into placements (execution_id, state, epoch, accepted_kind, eligible_kinds) values (?, 'accepted', 1, ?, ?)",
+          "insert into mameko_placements (execution_id, state, epoch, accepted_kind, eligible_kinds) values (?, 'accepted', 1, ?, ?)",
         )
         .bind(id, kind, JSON.stringify([kind]))
         .run();
@@ -481,7 +481,7 @@ describe("the GitHub probes' rows and reads", () => {
     (
       (
         await t.db
-          .prepare("select payload_json from outbox where kind = ? order by id")
+          .prepare("select payload_json from mameko_outbox where kind = ? order by id")
           .bind(kind)
           .all()
       ).results as { payload_json: string }[]
@@ -669,7 +669,7 @@ describe("the minute tick's job and verdict records", () => {
     const terminal = status !== "pending" && status !== "running";
     await t.db
       .prepare(
-        `insert into executions (id, scope_id, run, class, status, reason, enqueued_at, finished_at)
+        `insert into mameko_executions (id, scope_id, run, class, status, reason, enqueued_at, finished_at)
          values (?, 'acme/app', 'ci', 'required', ?, ?, ?, ?)`,
       )
       .bind(id, status, over.reason ?? null, FINISHED - 60_000, terminal ? FINISHED : null)
@@ -719,7 +719,7 @@ describe("the minute tick's job and verdict records", () => {
     (
       await t.db
         .prepare(
-          `select id, execution_id, scope_id, intent_key, limit_key, state, payload_json from outbox
+          `select id, execution_id, scope_id, intent_key, limit_key, state, payload_json from mameko_outbox
            where kind = 'verdict.record' order by id`,
         )
         .all()
@@ -736,7 +736,7 @@ describe("the minute tick's job and verdict records", () => {
   const executionRow = async (id: string) =>
     (
       await t.db
-        .prepare("select status, reason, finished_at from executions where id = ?")
+        .prepare("select status, reason, finished_at from mameko_executions where id = ?")
         .bind(id)
         .all()
     ).results[0];
@@ -749,7 +749,7 @@ describe("the minute tick's job and verdict records", () => {
     await seed("e-pass", "success");
     await t.db
       .prepare(
-        "insert into placements (execution_id, state, epoch, accepted_epoch) values (?, ?, ?, ?)",
+        "insert into mameko_placements (execution_id, state, epoch, accepted_epoch) values (?, ?, ?, ?)",
       )
       .bind("e-pass", "accepted", 2, 2)
       .run();
@@ -759,7 +759,7 @@ describe("the minute tick's job and verdict records", () => {
     // Placed but cancelled while queued, so never granted a lease: the placement's epoch 1 names no grant.
     await seed("e-queued", "cancelled", { reason: "operator-cancel" });
     await t.db
-      .prepare("insert into placements (execution_id, state, epoch) values (?, ?, ?)")
+      .prepare("insert into mameko_placements (execution_id, state, epoch) values (?, ?, ?)")
       .bind("e-queued", "queued", 1)
       .run();
     // A check run whose conclusion is not applied yet: the record carries no conclusion.
@@ -866,7 +866,7 @@ describe("the minute tick's job and verdict records", () => {
     const again = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0 + 60_000);
     expect(again.steps.find((s) => s.step === "verdict-records")).toMatchObject({ detail: [] });
     await t.db
-      .prepare("update executions set status = 'success', finished_at = ? where id = 'e-live'")
+      .prepare("update mameko_executions set status = 'success', finished_at = ? where id = 'e-live'")
       .bind(T0 + 90_000)
       .run();
     const later = await tick({ DB: t.db, MONITOR: monitor().ns }, d, T0 + 120_000);
@@ -1016,7 +1016,7 @@ describe("the minute tick's job and verdict records", () => {
     const conclusionRows = async () =>
       (
         await t.db
-          .prepare("select id, state, payload_json from outbox where kind = 'check.conclude'")
+          .prepare("select id, state, payload_json from mameko_outbox where kind = 'check.conclude'")
           .all()
       ).results;
     const concludedBefore = await conclusionRows();
@@ -1075,11 +1075,11 @@ describe("the minute tick's job and verdict records", () => {
     );
     await insertOutboxRows(t.db, [row("e-leased", "cp:job-record", "job.record", {})]);
     await t.db
-      .prepare("update outbox set state = 'expired' where intent_key = 'ops:verdict-record:e-old'")
+      .prepare("update mameko_outbox set state = 'expired' where intent_key = 'ops:verdict-record:e-old'")
       .run();
     await t.db
       .prepare(
-        "update outbox set state = 'refused', last_error = 'job.record: records 403' where kind = 'job.record'",
+        "update mameko_outbox set state = 'refused', last_error = 'job.record: records 403' where kind = 'job.record'",
       )
       .run();
     let failing = true;

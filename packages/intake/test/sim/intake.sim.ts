@@ -267,7 +267,7 @@ export const simulateRedelivery = async (seed: number): Promise<SimOutcome> => {
         replaced.delete(id);
     }
     // Every key the model knows names one execution, admitted or held, and no request wrote another.
-    const written = count(h, "executions") + count(h, "intake_held") - replaced.size;
+    const written = count(h, "mameko_executions") + count(h, "intake_held") - replaced.size;
     if (written !== commit.size + idem.size)
       fail(s, `${written} executions for ${commit.size + idem.size} keys`);
   }
@@ -317,7 +317,8 @@ export const simulateAdmissionFailure = async (seed: number): Promise<SimOutcome
   const fail = (step: string, message: string) =>
     violations.push({ id: "FD-INT-004", message: `${step}: ${message}` });
   const rows = () =>
-    ["executions", "dedup_keys", "placements", "intake_records"].map((t) => count(h, t)).join(",");
+    ["mameko_executions", "mameko_dedup_keys", "mameko_placements", "intake_records"]
+      .map((t) => count(h, t)).join(",");
 
   for (let step = 0; step < 30; step++) {
     const s = `step ${step}`;
@@ -359,8 +360,8 @@ export const simulateAdmissionFailure = async (seed: number): Promise<SimOutcome
       admitted.set(head, answer.id!);
     } else if (answer.dup !== true || answer.id !== was)
       fail(s, `${head[0]} answered another execution than the one it admitted`);
-    if (count(h, "executions") !== admitted.size)
-      fail(s, `${count(h, "executions")} executions for ${admitted.size} heads`);
+    if (count(h, "mameko_executions") !== admitted.size)
+      fail(s, `${count(h, "mameko_executions")} executions for ${admitted.size} heads`);
   }
   return { violations, reached, trace };
 };
@@ -756,20 +757,20 @@ export const simulateDoubleTick = async (seed: number): Promise<SimOutcome> => {
     for (const e of h.executions())
       if (e.status === "pending" && random() < 0.3)
         h.db.sqlite
-          .prepare("update executions set status = 'success' where id = ?")
+          .prepare("update mameko_executions set status = 'success' where id = ?")
           .run(e.id as string);
     await h.adjust(60_000);
     const keys = h.rows(
-      "select d.canonical, count(e.id) as n from dedup_keys d left join executions e on e.id = d.execution_id group by d.canonical",
+      "select d.canonical, count(e.id) as n from mameko_dedup_keys d left join mameko_executions e on e.id = d.execution_id group by d.canonical",
     );
     const have = new Map(keys.map((k) => [k.canonical as string, Number(k.n)]));
     for (const k of want) if (have.get(k) !== 1) fail(s, `${k} has ${have.get(k) ?? 0} executions`);
     for (const k of have.keys())
       if (!want.has(k)) fail(s, `${k} has an execution no schedule matches`);
-    if (count(h, "executions") !== want.size)
+    if (count(h, "mameko_executions") !== want.size)
       fail(
         s,
-        `${count(h, "executions")} executions for ${want.size} scheduled (run, repository, minute) keys`,
+        `${count(h, "mameko_executions")} executions for ${want.size} scheduled (run, repository, minute) keys`,
       );
   }
   reached.matched = want.size;

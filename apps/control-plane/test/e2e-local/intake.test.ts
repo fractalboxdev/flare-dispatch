@@ -148,7 +148,7 @@ describe("the manifest decides what a trigger submits", () => {
     expect(((await r.json()) as { executions: string[] }).executions).toEqual([]);
     // The manifest's one valid entry is not submitted either.
     expect(await recordsOf(BROKEN)).toEqual([]);
-    expect(await query("select reason from shed where scope_id = ?", BROKEN)).toEqual([
+    expect(await query("select reason from mameko_shed where scope_id = ?", BROKEN)).toEqual([
       { reason: "manifest: invalid" },
     ]);
     const posted = stack.github.writes.filter((w) => w.path === `/repos/${BROKEN}/check-runs`);

@@ -39,7 +39,7 @@ describe("FD-INT-061 local submit", () => {
       labels_json: '["local-only"]',
       class: "batch",
     });
-    expect(h.rows("select canonical from dedup_keys")[0]!.canonical).toBe(
+    expect(h.rows("select canonical from mameko_dedup_keys")[0]!.canonical).toBe(
       "local:L1:check:tree-1:inputs-1",
     );
     expect(h.recorded.resolved).toEqual([]);
@@ -97,11 +97,11 @@ describe("FD-ARCH-018 work in a capacity lease and the check run", () => {
     });
   const kinds = (h: Harness, executionId: string) =>
     h
-      .rows("select kind from outbox where execution_id = ? order by id", executionId)
+      .rows("select kind from mameko_outbox where execution_id = ? order by id", executionId)
       .map((r) => r["kind"]);
   const execution = (h: Harness, executionId: string) =>
     h.rows(
-      "select class, status, outcome_kind, surface_opened from executions where id = ?",
+      "select class, status, outcome_kind, surface_opened from mameko_executions where id = ?",
       executionId,
     )[0];
   const admittedId = (answer: unknown) => (answer as { executionId: string }).executionId;

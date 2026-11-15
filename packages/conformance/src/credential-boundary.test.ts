@@ -162,7 +162,7 @@ const claimOn = async (
     .bind(JSON.stringify(inputs(JSON.parse(row!.inputs_json))), id)
     .run();
   await db
-    .prepare("update executions set deadline_at = ? where id = ?")
+    .prepare("update mameko_executions set deadline_at = ? where id = ?")
     .bind(Date.now() + 3_600_000, id)
     .run();
   const socket = await connect(plane, executorId, device.keys);
@@ -269,8 +269,8 @@ describe("the lease the composed control plane grants", () => {
 
       const db = (await plane.getD1Database("DB")) as unknown as D1Database;
       const count = async (sql: string) => (await db.prepare(sql).first<{ n: number }>())!.n;
-      expect(await count("select count(*) as n from executions")).toBe(0);
-      expect(await count("select count(*) as n from placements")).toBe(0);
+      expect(await count("select count(*) as n from mameko_executions")).toBe(0);
+      expect(await count("select count(*) as n from mameko_placements")).toBe(0);
       expect(await count("select count(*) as n from intake_records")).toBe(0);
 
       // The standing claim is still open and took no lease: the next admitted execution is the first lease it sees.
@@ -281,7 +281,7 @@ describe("the lease the composed control plane grants", () => {
       expect(lease).toMatchObject({ type: "exec.lease", execution_id: id });
       expect(JSON.stringify(lease)).not.toMatch(INSTALLATION_TOKEN_SHAPE);
       const leased = await db
-        .prepare("select execution_id from placements where state = 'leased'")
+        .prepare("select execution_id from mameko_placements where state = 'leased'")
         .all<{ execution_id: string }>();
       expect(leased.results).toEqual([{ execution_id: id }]);
       await endStandingClaim(socket);

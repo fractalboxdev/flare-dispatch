@@ -46,8 +46,8 @@ const placementOf = (db: D1Binding, executionId: string) =>
     const [placement] = yield* rows<{ epoch: number; kind: string | null }>(
       db,
       "placements",
-      `select coalesce(p.accepted_epoch, p.epoch) as epoch, x.kind as kind from placements p
-       left join executors x on x.executor_id = p.executor_id where p.execution_id = ?`,
+      `select coalesce(p.accepted_epoch, p.epoch) as epoch, x.kind as kind from mameko_placements p
+       left join mameko_executors x on x.executor_id = p.executor_id where p.execution_id = ?`,
       executionId,
     );
     if (placement === undefined)
@@ -139,7 +139,7 @@ const readModelCalls = (db: D1Binding) => (executionId: string) =>
     const [calls] = yield* rows<{ n: number }>(
       db,
       "gateway",
-      "select count(*) as n from model_calls where execution_id = ?",
+      "select count(*) as n from mameko_model_calls where execution_id = ?",
       executionId,
     );
     if ((calls?.n ?? 0) > 0) return true;

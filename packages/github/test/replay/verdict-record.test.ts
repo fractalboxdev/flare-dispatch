@@ -141,7 +141,7 @@ const plane = async () => {
   ]);
   const actuatorOf = actuatorBindings(profile.intent_kinds);
   const state = () =>
-    db.sqlite.prepare("select state, external_ref from outbox").all() as {
+    db.sqlite.prepare("select state, external_ref from mameko_outbox").all() as {
       state: string;
       external_ref: string | null;
     }[];

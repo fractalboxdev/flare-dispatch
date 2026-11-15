@@ -190,7 +190,7 @@ export const phaseGateRecords = (db: D1Like, gate: number, now: number) =>
       const samples = yield* query<VerdictSample>(
         db,
         `select e.run as run, p.accepted_kind as kind, e.finished_at - e.enqueued_at as ms
-         from executions e join placements p on p.execution_id = e.id
+         from mameko_executions e join mameko_placements p on p.execution_id = e.id
          where e.class = 'required' and e.status in ('success', 'failure')
            and e.finished_at is not null and p.accepted_kind is not null
            and e.finished_at > ? and e.finished_at <= ?`,

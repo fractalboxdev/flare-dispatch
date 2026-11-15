@@ -374,7 +374,7 @@ describe("writeback gate", () => {
         status: "accepted",
         effects: [
           "d1 insert fd_local_writebacks",
-          "d1 insert outbox",
+          "d1 insert mameko_outbox",
           `intent ${execution_id}/run:propose:0`,
           "github branchProtected",
         ],
@@ -386,7 +386,7 @@ describe("writeback gate", () => {
         status: "accepted",
         effects: [
           "d1 insert fd_local_writebacks",
-          "d1 insert outbox",
+          "d1 insert mameko_outbox",
           `intent ${execution_id}/run:review:1`,
         ],
       });

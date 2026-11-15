@@ -538,7 +538,7 @@ describe("the cloud executor's agentic layers", () => {
     ) =>
       db
         .prepare(
-          `insert into executions (id, scope_id, run, class, status, reason, enqueued_at, finished_at)
+          `insert into mameko_executions (id, scope_id, run, class, status, reason, enqueued_at, finished_at)
            values (?, ?, 'check', 'required', ?, ?, ?, ?)`,
         )
         .bind(id, scope, status, reason, finishedAt - 1000, finishedAt)
@@ -573,7 +573,7 @@ describe("the cloud executor's agentic layers", () => {
     const db = memoryD1();
     await db
       .prepare(
-        `insert into executions (id, scope_id, run, class, status, reason, enqueued_at, finished_at)
+        `insert into mameko_executions (id, scope_id, run, class, status, reason, enqueued_at, finished_at)
          values ('x-1', 'o/r', 'check', 'required', 'failure', 'finding: test', 1, 10)`,
       )
       .bind()
@@ -608,12 +608,12 @@ describe("the cloud executor's agentic layers", () => {
   it("[FD-AGT-071] [FD-AGT-042] selects the accepted or current epoch and refuses an older attempt's log when the failed attempt wrote none", async () => {
     const db = memoryD1();
     await db
-      .prepare(`insert into executions (id, scope_id, run, class, status, enqueued_at, finished_at)
+      .prepare(`insert into mameko_executions (id, scope_id, run, class, status, enqueued_at, finished_at)
       values ('reclaimed', 'o/r', 'check', 'required', 'failure', 1, 10)`)
       .bind()
       .run();
     await db
-      .prepare(`insert into placements (execution_id, state, epoch, accepted_epoch)
+      .prepare(`insert into mameko_placements (execution_id, state, epoch, accepted_epoch)
       values ('reclaimed', 'failed', 3, 2)`)
       .bind()
       .run();
@@ -629,7 +629,7 @@ describe("the cloud executor's agentic layers", () => {
       );
     expect(await read()).toMatchObject({ _tag: "Success", success: "accepted failure" });
     await db
-      .prepare("update placements set accepted_epoch = null where execution_id = 'reclaimed'")
+      .prepare("update mameko_placements set accepted_epoch = null where execution_id = 'reclaimed'")
       .bind()
       .run();
     expect(await read()).toMatchObject({
@@ -637,12 +637,12 @@ describe("the cloud executor's agentic layers", () => {
       failure: { source: "logs", detail: expect.stringContaining("epoch 3") },
     });
     await db
-      .prepare("update placements set epoch = 2 where execution_id = 'reclaimed'")
+      .prepare("update mameko_placements set epoch = 2 where execution_id = 'reclaimed'")
       .bind()
       .run();
     expect(await read()).toMatchObject({ _tag: "Success", success: "accepted failure" });
     await db
-      .prepare("update placements set accepted_epoch = 1 where execution_id = 'reclaimed'")
+      .prepare("update mameko_placements set accepted_epoch = 1 where execution_id = 'reclaimed'")
       .bind()
       .run();
     expect(await read()).toMatchObject({ _tag: "Success", success: "old attempt" });

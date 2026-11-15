@@ -473,7 +473,7 @@ describe("the cache, artifact and log routes", () => {
     const db = await development.getD1Database("DB");
     await db
       .prepare(
-        `insert into executions (id, scope_id, run, class, status, enqueued_at)
+        `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at)
          values (?, 'fractalboxdev/flare-dispatch', 'check', 'batch', 'success', ?)`,
       )
       .bind(EXECUTION, Date.now())
@@ -515,7 +515,7 @@ describe("the cache, artifact and log routes", () => {
     await bucket.put(`artifact/${EXECUTION}/1/report.txt.browse/a/b.txt`, "browse body");
     await db
       .prepare(
-        `insert into executions (id, scope_id, run, class, status, enqueued_at)
+        `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at)
          values (?, 'acme/private', 'check', 'batch', 'success', ?)`,
       )
       .bind(PRIVATE_EXECUTION, Date.now())
@@ -823,7 +823,7 @@ describe("the failure summary", () => {
     ] as const)
       await db
         .prepare(
-          `insert into executions (id, scope_id, run, class, status, reason, enqueued_at)
+          `insert into mameko_executions (id, scope_id, run, class, status, reason, enqueued_at)
            values (?, 'fractalboxdev/flare-dispatch', ?, 'batch', 'failure', ?, ?)`,
         )
         .bind(id, run, REASON, Date.now())
@@ -847,7 +847,7 @@ describe("the failure summary", () => {
     ] as const)
       await db
         .prepare(
-          `insert into placements (execution_id, state, epoch, accepted_epoch) values (?, 'failed', ?, ?)`,
+          `insert into mameko_placements (execution_id, state, epoch, accepted_epoch) values (?, 'failed', ?, ?)`,
         )
         .bind(id, epoch, accepted)
         .run();
@@ -924,7 +924,7 @@ describe("a production deployment", () => {
     expect(body.error).toBe("registration_refused");
     expect(body.message).toContain("key-store");
     const db = await production.getD1Database("DB");
-    expect((await db.prepare("select * from executors").all()).results).toEqual([]);
+    expect((await db.prepare("select * from mameko_executors").all()).results).toEqual([]);
   });
 });
 
@@ -1005,8 +1005,8 @@ describe("a development deployment", () => {
         await development.getD1Database("DB")
       )
         .prepare(
-          `select e.deadline_at as execution, p.deadline_at as placement from executions e
-           join placements p on p.execution_id = e.id where e.id = ?`,
+          `select e.deadline_at as execution, p.deadline_at as placement from mameko_executions e
+           join mameko_placements p on p.execution_id = e.id where e.id = ?`,
         )
         .bind(id)
         .all()
@@ -1232,7 +1232,7 @@ describe("placement of cloud-pinned runs through admission and the lease path", 
       const row = async () =>
         (
           await db
-            .prepare("select state, eligible_kinds from placements where execution_id = ?")
+            .prepare("select state, eligible_kinds from mameko_placements where execution_id = ?")
             .bind(id)
             .all()
         ).results;
@@ -1248,7 +1248,7 @@ describe("placement of cloud-pinned runs through admission and the lease path", 
 
       // The eligible kinds alone keep the device out: with them cleared, the same claim takes the lease.
       await db
-        .prepare("update placements set eligible_kinds = null where execution_id = ?")
+        .prepare("update mameko_placements set eligible_kinds = null where execution_id = ?")
         .bind(id)
         .run();
       socket.send({ type: "exec.claim", id: "c2", free: { [className]: 1 } });
@@ -1293,7 +1293,7 @@ describe("placement of cloud-pinned runs through admission and the lease path", 
     await (
       await placement.getD1Database("DB")
     )
-      .prepare("update placements set eligible_kinds = null where execution_id = ?")
+      .prepare("update mameko_placements set eligible_kinds = null where execution_id = ?")
       .bind(id)
       .run();
     const socket = await connect(placement, "mac-scan-lease", device.keys);
@@ -1343,7 +1343,7 @@ describe("placement of cloud-pinned runs through admission and the lease path", 
     await (
       await placement.getD1Database("DB")
     )
-      .prepare("update placements set eligible_kinds = null where execution_id = ?")
+      .prepare("update mameko_placements set eligible_kinds = null where execution_id = ?")
       .bind(id)
       .run();
     const socket = await connect(placement, "mac-model-lease", device.keys);
@@ -1406,7 +1406,7 @@ describe("the declared dispatch route", () => {
     expect(body.error).toBe("invalid_signals");
     expect(body.message).toMatch(/^signals\.0\.detail/);
     const db = await linked.getD1Database("DB");
-    expect((await db.prepare("select id from executions").all()).results).toEqual([]);
+    expect((await db.prepare("select id from mameko_executions").all()).results).toEqual([]);
   });
 
   it("[FD-IFC-001] [FD-IFC-035] answers an admitted dispatch with details_url and logs_url signed by a link token for the execution", async () => {

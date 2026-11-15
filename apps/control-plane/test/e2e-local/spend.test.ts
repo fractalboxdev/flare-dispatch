@@ -61,7 +61,7 @@ describe("GET /v1/spend", () => {
       await (
         await db()
       )
-        .prepare("select class from executions where id = ?")
+        .prepare("select class from mameko_executions where id = ?")
         .bind(executionId)
         .all()
     ).results as { class: string }[];
@@ -72,7 +72,7 @@ describe("GET /v1/spend", () => {
     const store = await db();
     await store
       .prepare(
-        `insert into reservations (execution_id, class, hold_micro_usd, state, updated_at)
+        `insert into mameko_reservations (execution_id, class, hold_micro_usd, state, updated_at)
          values (?, ?, 250000, 'held', ?)
          on conflict (execution_id) do update set hold_micro_usd = 250000, state = 'held'`,
       )
@@ -80,7 +80,7 @@ describe("GET /v1/spend", () => {
       .run();
     await store
       .prepare(
-        "insert into spend_month (month, settled_micro_usd) values (?, 3000000), (?, 7000000)",
+        "insert into mameko_spend_month (month, settled_micro_usd) values (?, 3000000), (?, 7000000)",
       )
       .bind(month, monthOf(monthStart(now, -1)))
       .run();

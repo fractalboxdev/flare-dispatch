@@ -261,7 +261,7 @@ export const localPlane = async (opts: { readonly rate?: number } = {}) => {
   const held = (executionId: string): ReadonlySet<string> =>
     new Set(
       (
-        sqlite.prepare("select intent_key from outbox where execution_id = ?").all(executionId) as {
+        sqlite.prepare("select intent_key from mameko_outbox where execution_id = ?").all(executionId) as {
           intent_key: string;
         }[]
       ).map((r) => r.intent_key),
@@ -300,7 +300,7 @@ export const localPlane = async (opts: { readonly rate?: number } = {}) => {
     (
       sqlite
         .prepare(
-          "select execution_id, intent_key, kind from outbox order by execution_id, intent_key",
+          "select execution_id, intent_key, kind from mameko_outbox order by execution_id, intent_key",
         )
         .all() as { execution_id: string; intent_key: string; kind: string }[]
     ).map((r) => ({ executionId: r.execution_id, intentKey: r.intent_key, kind: r.kind }));

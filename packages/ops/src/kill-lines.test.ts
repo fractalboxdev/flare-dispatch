@@ -32,14 +32,14 @@ const verdict = async (
   const finishedAt = over.finishedAt ?? NOW - DAY;
   await t.db
     .prepare(
-      "insert into executions (id, scope_id, run, class, status, enqueued_at, finished_at) values (?, 'acme/app', ?, ?, 'success', ?, ?)",
+      "insert into mameko_executions (id, scope_id, run, class, status, enqueued_at, finished_at) values (?, 'acme/app', ?, ?, 'success', ?, ?)",
     )
     .bind(id, run, over.cls ?? "required", finishedAt - ms, finishedAt)
     .run();
   const eligible = over.eligible === undefined ? null : over.eligible;
   await t.db
     .prepare(
-      "insert into placements (execution_id, state, epoch, accepted_kind, eligible_kinds) values (?, 'accepted', 1, ?, ?)",
+      "insert into mameko_placements (execution_id, state, epoch, accepted_kind, eligible_kinds) values (?, 'accepted', 1, ?, ?)",
     )
     .bind(id, kind, eligible === null ? null : JSON.stringify(eligible))
     .run();

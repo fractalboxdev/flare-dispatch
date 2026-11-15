@@ -169,9 +169,9 @@ export const issuedCredentials = (env: ControlPlaneEnv) => (executionId: string)
       try: async () =>
         (
           await env.DB.prepare(
-            `select epoch, executor_kind as kind from lease_records where execution_id = ?1
-             union select p.epoch, x.kind from placements p
-               left join executors x on x.executor_id = p.executor_id where p.execution_id = ?1`,
+            `select epoch, executor_kind as kind from mameko_lease_records where execution_id = ?1
+             union select p.epoch, x.kind from mameko_placements p
+               left join mameko_executors x on x.executor_id = p.executor_id where p.execution_id = ?1`,
           )
             .bind(executionId)
             .all()
@@ -181,7 +181,7 @@ export const issuedCredentials = (env: ControlPlaneEnv) => (executionId: string)
     const execution = yield* Effect.tryPromise({
       try: async () =>
         (
-          await env.DB.prepare(`select deadline_at from executions where id = ?1`)
+          await env.DB.prepare(`select deadline_at from mameko_executions where id = ?1`)
             .bind(executionId)
             .all()
         ).results[0] as { deadline_at: number } | undefined,

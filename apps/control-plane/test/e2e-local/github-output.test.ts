@@ -120,7 +120,7 @@ interface OutboxRow {
 
 const outbox = async () =>
   (await query(
-    "select execution_id, kind, state, sends, external_ref, payload_json from outbox order by inserted_at, id",
+    "select execution_id, kind, state, sends, external_ref, payload_json from mameko_outbox order by inserted_at, id",
   )) as unknown as OutboxRow[];
 
 describe("a merge group's checks_requested", () => {

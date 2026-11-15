@@ -6,10 +6,10 @@ import type { ArtifactObjects } from "./records.ts";
 /** mameko's `placements`, `executors` and `model_calls` columns the records read, over `node:sqlite`. */
 export const recordsDb = (): D1Binding & { readonly exec: (sql: string) => void } => {
   const db = new DatabaseSync(":memory:");
-  db.exec(`create table placements (execution_id text primary key, state text not null, epoch integer not null,
+  db.exec(`create table mameko_placements (execution_id text primary key, state text not null, epoch integer not null,
     executor_id text, accepted_epoch integer)`);
-  db.exec("create table executors (executor_id text primary key, kind text not null)");
-  db.exec("create table model_calls (call_id text primary key, execution_id text not null)");
+  db.exec("create table mameko_executors (executor_id text primary key, kind text not null)");
+  db.exec("create table mameko_model_calls (call_id text primary key, execution_id text not null)");
   return {
     exec: (sql) => db.exec(sql),
     prepare: (query) => ({

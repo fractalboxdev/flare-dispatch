@@ -82,7 +82,7 @@ export const seedExecution = async (db: TestD1, executionId: string, status = "r
   );
   db.sqlite
     .prepare(
-      `insert into executions (id, scope_id, run, class, status, enqueued_at) values (?, 'acme/app', 'check', 'required', ?, ?)`,
+      `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at) values (?, 'acme/app', 'check', 'required', ?, ?)`,
     )
     .run(executionId, status, NOW);
 };

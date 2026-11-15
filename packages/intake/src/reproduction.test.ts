@@ -86,11 +86,11 @@ describe("the reproduction submitter", () => {
     // The release's cache trigger is not carried: a reproduction reads no protected tier as a tag push would.
     expect(JSON.parse(record!["cache_trigger_json"] as string)).toEqual(OTHER_CACHE_TRIGGER);
     expect(
-      h.rows("select canonical from dedup_keys where canonical like ?", `${RELEASE_ID}/%`),
+      h.rows("select canonical from mameko_dedup_keys where canonical like ?", `${RELEASE_ID}/%`),
     ).toEqual([{ canonical: `${RELEASE_ID}/reproduction` }]);
 
     // Admission placed it on devices alone, and the profile's constraint asks the attested-dedicated tier of them.
-    const [placement] = h.rows("select eligible_kinds from placements where execution_id = ?", id);
+    const [placement] = h.rows("select eligible_kinds from mameko_placements where execution_id = ?", id);
     const kinds = JSON.parse(placement!["eligible_kinds"] as string) as string[];
     expect(kinds).toEqual(["device"]);
     expect(
@@ -159,7 +159,7 @@ describe("the reproduction submitter", () => {
     });
     expect(admitted).toMatchObject({ _tag: "admitted" });
     const id = (admitted as { executionId: string }).executionId;
-    const [placement] = h.rows("select eligible_kinds from placements where execution_id = ?", id);
+    const [placement] = h.rows("select eligible_kinds from mameko_placements where execution_id = ?", id);
     expect(JSON.parse(placement!["eligible_kinds"] as string)).toEqual(["device"]);
   });
 });

@@ -83,7 +83,7 @@ export const simulateLanes = async (seed: number): Promise<LanesOutcome> => {
     const id = `dev-${x + 1}`;
     db.sqlite
       .prepare(
-        `insert into executors (executor_id, kind, posture_tier, labels_json, slots_json, last_heartbeat_at, drain, quarantine)
+        `insert into mameko_executors (executor_id, kind, posture_tier, labels_json, slots_json, last_heartbeat_at, drain, quarantine)
          values (?, 'device', 'unmanaged', '[]', '{}', ?, 0, 0)`,
       )
       .run(id, now);
@@ -95,17 +95,17 @@ export const simulateLanes = async (seed: number): Promise<LanesOutcome> => {
         const startedAt = now - int(3_600_000);
         db.sqlite
           .prepare(
-            `insert into executions (id, scope_id, run, class, status, enqueued_at) values (?, 'acme/app', 'check', ?, 'running', ?)`,
+            `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at) values (?, 'acme/app', 'check', ?, 'running', ?)`,
           )
           .run(executionId, cls, startedAt);
         db.sqlite
           .prepare(
-            "insert into placements (execution_id, state, epoch, executor_id) values (?, 'leased', 1, ?)",
+            "insert into mameko_placements (execution_id, state, epoch, executor_id) values (?, 'leased', 1, ?)",
           )
           .run(executionId, id);
         db.sqlite
           .prepare(
-            `insert into reservations (execution_id, class, hold_micro_usd, state, updated_at) values (?, ?, ?, 'held', ?)`,
+            `insert into mameko_reservations (execution_id, class, hold_micro_usd, state, updated_at) values (?, ?, ?, 'held', ?)`,
           )
           .run(executionId, cls, int(5_000_000), now);
       }

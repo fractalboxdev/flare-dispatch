@@ -112,9 +112,9 @@ const rows = async <T = Record<string, unknown>>(sql: string, ...params: unknown
 /** How many rows each table admission owns holds, and intake's own records. */
 const counts = async () => {
   const [row] = await rows<Record<string, number>>(
-    `select (select count(*) from executions) as executions,
-            (select count(*) from dedup_keys) as dedup_keys,
-            (select count(*) from placements) as placements,
+    `select (select count(*) from mameko_executions) as executions,
+            (select count(*) from mameko_dedup_keys) as dedup_keys,
+            (select count(*) from mameko_placements) as placements,
             (select count(*) from intake_records) as intake_records`,
   );
   return row!;
@@ -122,9 +122,9 @@ const counts = async () => {
 
 /** Every execution has the dedup-key row and the placement row admission writes beside it in its one transaction. */
 const admittedShape = async (id: string) => ({
-  executions: (await rows("select scope_id, run from executions where id = ?", id)).length,
-  dedup_keys: (await rows("select sha256 from dedup_keys where execution_id = ?", id)).length,
-  placements: (await rows("select state from placements where execution_id = ?", id)).length,
+  executions: (await rows("select scope_id, run from mameko_executions where id = ?", id)).length,
+  dedup_keys: (await rows("select sha256 from mameko_dedup_keys where execution_id = ?", id)).length,
+  placements: (await rows("select state from mameko_placements where execution_id = ?", id)).length,
   intake_records: (await rows("select run from intake_records where execution_id = ?", id)).length,
 });
 
@@ -182,7 +182,7 @@ const dispatch = async (sha: string, headers: Record<string, string> = {}, extra
 
 /** A SQL statement that writes one of the tables admission owns. */
 const ADMISSION_WRITE =
-  /\b(?:insert(?:\s+or\s+\w+)?\s+into|replace\s+into|update|delete\s+from)\s+["`]?(executions|dedup_keys|placements)\b/gi;
+  /\b(?:insert(?:\s+or\s+\w+)?\s+into|replace\s+into|update|delete\s+from)\s+["`]?(mameko_executions|mameko_dedup_keys|mameko_placements)\b/gi;
 
 /** The writes of each admission table in the bundle, by the module esbuild marks each section with. */
 const admissionWritesByModule = (bundle: string) => {
@@ -210,7 +210,11 @@ describe("intake's one door on the composed control plane", () => {
     const writes = admissionWritesByModule(script);
     // The scan finds admission's own writes, so an empty answer below is not a scan that matched nothing.
     const mameko = new Set([...writes].filter(([m]) => isMameko(m)).flatMap(([, t]) => [...t]));
-    expect([...mameko].sort()).toEqual(["dedup_keys", "executions", "placements"]);
+    expect([...mameko].sort()).toEqual([
+      "mameko_dedup_keys",
+      "mameko_executions",
+      "mameko_placements",
+    ]);
     // No FlareDispatch module (intake, its sweep, its re-runs, the follow-on applier, the tick) writes one itself.
     expect([...writes.keys()].filter((m) => !isMameko(m))).toEqual([]);
   });
@@ -232,7 +236,7 @@ describe("intake's one door on the composed control plane", () => {
     await (
       await db()
     )
-      .prepare("update executions set status = 'failure', finished_at = ? where id = ?")
+      .prepare("update mameko_executions set status = 'failure', finished_at = ? where id = ?")
       .bind(Date.now(), fromWebhook)
       .run();
     const rerun = await webhook("check_run", {

@@ -260,7 +260,7 @@ export const plane = async (quota: QuotaOptions) => {
       run(InstallationQuota.use((q) => q.observe(SCOPE, o))),
     open: () =>
       rows<{ n: number }>(
-        "select count(*) as n from outbox where state in ('pending', 'in_flight', 'ambiguous')",
+        "select count(*) as n from mameko_outbox where state in ('pending', 'in_flight', 'ambiguous')",
       )[0]!.n,
     dispose: () => runtime.dispose(),
   };
@@ -407,7 +407,7 @@ export const simulateCheckRunOnce = async (seed: number): Promise<SimOutcome> =>
         await p.advance(Math.floor(random() * 90_000));
         await p.drain();
         reached.ambiguous! += p.rows<{ n: number }>(
-          "select count(*) as n from outbox where state = 'ambiguous'",
+          "select count(*) as n from mameko_outbox where state = 'ambiguous'",
         )[0]!.n;
       }
     }

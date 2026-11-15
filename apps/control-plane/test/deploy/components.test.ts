@@ -97,7 +97,7 @@ describe("fd deploy and the control plane's components", () => {
       await (await mf.dispatchFetch("https://control-plane.example/")).arrayBuffer();
       const db = await mf.getD1Database("DB");
       const { results } = await db
-        .prepare("select executor_id, kind, slots_json from executors where kind = 'cloudflare'")
+        .prepare("select executor_id, kind, slots_json from mameko_executors where kind = 'cloudflare'")
         .all<{ executor_id: string; kind: string; slots_json: string }>();
       expect(
         Object.fromEntries(results.map((r) => [r.executor_id, JSON.parse(r.slots_json).total])),
@@ -117,7 +117,7 @@ describe("fd deploy and the control plane's components", () => {
       await (await bare.dispatchFetch("https://control-plane.example/")).arrayBuffer();
       const db = await bare.getD1Database("DB");
       const { results } = await db
-        .prepare("select executor_id from executors where kind = 'cloudflare'")
+        .prepare("select executor_id from mameko_executors where kind = 'cloudflare'")
         .all();
       expect(results).toEqual([]);
     } finally {

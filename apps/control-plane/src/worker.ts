@@ -43,7 +43,7 @@ let migrated: Promise<unknown> | undefined;
 
 const migrate = (env: ControlPlaneEnv) =>
   (migrated ??= (async () => {
-    // The artifact store's table moves to `fd_artifacts` before mameko's migration 33 creates its own `artifacts`.
+    // A legacy artifact store table moves to `fd_artifacts` before mameko adopts an unprefixed store (MAMEKO-HOST-024).
     await moveLegacyArtifactsTable(env.DB as unknown as D1Database);
     await runD1Migrations(env.DB);
     await Effect.runPromise(migrateChildConclusions(env.DB));

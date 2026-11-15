@@ -139,7 +139,7 @@ describe("pr.propose", () => {
   it("[FD-AGT-013] commits the blobs read back from the artifact store byte for byte, and refuses a swapped one", async () => {
     const db = recordsDb();
     db.exec(
-      "insert into placements values ('x1', 'accepted', 1, 'e1', 1); insert into executors values ('e1', 'cloudflare')",
+      "insert into mameko_placements values ('x1', 'accepted', 1, 'e1', 1); insert into mameko_executors values ('e1', 'cloudflare')",
     );
     const bucket = memoryBucket();
     const binary = Uint8Array.from([0, 255, 10, 13, 128, 7]);
@@ -173,7 +173,7 @@ describe("pr.propose", () => {
   it("[FD-AGT-026] refuses a staged blob larger than maxBytes as too-large without reading its bytes", async () => {
     const db = recordsDb();
     db.exec(
-      "insert into placements values ('x1', 'accepted', 1, 'e1', 1); insert into executors values ('e1', 'cloudflare')",
+      "insert into mameko_placements values ('x1', 'accepted', 1, 'e1', 1); insert into mameko_executors values ('e1', 'cloudflare')",
     );
     const bucket = memoryBucket();
     const big = new Uint8Array(DEFAULT_MAX_BYTES + 1);

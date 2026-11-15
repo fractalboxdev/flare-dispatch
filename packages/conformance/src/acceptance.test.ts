@@ -267,7 +267,7 @@ const world = async (options: WorldOptions = {}) => {
   const quarantined = async (executorId: string) =>
     (
       await (db as unknown as D1Database)
-        .prepare("select quarantine from executors where executor_id = ?")
+        .prepare("select quarantine from mameko_executors where executor_id = ?")
         .bind(executorId)
         .first<{ quarantine: number }>()
     )?.quarantine === 1;
@@ -361,7 +361,7 @@ describe("the result-acceptance check over the control plane's D1 statement reco
   it("[FD-PROV-015] rejects a statement whose signing key is revoked with revoked-key", async () => {
     const w = await world();
     // mameko records `revoked_at` on the executor row and has no revocation writer yet.
-    await w.sql("update executors set revoked_at = ? where executor_id = 'mac-1'", w.now - 1);
+    await w.sql("update mameko_executors set revoked_at = ? where executor_id = 'mac-1'", w.now - 1);
     expect(await w.check(submission(), await w.leaseStatement())).toEqual(rejected("revoked-key"));
     expect(await w.quarantined("mac-1")).toBe(true);
   }, 60_000);

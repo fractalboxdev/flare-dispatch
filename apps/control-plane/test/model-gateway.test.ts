@@ -63,14 +63,14 @@ const plane = async (
   for (const [id, epoch] of Object.entries(executions)) {
     await db
       .prepare(
-        `insert into executions (id, scope_id, run, class, status, enqueued_at, deadline_at)
+        `insert into mameko_executions (id, scope_id, run, class, status, enqueued_at, deadline_at)
          values (?, ?, 'pr-review', 'interactive', 'running', ?, ?)`,
       )
       .bind(id, REPO, NOW - 60_000, DEADLINE)
       .run();
     await db
       .prepare(
-        "insert into placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, null)",
+        "insert into mameko_placements (execution_id, state, epoch, executor_id) values (?, 'leased', ?, null)",
       )
       .bind(id, epoch)
       .run();
@@ -89,7 +89,7 @@ const plane = async (
     (
       await db
         .prepare(
-          "select max_micro_usd as max, settled_micro_usd as settled from model_calls where execution_id = ?",
+          "select max_micro_usd as max, settled_micro_usd as settled from mameko_model_calls where execution_id = ?",
         )
         .bind(id)
         .all()
@@ -178,7 +178,7 @@ describe("the model route", () => {
       await call(env, await token({ executionId: "01JMODELUNKNOWN00000000000" })),
     ).toMatchObject({ status: 401, body: { error: "lease_stale" } });
     expect((await call(env, await token({ epoch: 2 }))).status).toBe(200);
-    await db.prepare("update executions set status = 'success' where id = ?").bind(EXECUTION).run();
+    await db.prepare("update mameko_executions set status = 'success' where id = ?").bind(EXECUTION).run();
     expect(await call(env, await token({ epoch: 2 }))).toMatchObject({
       status: 401,
       body: { error: "lease_stale", message: "execution is terminal" },
