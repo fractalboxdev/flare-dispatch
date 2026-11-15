@@ -2,7 +2,8 @@
   // The v2 control plane. `DEPLOYMENT` is `production` here, and only the local CI command overrides it, so a
   // deploy of this file refuses host execution and the software key. Every account-specific value is a `{{path}}`
   // placeholder the renderer fills from the operator overlay; secrets (the App key, webhook secret, link key, cache
-  // token secrets, the presigner's R2 API token, the log key, the records signing key) are Worker secrets.
+  // token secrets, the presigner's R2 API token, the log key, the records signing key, the model-lease secret) are
+  // Worker secrets.
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "flare-dispatch-control-plane",
   "main": "src/worker.ts",
@@ -72,7 +73,14 @@
     // (FD-CACHE-091).
     "R2_ACCOUNT_ID": "{{accountId}}",
     "CACHE_BUCKET_NAME": "{{r2.CACHE}}",
+    // The provider registry the model route chooses a hosted entry from, keyed by model entry id, and the price of an
+    // entry that states none (MAMEKO-MDL-020, MAMEKO-MDL-022). The route takes a model-lease token derived from the
+    // Worker secret `MODEL_LEASE_SECRET`, distinct from every other key.
+    "MODEL_REGISTRY": "{{models.registry}}",
+    "MODEL_FALLBACK_PRICE_USD_PER_MTOK": "{{models.fallbackPriceUsdPerMTok}}",
   },
+  // The Workers AI binding: the `workers-ai` route's only credential (specs/model-gateway.md § Registered route kinds).
+  "ai": { "binding": "AI" },
   // The minute tick (FD-INT-050): outbox drain, liveness, the enqueue of intake's units, the retention sweeps and the
   // daily advisory refresh.
   "triggers": { "crons": ["* * * * *"] },

@@ -14,6 +14,7 @@ import { cacheFetch, cacheSweeps } from "./cache.ts";
 import { deployClaimFetch, migrateDeployClaims } from "./deploy-claim.ts";
 import { boundFetch } from "./github.ts";
 import { apiFetch } from "./http.ts";
+import { modelGatewayFetch } from "./model-gateway.ts";
 import { launchKeysOf, registerPools } from "./pools.ts";
 import { tickDeps } from "./tick.ts";
 
@@ -84,6 +85,9 @@ export default {
     // The deploy-claim route checks its own token, bound to the execution and its current epoch (FD-GATE-067).
     const claimed = await deployClaimFetch(request, env);
     if (claimed !== null) return claimed;
+    // The model route checks its own model-lease token, bound to the execution and its current epoch.
+    const modelled = await modelGatewayFetch(request, env);
+    if (modelled !== null) return modelled;
     // The compile-cache route checks its own token (FD-CACHE-051); the log and artifact reads are the router's.
     const cached = await cacheFetch(request, env, (p) => ctx.waitUntil(p));
     if (cached !== null) return cached;

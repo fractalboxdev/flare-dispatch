@@ -39,6 +39,7 @@ import { leaseCache, presignOnFrame } from "./cache.ts";
 import { leaseCacheAt } from "./cache-execution.ts";
 import { leaseCloudValues, withCloudLease } from "./cloud-lease.ts";
 import { leaseDeployClaim, withDeployClaim } from "./deploy-claim.ts";
+import { leaseModelCredentials } from "./model-gateway.ts";
 import { prProposeOnFrame } from "./pr-propose.ts";
 import { type ChannelSocket, cloudStatementOnFrame } from "./provenance.ts";
 import { imageDigestOf, invalidateLeaseNonce, leaseNonce, requestLeaseFields } from "./lease.ts";
@@ -161,7 +162,8 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
    * (FD-PROF-063), and the `deadline_at` admission wrote on the execution row (MAMEKO-EXEC-002), which a gate run's
    * input carries as its `deadlineAt` (FD-GATE-007). A `worker-deploy` input carries the deploy claim minted for the
    * execution at the placement's epoch (FD-GATE-067), and an agentic or scan input its executor values
-   * (`cloud-lease.ts`). A payload that carries a write credential fails the grant
+   * (`cloud-lease.ts`). An agentic lease that calls models carries its model-lease token in `credentials`
+   * (`model-gateway.ts`). A payload that carries a write credential fails the grant
    * (FD-AGT-008). The nonce is 128 random bits bound to the execution and the placement's epoch (FD-PROV-010).
    */
   leaseFields: (executionId: string): Promise<ClaimedLease> =>
@@ -198,6 +200,15 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
             expiresAt: row.deadline_at,
           }),
         );
+        // An agentic lease that calls models carries its model-lease token among its credentials, where the egress
+        // proxy attaches it to the model route (FD-AGT-010); the input carries none.
+        const credentials = yield* Effect.promise(() =>
+          leaseModelCredentials(bindings, entry, {
+            executionId,
+            epoch: row.epoch,
+            expiresAt: row.deadline_at,
+          }),
+        );
         // An agentic or scan lease's input carries the executor values the Container's runner builds its Layers from.
         const presign = presignWith(bindings);
         const cloud = yield* Effect.promise(() =>
@@ -220,7 +231,7 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
           deadline_at: row.deadline_at,
           server_now: Date.now(),
           progress_timeout_ms: PROGRESS_TIMEOUT_MS,
-          credentials: {},
+          credentials,
           ...(yield* Effect.promise(() =>
             leaseCache(bindings, record, row.deadline_at, entry?.sealedSandbox === true),
           )),

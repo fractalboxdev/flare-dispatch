@@ -26,6 +26,7 @@ const LINK_BINDINGS = [
   "CACHE_TOKEN_SECRET",
   "INSTALL_STATE_KEY",
   "DEPLOY_CLAIM_SECRET",
+  "MODEL_LEASE_SECRET",
 ] as const satisfies ReadonlyArray<keyof ApiEnv>;
 
 /**

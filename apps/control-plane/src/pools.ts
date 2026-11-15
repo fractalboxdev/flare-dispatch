@@ -24,6 +24,7 @@ import { LeaseStore } from "@fractalboxdev/mameko-ports";
 import { Effect } from "effect";
 import type { ControlPlaneEnv } from "./config.ts";
 import { deployClaimHost } from "./deploy-claim.ts";
+import { MODEL_REQUEST_MAX_BYTES } from "./model-gateway.ts";
 
 /**
  * Each Container pool's Container binding and `max_instances`, as `wrangler.jsonc` declares its Container class. The
@@ -78,20 +79,18 @@ const GIT_METHODS = ["GET", "POST"];
 /** The headers a job's GitHub REST client sends beside an HTTPS client's own. */
 const GITHUB_API_HEADERS = [...CLIENT_HEADERS, "x-github-api-version"];
 
-/** The largest model request a job sends through the `model-gateway` grant. */
-const MODEL_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
-
 /**
  * The grant catalogue each Container's outbound handler decides over (MAMEKO-ISO-021): `git-remote`, the repository's git
  * host for the checkout of the `setup` phase (FD-GATE-110); `cf-api`, the Cloudflare API under the deploy token the
  * Worker holds (FD-GATE-066); `deploy-claim`, `POST` to the dispatcher's deploy-claim route alone, where
  * `worker-deploy` presents its lease's deploy-claim token (FD-GATE-067); `model-gateway`, `POST` to the dispatcher's
  * model route alone, which an agentic recipe reaches in its `agent` phase (FD-AGT-010); and `github-api-read`, `GET` of
- * GitHub's repository routes with no credential, which answer a public repository's reads alone. `cf-api` carries no credential
- * on a deploy without that token, so a request under it leaves unauthenticated and the API refuses it. `deploy-claim`
- * attaches no credential. `model-gateway` attaches none either: a grant's credential is one value for every lease, and
- * the per-lease token the model route takes is minted for one lease. A deploy that names no `PUBLIC_ORIGIN` has neither
- * dispatcher grant, so its leases carry no deploy claim and no model route either.
+ * GitHub's repository routes with no credential, which answer a public repository's reads alone. `cf-api` carries no
+ * credential on a deploy without that token, so a request under it leaves unauthenticated and the API refuses it.
+ * `deploy-claim` attaches no credential. `model-gateway` attaches none either: a grant's credential is one value for
+ * every lease, and the model-lease token the route takes is minted for one lease into the lease's `credentials`, which
+ * no outbound handler reads, so the model route answers a Container's request `unauthenticated`. A deploy that names no
+ * `PUBLIC_ORIGIN` has neither dispatcher grant, so its leases carry no deploy claim and no model route either.
  */
 export const poolGrants = (
   env: Pick<ControlPlaneEnv, "DEPLOY_API_TOKEN" | "PUBLIC_ORIGIN">,
