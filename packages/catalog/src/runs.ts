@@ -69,9 +69,9 @@ export const registry = [
   canaryRun,
 ] as const;
 
-/** Which executor kinds serve a run, from its catalogue entry. */
-const servedBy = (name: string, kind: ExecutorKind): boolean => {
-  const found = lookupRun("development", name);
+/** Whether the executor kind serves a run under the deployment, from the deployment's catalogue entry. */
+const servedBy = (deployment: Deployment, name: string, kind: ExecutorKind): boolean => {
+  const found = lookupRun(deployment, name);
   return found._tag === "Available" && found.entry.executors.includes(kind);
 };
 
@@ -135,15 +135,15 @@ type BodiedRun = Exclude<(typeof registry)[number], typeof floorCanary>;
 const withBody = (run: (typeof registry)[number]): run is BodiedRun => "body" in run;
 
 /**
- * The gate runs a cloud executor serves with its gate Layers: a run whose catalogue entry lists `cloud`, that is
- * neither agentic, a scan run nor the floor canary, and that is no host execution. A host execution's run is the device runner entry's
- * under `development` only, so the cloud executor serves the same gate runs under both deployments.
+ * The gate runs a cloud executor serves with its gate Layers: a run whose catalogue entry lists `cloud` and that is
+ * neither agentic, a scan run nor the floor canary. A host execution is among them: the Container is its job sandbox,
+ * so the cloud executor serves the same gate runs under both deployments.
  */
 const isCloudGateRun = (name: string): boolean => {
   const found = lookupRun("development", name);
   return (
     found._tag === "Available" &&
-    !found.entry.hostExecution &&
+    found.entry.executors.includes("cloud") &&
     !AGENTIC_NAMES.has(name) &&
     !SCAN_NAMES.has(name) &&
     name !== FLOOR_CANARY_NAME
@@ -161,7 +161,7 @@ const isCloudGateRun = (name: string): boolean => {
 export const runsFor = (deployment: Deployment, executor: RunnerExecutor = { kind: "device" }) => {
   const available = registry
     .filter((run) => lookupRun(deployment, run.spec.name)._tag === "Available")
-    .filter((run) => servedBy(run.spec.name, executor.kind));
+    .filter((run) => servedBy(deployment, run.spec.name, executor.kind));
   return executor.kind === "device"
     ? available.map((run) => ({
         ...run,

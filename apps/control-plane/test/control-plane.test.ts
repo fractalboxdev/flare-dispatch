@@ -909,10 +909,10 @@ describe("the failure summary", () => {
 });
 
 describe("a production deployment", () => {
-  it("MAMEKO-ISO-001 leaves a host execution out of the catalogue", async () => {
+  it("MAMEKO-ISO-001 keeps a host execution in the catalogue for the cloud executor alone", async () => {
+    // The run is in the production catalogue; this deploy has no App installation for the repository.
     const r = await post(production, "/v1/dispatch/check", dispatchBody(SHA));
-    expect(r.status).toBe(404);
-    expect(await r.json()).toMatchObject({ error: "run_not_found" });
+    expect(await r.json()).toMatchObject({ error: "installation_not_found" });
   });
 
   it("[FD-IFC-087] at phase 0 refuses a key that claims a hardware store nothing attests, and writes no executor row", async () => {

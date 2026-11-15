@@ -570,15 +570,23 @@ export type RunLookup =
   | { readonly _tag: "HostExecutionRefused" }
   | { readonly _tag: "NotInCatalogue" };
 
-/** Whether a run is dispatchable under a deployment; `production` refuses a host execution. */
+/**
+ * Whether a run is dispatchable under a deployment. `production` serves a host execution only on the `cloud`
+ * executor, whose Container is the job sandbox, so no device runs it on its host OS; a run no other executor serves is
+ * refused.
+ */
 export const lookupRun = (deployment: Deployment, run: string): RunLookup => {
   const entry = Object.hasOwn(entries, run) ? entries[run] : undefined;
   if (entry === undefined) return { _tag: "NotInCatalogue" };
   return Match.value(deployment).pipe(
     Match.when("development", (): RunLookup => ({ _tag: "Available", entry })),
-    Match.when("production", (): RunLookup =>
-      entry.hostExecution ? { _tag: "HostExecutionRefused" } : { _tag: "Available", entry },
-    ),
+    Match.when("production", (): RunLookup => {
+      if (!entry.hostExecution) return { _tag: "Available", entry };
+      const executors = entry.executors.filter((k) => k === "cloud");
+      return executors.length === 0
+        ? { _tag: "HostExecutionRefused" }
+        : { _tag: "Available", entry: { ...entry, executors } };
+    }),
     Match.exhaustive,
   );
 };

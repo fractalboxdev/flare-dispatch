@@ -272,9 +272,15 @@ describe("runCommand", () => {
 });
 
 describe("lookupRun", () => {
-  it("offers a host execution only under development", () => {
-    expect(lookupRun("development", "check")._tag).toBe("Available");
-    expect(lookupRun("production", "check")._tag).toBe("HostExecutionRefused");
+  it("offers a host execution to every executor under development, and to the cloud executor alone under production", () => {
+    expect(lookupRun("development", "check")).toMatchObject({
+      _tag: "Available",
+      entry: { executors: ["device", "cloud"] },
+    });
+    expect(lookupRun("production", "check")).toMatchObject({
+      _tag: "Available",
+      entry: { executors: ["cloud"] },
+    });
     expect(lookupRun("production", "worker-deploy")._tag).toBe("Available");
     expect(lookupRun("development", "constructor")._tag).toBe("NotInCatalogue");
   });
