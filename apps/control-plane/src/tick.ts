@@ -27,7 +27,7 @@ import {
 import { wakeStandingClaims } from "@fractalboxdev/mameko-host-cloudflare";
 import { wakePools } from "./pools.ts";
 import { d1ExecutionStore } from "@fractalboxdev/mameko-host-cloudflare/d1";
-import type { ActuatorRateLimit, Actuators } from "@fractalboxdev/mameko-ports";
+import type { ActuatorRateLimit, Actuators, FreezeKeyBinding } from "@fractalboxdev/mameko-ports";
 import { Cause, Effect, Exit, Layer, Schema } from "effect";
 import { advisoryRefreshStep, advisoryWatchOf } from "./advisory-snapshots.ts";
 import { isolateServices } from "./composition.ts";
@@ -169,6 +169,12 @@ export const childConclusionsStep = (env: ControlPlaneEnv, now: number): TickSte
   effect: insertChildConclusions(env.DB, concludeKindOf(profileOf(env)), now),
 });
 
+/**
+ * The delivery's freeze key binding (MAMEKO-OUT-068): no row names a freeze key. No intent kind of the profile is
+ * `reconcile-only` (specs/profile.md § Intent kinds), so no `ambiguous` row could freeze others (MAMEKO-OUT-069).
+ */
+export const noFreezeKey: FreezeKeyBinding = () => null;
+
 export const tickDeps = (
   env: ControlPlaneEnv,
   steps: (now: number) => readonly TickStep[] = () => [],
@@ -181,6 +187,7 @@ export const tickDeps = (
   });
   return {
     ...base,
+    delivery: { freezeKey: noFreezeKey },
     // `advisory-snapshot-stale` while a watched ecosystem's snapshot is missing or too old (FD-OPS-103).
     advisory: advisoryWatchOf(env),
     ...(withApp

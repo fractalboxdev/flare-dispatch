@@ -190,6 +190,29 @@ describe("minute tick", () => {
     expect(a.permits[0]).toMatchObject({ limitKey: "42", kind: "canary.push", call: "apply" });
   });
 
+  it("MAMEKO-OUT-068 the drain sets each row's freeze key once, from the composition's delivery binding, before its first claim", async () => {
+    const m = monitor();
+    const a = appliers();
+    const keys: string[] = [];
+    const { deps: d } = deps({
+      appliers: a.layer,
+      delivery: { freezeKey: (row) => (keys.push(row.intentKey), `account:${row.scopeId}`) },
+    });
+    await tick({ DB: t.db, MONITOR: m.ns }, d, T0);
+    await tick({ DB: t.db, MONITOR: m.ns }, d, T0 + 60_000);
+    expect(
+      (
+        await t.db
+          .prepare(
+            "select freeze_key, freeze_keyed, state from mameko_outbox where kind = 'canary.push'",
+          )
+          .all()
+      ).results,
+    ).toEqual([{ freeze_key: "account:acme/canary", freeze_keyed: 1, state: "applied" }]);
+    // The binding read the row once, though two drains saw it.
+    expect(keys).toEqual([`ops:canary:${T0}`]);
+  });
+
   it("[FD-OPS-040] 5 min after the push, a canary with no concluded check raises canary-missed naming its last stage", async () => {
     const m = monitor();
     const { deps: d, alarms } = deps();

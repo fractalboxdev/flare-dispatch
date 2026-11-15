@@ -9,13 +9,13 @@ import { profileOf, type ControlPlaneEnv } from "./config.ts";
 import { tickDeps } from "./tick.ts";
 
 /**
- * One execution's drain pass over the same actuators the tick's drain applies through. A deploy whose tick has no
- * actuator (no App) drains nothing here either.
+ * One execution's drain pass over the same actuators and freeze key binding the tick's drain applies through. A
+ * deploy whose tick has no actuator (no App) drains nothing here either.
  */
 export const drainExecution =
   (env: ControlPlaneEnv) =>
   (executionId: string): Promise<void> => {
-    const appliers = tickDeps(env).appliers;
+    const { appliers, delivery } = tickDeps(env);
     if (appliers === undefined) return Promise.resolve();
     return Effect.runPromise(
       drainOnce({
@@ -24,6 +24,7 @@ export const drainExecution =
         random: Math.random,
         actuatorOf: actuatorBindings(profileOf(env).intent_kinds),
         executionId,
+        ...(delivery === undefined ? {} : { freezeKey: delivery.freezeKey }),
       }).pipe(
         Effect.provide(Layer.merge(d1OutboxStore(env.DB as unknown as D1Like), appliers)),
         Effect.asVoid,
