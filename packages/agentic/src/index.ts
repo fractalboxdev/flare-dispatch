@@ -24,5 +24,6 @@ export * from "./recipes/triage-issues.ts";
 export * from "./recipes/triage-prs.ts";
 export * from "./recipes/release-notes.ts";
 export * from "./recipes/catalog.ts";
+export * from "./recipes/lease.ts";
 export * from "./suppression/ledger.ts";
 export * from "./integration.ts";

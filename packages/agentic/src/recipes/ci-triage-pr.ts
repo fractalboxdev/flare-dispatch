@@ -13,6 +13,7 @@ import {
   RecipeIntents,
   StagedWrites,
 } from "./services.ts";
+import { AgentLeaseField } from "./lease.ts";
 
 export const CI_TRIAGE_BRANCH = "flare-dispatch/ci-triage";
 export const CI_TRIAGE_ALLOWLIST = [".flare-dispatch/**"] as const;
@@ -41,6 +42,7 @@ export class ExecutionsRead extends Context.Service<
 export const CiTriageInput = Schema.Struct({
   repo: Schema.Struct({ owner: Schema.String, name: Schema.String }),
   baseBranch: Schema.String,
+  ...AgentLeaseField,
 });
 export type CiTriageInput = typeof CiTriageInput.Type;
 

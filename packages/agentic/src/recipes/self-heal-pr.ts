@@ -4,6 +4,7 @@
 import type { RunResult } from "@fractalboxdev/mameko-run";
 import { Effect, Schema } from "effect";
 import { EditLoop, editLoopUnavailable, Shell, StagedWrites } from "./services.ts";
+import { AgentLeaseField } from "./lease.ts";
 
 /** The `incident/v1` caps on a text field and a path (FD-IFC-042). */
 const TEXT_MAX = 2000;
@@ -66,6 +67,7 @@ export const SelfHealPrInput = Schema.Struct({
   reproTimeoutSec: Schema.optionalKey(
     Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 3600 })),
   ),
+  ...AgentLeaseField,
 });
 export type SelfHealPrInput = typeof SelfHealPrInput.Type;
 

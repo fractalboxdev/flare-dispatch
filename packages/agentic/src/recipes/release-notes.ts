@@ -20,6 +20,7 @@ import {
   StagedWrites,
 } from "./services.ts";
 import { flattenLine } from "./triage-prs.ts";
+import { AgentLeaseField } from "./lease.ts";
 
 const CommitSha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/));
 
@@ -42,6 +43,7 @@ export const ReleaseNotesInput = Schema.Struct({
   baseBranch: Schema.String,
   /** Present on a publish execution, which drafts and publishes this release instead of proposing one. */
   publish: Schema.optionalKey(ReleasePublishInput),
+  ...AgentLeaseField,
 });
 export type ReleaseNotesInput = typeof ReleaseNotesInput.Type;
 

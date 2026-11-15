@@ -14,6 +14,7 @@ import {
   Shell,
   StagedWrites,
 } from "./services.ts";
+import { AgentLeaseField } from "./lease.ts";
 
 export const SPEC_DRIFT_BRANCH = "flare-dispatch/spec-drift";
 export const SPEC_DRIFT_ALLOWLIST = ["specs/**"] as const;
@@ -24,6 +25,7 @@ export const LOG_MAX_ENTRIES = 25;
 export const SpecDriftInput = Schema.Struct({
   repo: Schema.Struct({ owner: Schema.String, name: Schema.String }),
   baseBranch: Schema.String,
+  ...AgentLeaseField,
 });
 export type SpecDriftInput = typeof SpecDriftInput.Type;
 

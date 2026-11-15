@@ -12,9 +12,11 @@ import {
   RecipeIntents,
   type ModelCallError,
 } from "./services.ts";
+import { AgentLeaseField } from "./lease.ts";
 
 export const TriageIssuesInput = Schema.Struct({
   repo: Schema.Struct({ owner: Schema.String, name: Schema.String }),
+  ...AgentLeaseField,
 });
 export type TriageIssuesInput = typeof TriageIssuesInput.Type;
 
