@@ -103,7 +103,11 @@ interface ResultMessage {
 export class AcceptedPayloads {
   private readonly staged = new Map<string, Manifest | undefined>();
 
-  constructor(private readonly artifacts: () => ArtifactObjects | undefined) {}
+  private readonly artifacts: () => ArtifactObjects | undefined;
+
+  constructor(artifacts: () => ArtifactObjects | undefined) {
+    this.artifacts = artifacts;
+  }
 
   async around<A>(message: unknown, accept: () => Promise<A>): Promise<A> {
     const m = (message ?? {}) as ResultMessage;

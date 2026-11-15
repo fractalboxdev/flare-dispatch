@@ -1,7 +1,8 @@
 // `fd mcp` as an agent on the developer's device runs it: the executable over stdio, pointed at the deployed Worker with
-// the developer's Access token in the OS credential store, and at a local scheduler socket. The pinned mameko release
-// ships no socket server for the local scheduler, so the socket here is the test's own listener, which records every
-// connection; a call routed to the HTTP API shows in the front's record of requests instead.
+// the developer's Access token in the OS credential store, and at a local scheduler socket. The socket here is the test's
+// own listener, which records every connection and closes it unanswered; a call routed to the HTTP API shows in the
+// front's record of requests instead. The local scheduler's own protocol is covered against mameko-local-scheduler in
+// packages/fd (FD-IFC-076).
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -89,6 +90,14 @@ describe("fd mcp over stdio against the deployed Worker", () => {
   });
 
   it("[FD-IFC-075] sends rehearse, lease_status and every local- id to the local scheduler socket, never to the HTTP API", async () => {
+    const UNANSWERED: Readonly<Record<string, string>> = {
+      rehearse: "scheduler_unreachable",
+      lease_status: "scheduler_unreachable",
+      get_verdict: "scheduler_protocol",
+      get_failure_summary: "scheduler_protocol",
+      // A `local-` id this device never submitted has no submission to detach.
+      cancel: "not-found",
+    };
     const calls: [string, Record<string, unknown>][] = [
       ["rehearse", { run: "check" }],
       ["lease_status", {}],
@@ -98,10 +107,18 @@ describe("fd mcp over stdio against the deployed Worker", () => {
     ];
     for (const [tool, args] of calls) {
       const sent = await routed(() => mcp.call(tool, args));
-      expect({ tool, socket: sent.socket, http: sent.http }).toEqual({ tool, socket: 1, http: [] });
-      // The socket accepted the connection; the pinned release defines no wire format for its operations, so the tool
-      // answers that as a tool error with its code (FD-IFC-080) rather than guessing one.
-      expect(sent.answer).toMatchObject({ isError: true, value: { error: "scheduler_protocol" } });
+      // `rehearse` probes the socket before it reads the working tree, then submits over a session of its own.
+      expect({ tool, socket: sent.socket, http: sent.http }).toEqual({
+        tool,
+        socket: tool === "rehearse" ? 2 : 1,
+        http: [],
+      });
+      // A session the socket closes unanswered is `scheduler_unreachable`; outcome and failure summary have no wire
+      // format in the pinned release. Each tool answers a tool error with its code (FD-IFC-080).
+      expect({ tool, answer: sent.answer }).toMatchObject({
+        tool,
+        answer: { isError: true, value: { error: UNANSWERED[tool] } },
+      });
     }
   });
 
