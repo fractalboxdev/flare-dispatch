@@ -34,6 +34,7 @@ import { guardLease } from "./agentic.ts";
 import { isolateServices, presignerLayer } from "./composition.ts";
 import { leaseCache } from "./cache.ts";
 import { leaseCacheAt } from "./cache-execution.ts";
+import { prProposeOnFrame } from "./pr-propose.ts";
 import { type ChannelSocket, cloudStatementOnFrame } from "./provenance.ts";
 import { imageDigestOf, invalidateLeaseNonce, leaseNonce, requestLeaseFields } from "./lease.ts";
 import {
@@ -70,10 +71,12 @@ export class ExecutorChannel extends MamekoExecutorChannel<ChannelEnv> {
   /**
    * Each frame goes through mameko's channel first. An `exec.result` that the accept compare-and-set accepted from a
    * cloud executor then gets its cloud-builder statement, signed with the provenance key and queued for the
-   * transparency log (FD-PROV-008, FD-PROV-009); the placement row, not the frame, decides whether it was accepted.
+   * transparency log (FD-PROV-008, FD-PROV-009), and its `pr.propose` row where it is a `success` that carries a
+   * staged write (FD-AGT-034); the placement row, not the frame, decides whether it was accepted.
    */
   override async webSocketMessage(ws: unknown, message: string | ArrayBuffer): Promise<void> {
     await super.webSocketMessage(ws, message);
+    await prProposeOnFrame(this.bindings, ws as ChannelSocket, message, Date.now());
     await cloudStatementOnFrame(this.bindings, ws as ChannelSocket, message, Date.now());
   }
 
