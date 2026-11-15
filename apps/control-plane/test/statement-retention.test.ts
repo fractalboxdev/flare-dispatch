@@ -39,7 +39,10 @@ describe("the statement retention the overlay sets", () => {
     const defaults = await varsOf({ ...placeholderOverlay, provenance: {} });
     expect(defaults["STATEMENT_RETENTION_DAYS"]).toBe(400);
     expect(statementRetentionDaysOf(defaults)).toBe(400);
-    const set = await varsOf({ ...placeholderOverlay, provenance: { statementRetentionDays: 730 } });
+    const set = await varsOf({
+      ...placeholderOverlay,
+      provenance: { statementRetentionDays: 730 },
+    });
     expect(set["STATEMENT_RETENTION_DAYS"]).toBe(730);
     expect(statementRetentionDaysOf(set)).toBe(730);
     // A `.dev.vars` entry arrives as text; an unset, empty or malformed var keeps the default.

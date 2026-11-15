@@ -313,8 +313,11 @@ export const sandboxImageSpec = gate("sandbox-image", {
 /** The scan runs' capabilities: a workspace and its subprocesses, and the intent that carries the check summary. */
 const SCAN: readonly Capability[] = ["Workspace", "Exec", "Intents"];
 
-/** No grant in either phase: the egress proxy attaches nothing and allows no host (FD-GATE-110). */
-const NO_GRANTS = { setup: [], agent: [] } as const;
+/**
+ * The scan runs' grants (FD-GATE-110): the repository's git host while the checkout runs, and no host once the run
+ * ends its setup phase, before any scanner starts. Neither attaches a credential.
+ */
+const SCAN_GRANTS = { setup: ["git-remote"], agent: [] } as const;
 
 /** `security-gate`, the required check on a pull request and a merge group (specs/runs/gate.md § Recipes). */
 export const securityGateSpec = gate("security-gate", {
@@ -324,7 +327,7 @@ export const securityGateSpec = gate("security-gate", {
     qosClass: "required",
     qosCeiling: "required",
   },
-  grants: NO_GRANTS,
+  grants: SCAN_GRANTS,
   intentKinds: ["check.summary"],
 });
 
@@ -336,7 +339,7 @@ export const securityRescanSpec = gate("security-rescan", {
     qosClass: "batch",
     qosCeiling: "batch",
   },
-  grants: NO_GRANTS,
+  grants: SCAN_GRANTS,
   intentKinds: ["check.summary"],
   readOnlyScan: true,
 });

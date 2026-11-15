@@ -18,6 +18,7 @@ import { mintLinkToken, type LinkPurpose } from "@fractalboxdev/flare-dispatch-a
 import { ARTIFACT_SCHEMA, logObjectName, stepKey } from "@fractalboxdev/flare-dispatch-cache";
 import { HttpApi } from "effect/http-api";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "./workerd-bundle.ts";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -75,7 +76,7 @@ const miniflare = (
 ) =>
   new Miniflare({
     ...(stdio === undefined ? {} : { handleRuntimeStdio: stdio }),
-    modules: [{ type: "ESModule", path: "worker.js", contents: script }],
+    modules: [{ type: "ESModule", path: "worker.js", contents: script }, ...wasmModules()],
     compatibilityDate: "2026-05-01",
     d1Databases: { DB: "control-plane" },
     durableObjects: {
@@ -112,6 +113,7 @@ beforeAll(async () => {
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   });

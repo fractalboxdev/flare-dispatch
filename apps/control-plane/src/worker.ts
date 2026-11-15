@@ -8,11 +8,12 @@ import { opsFetch, scheduledHandler } from "@fractalboxdev/flare-dispatch-ops";
 import { CLASS_ORDER } from "@fractalboxdev/flare-dispatch-profile";
 import { routeExecutorUpgrade, runD1Migrations } from "@fractalboxdev/mameko-host-cloudflare";
 import { Effect } from "effect";
-import { healthOf, type ControlPlaneEnv } from "./config.ts";
+import { healthOf, profileOf, type ControlPlaneEnv } from "./config.ts";
 import { migrateLocalStore } from "./agentic.ts";
 import { cacheFetch, cacheSweeps } from "./cache.ts";
 import { boundFetch } from "./github.ts";
 import { apiFetch } from "./http.ts";
+import { launchKeysOf, registerPools } from "./pools.ts";
 import { tickDeps } from "./tick.ts";
 
 export {
@@ -22,16 +23,17 @@ export {
   ExecutorChannel,
   IntakeUnits,
   LivenessMonitor,
+  PoolController,
   TransparencyLog,
 } from "./durable-objects.ts";
+export { ControlPool } from "./deferred-objects.ts";
 export {
   AgentPool,
   BrowserPool,
-  ControlPool,
+  ContainerProxy,
   LeanPool,
-  PoolController,
   ReleasePool,
-} from "./deferred-objects.ts";
+} from "./pool-containers.ts";
 export { InstallationQuota } from "./installation-quota.ts";
 export { MamekoDrain } from "./drain.ts";
 
@@ -46,6 +48,8 @@ const migrate = (env: ControlPlaneEnv) =>
     await runApiMigrations(env.DB);
     await Effect.runPromise(migrateIntake(env.DB));
     await migrateLocalStore(env.DB);
+    // Each Container pool's executor row, on a deploy that can launch its Containers (MAMEKO-LEASE-003).
+    if (launchKeysOf(env) !== null) await registerPools(env, profileOf(env));
   })().catch((e: unknown) => {
     migrated = undefined;
     throw e;

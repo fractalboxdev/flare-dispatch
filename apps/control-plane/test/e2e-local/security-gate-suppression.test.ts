@@ -31,7 +31,8 @@ const WORKFLOW = [
   "",
 ].join("\n");
 const ADDED_STEP = "      - uses: evil/action@main # zizmor: ignore[unpinned-uses]\n";
-const RELEASE = "on: push\njobs:\n  release:\n    steps:\n      - run: ${{ github.ref }} # zizmor: ignore[template-injection]\n";
+const RELEASE =
+  "on: push\njobs:\n  release:\n    steps:\n      - run: ${{ github.ref }} # zizmor: ignore[template-injection]\n";
 
 let root: string;
 let bare: string;
@@ -116,9 +117,11 @@ afterAll(() => {
 const scan = <A>(head: string, base: ScanBase, inspect: (checkout: ScanCheckout) => A) =>
   Effect.runPromise(
     Effect.scoped(
-      prepareScanCheckout({ repo: url, sha: head, ref: "refs/pull/7/head" }, base, SUPPRESSION).pipe(
-        Effect.map(inspect),
-      ),
+      prepareScanCheckout(
+        { repo: url, sha: head, ref: "refs/pull/7/head" },
+        base,
+        SUPPRESSION,
+      ).pipe(Effect.map(inspect)),
     ).pipe(Effect.provide(processGateExec)),
   );
 
@@ -151,13 +154,17 @@ describe("security-gate checkout on a real remote", () => {
   });
 
   it("[FD-GATE-093] a merge group's scan restores the suppression files of merge_group.base_sha", async () => {
-    const seen = await scan(sha["queue"]!, ScanBase.MergeGroup({ baseSha: sha["moved"]! }), (c) => ({
-      base: c.range.base,
-      commits: [...c.range.commits].sort(),
-      gitleaksignore: read(c.dir, ".gitleaksignore"),
-      apiOsv: read(c.dir, "api/osv-scanner.toml"),
-      webOsv: read(c.dir, "web/osv-scanner.toml"),
-    }));
+    const seen = await scan(
+      sha["queue"]!,
+      ScanBase.MergeGroup({ baseSha: sha["moved"]! }),
+      (c) => ({
+        base: c.range.base,
+        commits: [...c.range.commits].sort(),
+        gitleaksignore: read(c.dir, ".gitleaksignore"),
+        apiOsv: read(c.dir, "api/osv-scanner.toml"),
+        webOsv: read(c.dir, "web/osv-scanner.toml"),
+      }),
+    );
     expect(seen.base).toBe(sha["moved"]);
     expect(seen.commits).toEqual([sha["suppress"], sha["step"], sha["queue"]].sort());
     expect(seen.gitleaksignore).toBe("target-fingerprint\nrotated-fingerprint\n");
@@ -166,10 +173,14 @@ describe("security-gate checkout on a real remote", () => {
   });
 
   it("[FD-GATE-094] a merge group's scan keeps the marker the base already holds and strips the one the group adds", async () => {
-    const seen = await scan(sha["queue"]!, ScanBase.MergeGroup({ baseSha: sha["moved"]! }), (c) => ({
-      ci: read(c.dir, ".github/workflows/ci.yml"),
-      release: read(c.dir, ".github/workflows/release.yml"),
-    }));
+    const seen = await scan(
+      sha["queue"]!,
+      ScanBase.MergeGroup({ baseSha: sha["moved"]! }),
+      (c) => ({
+        ci: read(c.dir, ".github/workflows/ci.yml"),
+        release: read(c.dir, ".github/workflows/release.yml"),
+      }),
+    );
     expect(seen.ci).toBe(`${WORKFLOW}      - uses: evil/action@main\n`);
     expect(seen.release).toBe(RELEASE);
   });

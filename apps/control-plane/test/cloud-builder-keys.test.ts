@@ -71,7 +71,12 @@ const intakeRecord = (executionId: string): IntakeRecord => ({
   repo: REPO,
   sha: COMMIT,
   ref: "refs/heads/main",
-  inputs: { repo: `https://github.com/${REPO}.git`, sha: COMMIT, ref: "refs/heads/main", steps: [] },
+  inputs: {
+    repo: `https://github.com/${REPO}.git`,
+    sha: COMMIT,
+    ref: "refs/heads/main",
+    steps: [],
+  },
   className: "required",
   labels: [],
   attempt: 1,

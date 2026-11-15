@@ -7,6 +7,7 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "../workerd-bundle.ts";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -98,11 +99,15 @@ beforeAll(async () => {
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   });
   mf = new Miniflare({
-    modules: [{ type: "ESModule", path: "worker.js", contents: bundle.outputFiles[0]!.text }],
+    modules: [
+      { type: "ESModule", path: "worker.js", contents: bundle.outputFiles[0]!.text },
+      ...wasmModules(),
+    ],
     compatibilityDate: "2026-05-01",
     d1Databases: { DB: "control-plane" },
     durableObjects: {

@@ -8,7 +8,7 @@
 // then, once the checkout has read the scan range, the advisory snapshot of each ecosystem whose lockfile it changes.
 import { Intents } from "@fractalboxdev/mameko-run";
 import { Clock, Context, Effect, Match } from "effect";
-import type { GateExec } from "./command.ts";
+import { GateExec } from "./command.ts";
 import type { SecurityGateBase, SecurityGateInput, SecurityRescanInput } from "./inputs.ts";
 import type { GateContext } from "./manifest.ts";
 import type { AdvisorySnapshots, ScanBundleStore, ScanImage } from "./ports.ts";
@@ -79,7 +79,8 @@ const stepDetail = (step: ScanStep): string =>
         ? ""
         : Match.value(s.findings).pipe(
             Match.tagsExhaustive({
-              Read: ({ findings }) => `${findings.length} finding${findings.length === 1 ? "" : "s"}`,
+              Read: ({ findings }) =>
+                `${findings.length} finding${findings.length === 1 ? "" : "s"}`,
               Unreadable: () => "report unreadable",
             }),
           ),
@@ -194,7 +195,8 @@ export const scanReport = (facts: ScanFacts): ScanRunReport => {
   );
   const unlisted = facts.steps.some(
     (s) =>
-      s.result === "finding" && (s.findings === undefined || StepFindings.$is("Unreadable")(s.findings)),
+      s.result === "finding" &&
+      (s.findings === undefined || StepFindings.$is("Unreadable")(s.findings)),
   );
   return {
     ...(prepared === undefined
@@ -254,6 +256,9 @@ export const scanFacts = (
         });
         prepared = ready;
         const checkout = yield* prepareScanCheckout(ctx, base, ready.bundle.payload.suppression);
+        // The checkout was the last step that reaches the git host: the scanners run under the `agent` grants, which
+        // name no host (FD-GATE-110).
+        yield* (yield* GateExec).endSetup;
         const snapshots = yield* advisoryPreconditions({
           changedPaths: checkout.range.changed,
           now,
@@ -268,7 +273,11 @@ export const scanFacts = (
           checkout,
           files: { ...configs, advisoryDir: settings.advisoryDir },
         });
-        return { outcome: report.outcome, prepared: scanned, steps: report.steps } satisfies ScanFacts;
+        return {
+          outcome: report.outcome,
+          prepared: scanned,
+          steps: report.steps,
+        } satisfies ScanFacts;
       }),
     ).pipe(
       Effect.catchTags({
@@ -309,7 +318,12 @@ const scanRun = (
     const intents = yield* Intents;
     yield* intents.emit("summary", {
       kind: "check.summary",
-      payload: { name: scanCheckName(run), head_sha: ctx.sha, ...summary, report: scanReport(facts) },
+      payload: {
+        name: scanCheckName(run),
+        head_sha: ctx.sha,
+        ...summary,
+        report: scanReport(facts),
+      },
     });
     return facts.outcome;
   }).pipe(

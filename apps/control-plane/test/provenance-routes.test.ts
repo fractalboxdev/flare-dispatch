@@ -9,6 +9,7 @@ import { GithubRead, GithubUncredentialed } from "@fractalboxdev/flare-dispatch-
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "./workerd-bundle.ts";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { statementVisibility, VISIBILITY_TTL_MS } from "../src/http.ts";
@@ -45,7 +46,7 @@ let unread: Miniflare;
 
 const miniflare = (repository: object) =>
   new Miniflare({
-    modules: [{ type: "ESModule", path: "worker.js", contents: script }],
+    modules: [{ type: "ESModule", path: "worker.js", contents: script }, ...wasmModules()],
     compatibilityDate: "2026-05-01",
     d1Databases: { DB: "control-plane" },
     durableObjects: {
@@ -140,6 +141,7 @@ beforeAll(async () => {
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   });

@@ -65,9 +65,7 @@ const scanWith = async (
         return Outcome.success();
       }),
     ).pipe(
-      Effect.provide(
-        Layer.mergeAll(store.layer, fakeScanImage(versions, tools), snapshots.layer),
-      ),
+      Effect.provide(Layer.mergeAll(store.layer, fakeScanImage(versions, tools), snapshots.layer)),
     ),
   );
   return {
@@ -105,10 +103,9 @@ describe("security-gate scan preconditions", () => {
       },
     };
     const read = await Effect.runPromise(
-      Effect.flatMap(
-        ScanBundleStore,
-        (s) => s.read(digest),
-      ).pipe(Effect.provide(bucketScanBundleStore(bucket))),
+      Effect.flatMap(ScanBundleStore, (s) => s.read(digest)).pipe(
+        Effect.provide(bucketScanBundleStore(bucket)),
+      ),
     );
     expect(keys).toEqual([`cas/${digest}`]);
     expect(read).toEqual(bytes);
@@ -189,11 +186,9 @@ describe("security-gate scan preconditions", () => {
     });
     expect(none.snapshotReads).toEqual([]);
     expect(none.scanned).toBe(true);
-    expect(lockfileEcosystems(["a/yarn.lock", "b/package-lock.json", "uv.lock", "go.mod", "x.lock"])).toEqual([
-      "Go",
-      "PyPI",
-      "npm",
-    ]);
+    expect(
+      lockfileEcosystems(["a/yarn.lock", "b/package-lock.json", "uv.lock", "go.mod", "x.lock"]),
+    ).toEqual(["Go", "PyPI", "npm"]);
   });
 
   it("[FD-GATE-107] records failure config: advisory snapshot stale <ecosystem> and runs no scanner where the snapshot's Last-Modified time is older than scan.advisoryMaxAgeHours", async () => {
@@ -271,14 +266,17 @@ describe("security-gate scan preconditions", () => {
     const image = nodeScanImage({ env: { PATH: bin } });
     const probe = (scanner: string) =>
       Effect.runPromise(
-        Effect.flatMap(ScanImage, (i) =>
-          i.scannerVersion(scanner),
-        ).pipe(Effect.provide(image), Effect.result),
+        Effect.flatMap(ScanImage, (i) => i.scannerVersion(scanner)).pipe(
+          Effect.provide(image),
+          Effect.result,
+        ),
       );
     const zizmor = await probe("zizmor");
     expect(zizmor).toMatchObject({ success: "1.6.0" });
     const gitleaks = await probe("gitleaks");
-    expect(gitleaks).toMatchObject({ failure: { _tag: "ScannerVersionUnknown", scanner: "gitleaks" } });
+    expect(gitleaks).toMatchObject({
+      failure: { _tag: "ScannerVersionUnknown", scanner: "gitleaks" },
+    });
   });
 
   it("[FD-GATE-109] records failure config: baseline check <control id> and runs no scanner where a check's tool is not a binary the image's scan-tools file lists", async () => {
@@ -293,7 +291,10 @@ describe("security-gate scan preconditions", () => {
   });
 
   it("[FD-GATE-109] reads the scan-tools file one binary per line, and an image without the file lists none", async () => {
-    expect(scanToolsIn("# baseline tools\nsemgrep\n\n  checkov \n")).toEqual(["semgrep", "checkov"]);
+    expect(scanToolsIn("# baseline tools\nsemgrep\n\n  checkov \n")).toEqual([
+      "semgrep",
+      "checkov",
+    ]);
     const dir = await mkdtemp(join(tmpdir(), "fd-scan-tools-"));
     const file = join(dir, "scan-tools");
     await writeFile(file, "semgrep\n");
@@ -309,9 +310,14 @@ describe("security-gate scan preconditions", () => {
 
   it("rejects a payload that fails the schema, naming the first failing path", async () => {
     const payload = validPayload();
-    const bad = { ...payload, scanners: { ...payload.scanners, zizmor: { versions: "nope", exitMap: {} } } };
+    const bad = {
+      ...payload,
+      scanners: { ...payload.scanners, zizmor: { versions: "nope", exitMap: {} } },
+    };
     const exit = await Effect.runPromise(Effect.result(decodePayload(bad)));
-    expect(exit).toMatchObject({ failure: { _tag: "ScanBundleSchemaInvalid", path: "scanners.zizmor.versions" } });
+    expect(exit).toMatchObject({
+      failure: { _tag: "ScanBundleSchemaInvalid", path: "scanners.zizmor.versions" },
+    });
     const { bytes, digest } = await bundle(bad);
     const run = await scanWith(digest, new Map([[digest, bytes]]));
     expect(run.outcome).toEqual(failure("config: scan bundle scanners.zizmor.versions"));

@@ -5,6 +5,7 @@
 import { createHmac } from "node:crypto";
 import { join } from "node:path";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "../../../apps/control-plane/test/workerd-bundle.ts";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -55,12 +56,13 @@ beforeAll(async () => {
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   });
   script = bundle.outputFiles[0]!.text;
   plane = new Miniflare({
-    modules: [{ type: "ESModule", path: "worker.js", contents: script }],
+    modules: [{ type: "ESModule", path: "worker.js", contents: script }, ...wasmModules()],
     compatibilityDate: "2026-05-01",
     d1Databases: { DB: "control-plane" },
     durableObjects: {
@@ -98,7 +100,14 @@ afterAll(async () => {
 const db = async () => (await plane.getD1Database("DB")) as unknown as D1Database;
 
 const rows = async <T = Record<string, unknown>>(sql: string, ...params: unknown[]) =>
-  ((await (await db()).prepare(sql).bind(...params).all()).results ?? []) as T[];
+  ((
+    await (
+      await db()
+    )
+      .prepare(sql)
+      .bind(...params)
+      .all()
+  ).results ?? []) as T[];
 
 /** How many rows each table admission owns holds, and intake's own records. */
 const counts = async () => {
@@ -197,122 +206,109 @@ const admissionWritesByModule = (bundle: string) => {
 const isMameko = (module: string) => module.includes("vendor/mameko/");
 
 describe("intake's one door on the composed control plane", () => {
-  it(
-    "[FD-INT-001] the control plane Worker writes executions, dedup-key and placements rows only in mameko's modules",
-    () => {
-      const writes = admissionWritesByModule(script);
-      // The scan finds admission's own writes, so an empty answer below is not a scan that matched nothing.
-      const mameko = new Set([...writes].filter(([m]) => isMameko(m)).flatMap(([, t]) => [...t]));
-      expect([...mameko].sort()).toEqual(["dedup_keys", "executions", "placements"]);
-      // No FlareDispatch module (intake, its sweep, its re-runs, the follow-on applier, the tick) writes one itself.
-      expect([...writes.keys()].filter((m) => !isMameko(m))).toEqual([]);
-    },
-  );
+  it("[FD-INT-001] the control plane Worker writes executions, dedup-key and placements rows only in mameko's modules", () => {
+    const writes = admissionWritesByModule(script);
+    // The scan finds admission's own writes, so an empty answer below is not a scan that matched nothing.
+    const mameko = new Set([...writes].filter(([m]) => isMameko(m)).flatMap(([, t]) => [...t]));
+    expect([...mameko].sort()).toEqual(["dedup_keys", "executions", "placements"]);
+    // No FlareDispatch module (intake, its sweep, its re-runs, the follow-on applier, the tick) writes one itself.
+    expect([...writes.keys()].filter((m) => !isMameko(m))).toEqual([]);
+  });
 
-  it(
-    "[FD-INT-001] a webhook, an operator dispatch and a check re-run each reach admission, which writes the execution, its dedup key and its placement",
-    async () => {
-      const before = await counts();
+  it("[FD-INT-001] a webhook, an operator dispatch and a check re-run each reach admission, which writes the execution, its dedup key and its placement", async () => {
+    const before = await counts();
 
-      const pr = await webhook("pull_request", pullRequest(41, "1".repeat(40)));
-      expect(pr.status).toBe(202);
-      const { executions } = (await pr.json()) as { executions: string[] };
-      expect(executions).toHaveLength(1);
-      const fromWebhook = executions[0]!;
+    const pr = await webhook("pull_request", pullRequest(41, "1".repeat(40)));
+    expect(pr.status).toBe(202);
+    const { executions } = (await pr.json()) as { executions: string[] };
+    expect(executions).toHaveLength(1);
+    const fromWebhook = executions[0]!;
 
-      const dispatched = await dispatch("2".repeat(40));
-      expect(dispatched.status).toBe(202);
-      const fromDispatch = ((await dispatched.json()) as { execution_id: string }).execution_id;
+    const dispatched = await dispatch("2".repeat(40));
+    expect(dispatched.status).toBe(202);
+    const fromDispatch = ((await dispatched.json()) as { execution_id: string }).execution_id;
 
-      // The webhook's execution ends failed, so its check run's re-run is the family's next attempt.
-      await (await db())
-        .prepare("update executions set status = 'failure', finished_at = ? where id = ?")
-        .bind(Date.now(), fromWebhook)
-        .run();
-      const rerun = await webhook("check_run", {
-        action: "rerequested",
-        repository: { full_name: REPO },
-        installation: { id: 7 },
-        check_run: {
-          id: 99,
-          head_sha: "1".repeat(40),
-          external_id: fromWebhook,
-          name: "flare-dispatch/check",
-          app: { id: APP_ID },
-        },
-      });
-      expect(rerun.status).toBe(202);
-      const reran = ((await rerun.json()) as { executions: string[] }).executions;
-      expect(reran).toHaveLength(1);
-      const fromRerun = reran[0]!;
-      expect(new Set([fromWebhook, fromDispatch, fromRerun]).size).toBe(3);
+    // The webhook's execution ends failed, so its check run's re-run is the family's next attempt.
+    await (
+      await db()
+    )
+      .prepare("update executions set status = 'failure', finished_at = ? where id = ?")
+      .bind(Date.now(), fromWebhook)
+      .run();
+    const rerun = await webhook("check_run", {
+      action: "rerequested",
+      repository: { full_name: REPO },
+      installation: { id: 7 },
+      check_run: {
+        id: 99,
+        head_sha: "1".repeat(40),
+        external_id: fromWebhook,
+        name: "flare-dispatch/check",
+        app: { id: APP_ID },
+      },
+    });
+    expect(rerun.status).toBe(202);
+    const reran = ((await rerun.json()) as { executions: string[] }).executions;
+    expect(reran).toHaveLength(1);
+    const fromRerun = reran[0]!;
+    expect(new Set([fromWebhook, fromDispatch, fromRerun]).size).toBe(3);
 
-      for (const id of [fromWebhook, fromDispatch, fromRerun])
-        expect(await admittedShape(id)).toEqual(ADMITTED);
-      const after = await counts();
-      expect({
-        executions: after.executions! - before.executions!,
-        dedup_keys: after.dedup_keys! - before.dedup_keys!,
-        placements: after.placements! - before.placements!,
-        intake_records: after.intake_records! - before.intake_records!,
-      }).toEqual({ executions: 3, dedup_keys: 3, placements: 3, intake_records: 3 });
-      const [attempt] = await rows<{ attempt: number; family_root: string }>(
-        "select attempt, family_root from intake_records where execution_id = ?",
-        fromRerun,
-      );
-      expect(attempt).toEqual({ attempt: 2, family_root: fromWebhook });
-    },
-    60_000,
-  );
+    for (const id of [fromWebhook, fromDispatch, fromRerun])
+      expect(await admittedShape(id)).toEqual(ADMITTED);
+    const after = await counts();
+    expect({
+      executions: after.executions! - before.executions!,
+      dedup_keys: after.dedup_keys! - before.dedup_keys!,
+      placements: after.placements! - before.placements!,
+      intake_records: after.intake_records! - before.intake_records!,
+    }).toEqual({ executions: 3, dedup_keys: 3, placements: 3, intake_records: 3 });
+    const [attempt] = await rows<{ attempt: number; family_root: string }>(
+      "select attempt, family_root from intake_records where execution_id = ?",
+      fromRerun,
+    );
+    expect(attempt).toEqual({ attempt: 2, family_root: fromWebhook });
+  }, 60_000);
 
-  it(
-    "[FD-INT-003] a reused Idempotency-Key answers 202 with the existing execution and duplicate: true, and with another body 409 conflict naming it",
-    async () => {
-      const headers = { "idempotency-key": "conf-build-7" };
-      const sha = "3".repeat(40);
-      const first = await dispatch(sha, headers);
-      expect(first.status).toBe(202);
-      const firstBody = (await first.json()) as { execution_id: string; duplicate?: boolean };
-      expect(firstBody.duplicate).toBeUndefined();
-      const before = await counts();
+  it("[FD-INT-003] a reused Idempotency-Key answers 202 with the existing execution and duplicate: true, and with another body 409 conflict naming it", async () => {
+    const headers = { "idempotency-key": "conf-build-7" };
+    const sha = "3".repeat(40);
+    const first = await dispatch(sha, headers);
+    expect(first.status).toBe(202);
+    const firstBody = (await first.json()) as { execution_id: string; duplicate?: boolean };
+    expect(firstBody.duplicate).toBeUndefined();
+    const before = await counts();
 
-      const same = await dispatch(sha, headers);
-      expect(same.status).toBe(202);
-      expect(await same.json()).toMatchObject({
-        execution_id: firstBody.execution_id,
-        duplicate: true,
-      });
+    const same = await dispatch(sha, headers);
+    expect(same.status).toBe(202);
+    expect(await same.json()).toMatchObject({
+      execution_id: firstBody.execution_id,
+      duplicate: true,
+    });
 
-      const other = await dispatch(sha, headers, { note: "another body" });
-      expect(other.status).toBe(409);
-      expect(await other.json()).toMatchObject({
-        error: "conflict",
-        execution_id: firstBody.execution_id,
-      });
+    const other = await dispatch(sha, headers, { note: "another body" });
+    expect(other.status).toBe(409);
+    expect(await other.json()).toMatchObject({
+      error: "conflict",
+      execution_id: firstBody.execution_id,
+    });
 
-      // Neither answer admitted a second execution, and intake kept no record of either.
-      expect(await counts()).toEqual(before);
-      expect(await admittedShape(firstBody.execution_id)).toEqual(ADMITTED);
-    },
-    60_000,
-  );
+    // Neither answer admitted a second execution, and intake kept no record of either.
+    expect(await counts()).toEqual(before);
+    expect(await admittedShape(firstBody.execution_id)).toEqual(ADMITTED);
+  }, 60_000);
 
-  it(
-    "[FD-INT-003] a redelivered webhook answers 202 with the existing execution and duplicate: true",
-    async () => {
-      const payload = pullRequest(42, "4".repeat(40));
-      const first = await webhook("pull_request", payload);
-      expect(first.status).toBe(202);
-      const firstBody = (await first.json()) as { executions: string[]; duplicate?: boolean };
-      expect(firstBody.executions).toHaveLength(1);
-      expect(firstBody.duplicate).toBeUndefined();
-      const before = await counts();
+  it("[FD-INT-003] a redelivered webhook answers 202 with the existing execution and duplicate: true", async () => {
+    const payload = pullRequest(42, "4".repeat(40));
+    const first = await webhook("pull_request", payload);
+    expect(first.status).toBe(202);
+    const firstBody = (await first.json()) as { executions: string[]; duplicate?: boolean };
+    expect(firstBody.executions).toHaveLength(1);
+    expect(firstBody.duplicate).toBeUndefined();
+    const before = await counts();
 
-      const again = await webhook("pull_request", payload);
-      expect(again.status).toBe(202);
-      expect(await again.json()).toEqual({ executions: firstBody.executions, duplicate: true });
-      expect(await counts()).toEqual(before);
-    },
-    60_000,
-  );
+    const again = await webhook("pull_request", payload);
+    expect(again.status).toBe(202);
+    expect(await again.json()).toEqual({ executions: firstBody.executions, duplicate: true });
+    expect(await counts()).toEqual(before);
+  }, 60_000);
 });

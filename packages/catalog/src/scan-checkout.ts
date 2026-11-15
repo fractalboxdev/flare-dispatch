@@ -97,7 +97,9 @@ const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
  * One line as text and the way back to bytes. A line that is not UTF-8 reads one character per byte, so a marker of
  * ASCII characters still matches it and the bytes round-trip unchanged.
  */
-const lineText = (bytes: Uint8Array): { readonly text: string; readonly encode: (s: string) => Uint8Array } => {
+const lineText = (
+  bytes: Uint8Array,
+): { readonly text: string; readonly encode: (s: string) => Uint8Array } => {
   try {
     return { text: utf8.decode(bytes), encode: (s) => new TextEncoder().encode(s) };
   } catch {
@@ -115,7 +117,7 @@ const lineText = (bytes: Uint8Array): { readonly text: string; readonly encode: 
 export const stripMarkers = (line: string, markers: readonly RegExp[]): string => {
   const cr = line.endsWith("\r");
   let text = cr ? line.slice(0, -1) : line;
-  for (let before = ""; before !== text; ) {
+  for (let before = ""; before !== text;) {
     before = text;
     for (const marker of markers) text = text.replace(marker, "");
   }

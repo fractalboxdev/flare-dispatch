@@ -121,7 +121,9 @@ describe("the installation's InstallationQuota object", () => {
     await tick();
     expect(checkRunWritesFor(executionId)).toHaveLength(1);
     // The fixture's budget starts below the object's own default, so only the observed headers explain this share.
-    const share = await (await quotaOf(INSTALLATION)).remainingShare(String(INSTALLATION), Date.now());
+    const share = await (
+      await quotaOf(INSTALLATION)
+    ).remainingShare(String(INSTALLATION), Date.now());
     expect(share * RATE_LIMIT).toBe(stack.github.remaining(INSTALLATION));
     expect(share).toBeLessThan(0.8);
   });

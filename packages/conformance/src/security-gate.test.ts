@@ -9,6 +9,7 @@ import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { build } from "esbuild";
+import { wasmModules, workerdBuild } from "../../../apps/control-plane/test/workerd-bundle.ts";
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -68,6 +69,7 @@ beforeAll(async () => {
     bundle: true,
     format: "esm",
     platform: "browser",
+    ...workerdBuild,
     write: false,
     external: ["cloudflare:*"],
   });
@@ -80,7 +82,7 @@ afterAll(async () => {
 
 const controlPlane = async () => {
   const plane = new Miniflare({
-    modules: [{ type: "ESModule", path: "worker.js", contents: script }],
+    modules: [{ type: "ESModule", path: "worker.js", contents: script }, ...wasmModules()],
     compatibilityDate: "2026-05-01",
     d1Databases: { DB: "control-plane" },
     durableObjects: {
@@ -115,7 +117,11 @@ const controlPlane = async () => {
 const sha = (n: number) => n.toString(16).padStart(40, "c");
 
 const INPUTS: Readonly<Record<string, (s: string) => unknown>> = {
-  "security-rescan": (s) => ({ repo: `https://github.com/${REPO}.git`, sha: s, ref: "refs/heads/main" }),
+  "security-rescan": (s) => ({
+    repo: `https://github.com/${REPO}.git`,
+    sha: s,
+    ref: "refs/heads/main",
+  }),
   check: (s) => ({
     repo: `https://github.com/${REPO}.git`,
     sha: s,
@@ -155,7 +161,8 @@ const start = async (
       },
       body,
     });
-    if (delivered.status !== 202) throw new Error(`${run}: ${delivered.status} ${await delivered.text()}`);
+    if (delivered.status !== 202)
+      throw new Error(`${run}: ${delivered.status} ${await delivered.text()}`);
     const { executions } = (await delivered.json()) as { executions: string[] };
     expect(executions).toHaveLength(1);
     return executions[0]!;
@@ -172,7 +179,8 @@ const start = async (
       inputs: INPUTS[run]!(commit),
     }),
   });
-  if (admitted.status !== 202) throw new Error(`${run}: ${admitted.status} ${await admitted.text()}`);
+  if (admitted.status !== 202)
+    throw new Error(`${run}: ${admitted.status} ${await admitted.text()}`);
   return ((await admitted.json()) as { execution_id: string }).execution_id;
 };
 
@@ -192,7 +200,8 @@ const leaseOf = async (run: string, n: number) => {
     const enrolled = await plane.dispatchFetch("http://x/v1/executors/register", {
       method: "POST",
       headers,
-      body: JSON.stringify(registration(executorId, device.identity)),
+      // A run that declares a grant is placed only where the job sandbox is at least a container (MAMEKO-LEASE-084).
+      body: JSON.stringify(registration(executorId, device.identity, ["isolation:container"])),
     });
     expect(enrolled.status).toBe(201);
     const id = await start(plane, run, sha(n), headers);
@@ -240,7 +249,7 @@ describe("the lease of a security scan's job sandbox on the composed control pla
       expect(sent).not.toContain(ORIGIN_HOST);
       expect(sent).not.toMatch(/cc3\./);
       // Beside the repository URL its inputs name, no value of the lease names a host. The scan body fetches that
-      // URL, so the sandbox still reaches the repository's git host: see the pending case below.
+      // URL during its checkout, under the `setup` grant of the repository's git host.
       expect(
         strings(lease).filter(
           (s) => ADDRESSES_HOST.test(s) && s !== `https://github.com/${REPO}.git`,
@@ -249,14 +258,13 @@ describe("the lease of a security scan's job sandbox on the composed control pla
     }
     // A `check` lease on the same deploy reaches the compile cache's host with a token.
     const check = await leaseOf("check", ++n);
-    expect(JSON.stringify(check["upload_grant"])).toContain(`https://${ORIGIN_HOST}/v1/compile-cache/`);
+    expect(JSON.stringify(check["upload_grant"])).toContain(
+      `https://${ORIGIN_HOST}/v1/compile-cache/`,
+    );
     expect(JSON.stringify(check["upload_grant"])).toMatch(/cc3\./);
   }, 120_000);
 
-  // Pending a spec decision on how a scan obtains its checkout: the control plane stages the head and base history
-  // on a read-only path, or the spec names the repository's git host as the one allowed egress. Until then the scan
-  // body runs `git fetch` against the repository URL, so FD-GATE-110's egress half holds for the lease alone.
-  it.todo(
-    "gives a security scan's job sandbox no egress host, the repository's git host included (FD-GATE-110)",
-  );
+  // The egress half of FD-GATE-110: the scan runs declare the git host as their one `setup` grant and none for
+  // `agent`, and end the setup phase before the first scanner (`packages/catalog/src/security-gate.test.ts`); a
+  // Container's outbound handler then decides every request over the `agent` grants (MAMEKO-HOST-058).
 });

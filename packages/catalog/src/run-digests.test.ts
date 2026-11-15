@@ -12,6 +12,8 @@ describe("the committed run-definition digests", () => {
     const committed = JSON.parse(readFileSync(RUN_DIGESTS_PATH, "utf8")) as Record<string, string>;
     expect(Object.keys(committed).sort()).toEqual(registry.map((r) => r.spec.name).sort());
     for (const run of registry)
-      expect(committed[run.spec.name], run.spec.name).toBe(await runDefinitionDigest(run.definition));
+      expect(committed[run.spec.name], run.spec.name).toBe(
+        await runDefinitionDigest(run.definition),
+      );
   });
 });

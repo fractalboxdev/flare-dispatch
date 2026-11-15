@@ -25,7 +25,9 @@ const hex = (bytes: ArrayBuffer) =>
 /** The stream constructors the Worker runtime supplies; a suite in Node passes its own. */
 export interface StreamRuntime {
   /** A sink whose `digest` is the SHA-256 of every byte written to it (`crypto.DigestStream`). */
-  readonly digestStream: () => WritableStream<Uint8Array> & { readonly digest: Promise<ArrayBuffer> };
+  readonly digestStream: () => WritableStream<Uint8Array> & {
+    readonly digest: Promise<ArrayBuffer>;
+  };
   /** A pass-through that errors unless exactly `length` bytes pass it (`FixedLengthStream`). */
   readonly fixedLength: (length: number) => TransformStream<Uint8Array, Uint8Array>;
 }

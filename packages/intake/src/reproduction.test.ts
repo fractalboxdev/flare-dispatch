@@ -55,9 +55,9 @@ const release: ReleaseExecution = {
 
 const submitReproduction = (h: Harness, over: Partial<ReleaseExecution> = {}) =>
   h.run(
-    ReproductionSubmitter.use((s) => s.submit(reproductionRequestFor({ reproduce: true }, { ...release, ...over })!)).pipe(
-      Effect.provide(reproductionSubmitterLayer),
-    ),
+    ReproductionSubmitter.use((s) =>
+      s.submit(reproductionRequestFor({ reproduce: true }, { ...release, ...over })!),
+    ).pipe(Effect.provide(reproductionSubmitterLayer)),
   );
 
 describe("the reproduction submitter", () => {
@@ -85,9 +85,9 @@ describe("the reproduction submitter", () => {
     expect(JSON.parse(record!["labels_json"] as string)).toContain("reproduction");
     // The release's cache trigger is not carried: a reproduction reads no protected tier as a tag push would.
     expect(JSON.parse(record!["cache_trigger_json"] as string)).toEqual(OTHER_CACHE_TRIGGER);
-    expect(h.rows("select canonical from dedup_keys where canonical like ?", `${RELEASE_ID}/%`)).toEqual([
-      { canonical: `${RELEASE_ID}/reproduction` },
-    ]);
+    expect(
+      h.rows("select canonical from dedup_keys where canonical like ?", `${RELEASE_ID}/%`),
+    ).toEqual([{ canonical: `${RELEASE_ID}/reproduction` }]);
 
     // Admission placed it on devices alone, and the profile's constraint asks the attested-dedicated tier of them.
     const [placement] = h.rows("select eligible_kinds from placements where execution_id = ?", id);
@@ -98,23 +98,34 @@ describe("the reproduction submitter", () => {
         class: "interactive",
         labels: JSON.parse(record!["labels_json"] as string) as string[],
       }),
-    ).toMatchObject({ kinds: ["device"], constraints: expect.arrayContaining(["reproduction"]), requiresPosture: "attested-dedicated" });
+    ).toMatchObject({
+      kinds: ["device"],
+      constraints: expect.arrayContaining(["reproduction"]),
+      requiresPosture: "attested-dedicated",
+    });
 
     // A release rule without reproduce creates nothing.
     expect(reproductionRequestFor({}, release)).toBeNull();
     expect(reproductionRequestFor({ reproduce: false }, release)).toBeNull();
     // A request that names another commit than the release's is refused, and admits nothing.
-    expect(await submitReproduction(h, { commit: "c".repeat(40) })).toMatchObject({ _tag: "refused" });
-    expect(h.rows("select count(*) as n from intake_records where placement_constraint = 'reproduction'")).toEqual([
-      { n: 1 },
-    ]);
+    expect(await submitReproduction(h, { commit: "c".repeat(40) })).toMatchObject({
+      _tag: "refused",
+    });
+    expect(
+      h.rows(
+        "select count(*) as n from intake_records where placement_constraint = 'reproduction'",
+      ),
+    ).toEqual([{ n: 1 }]);
   });
 
   it("the reproduction of a cloud-pinned release run is placed on a device: the reproduction constraint supersedes the run's cloud-pinned", async () => {
     const profile = buildProfile("production", 4);
     const production = catalogRuns("production");
     const h = await harness({
-      settings: { profile, catalog: (name) => (name === "sandbox-image" ? production(name) : CATALOG[name]) },
+      settings: {
+        profile,
+        catalog: (name) => (name === "sandbox-image" ? production(name) : CATALOG[name]),
+      },
     });
     const inputs = {
       repo: `https://github.com/${REPO}`,
@@ -129,13 +140,23 @@ describe("the reproduction submitter", () => {
     };
     await h.run(
       IntakeStore.use((s) =>
-        s.put({ ...releaseRecord, run: "sandbox-image", ref: "refs/heads/main", inputs, eligibleKinds: ["cloudflare"] }),
+        s.put({
+          ...releaseRecord,
+          run: "sandbox-image",
+          ref: "refs/heads/main",
+          inputs,
+          eligibleKinds: ["cloudflare"],
+        }),
       ),
     );
     // The release run declares cloud-pinned, which alone would leave the reproduction no kind.
     expect(production("sandbox-image")!.placement!(inputs).constraints).toContain("cloud-pinned");
 
-    const admitted = await submitReproduction(h, { run: "sandbox-image", ref: "refs/heads/main", inputs });
+    const admitted = await submitReproduction(h, {
+      run: "sandbox-image",
+      ref: "refs/heads/main",
+      inputs,
+    });
     expect(admitted).toMatchObject({ _tag: "admitted" });
     const id = (admitted as { executionId: string }).executionId;
     const [placement] = h.rows("select eligible_kinds from placements where execution_id = ?", id);

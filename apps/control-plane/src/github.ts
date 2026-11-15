@@ -240,9 +240,15 @@ export const releaseProvenanceLayer = (env: ControlPlaneEnv) => {
           ReleasePublishRefused: ({ reason, artifact }) =>
             Effect.succeed<ReleaseGateAnswer>({ _tag: "refused", reason, artifact }),
           LogAppendStoreFailed: ({ message }) =>
-            Effect.succeed<ReleaseGateAnswer>({ _tag: "unavailable", reason: `statements: ${message}` }),
+            Effect.succeed<ReleaseGateAnswer>({
+              _tag: "unavailable",
+              reason: `statements: ${message}`,
+            }),
           PolicyStoreFailed: ({ message }) =>
-            Effect.succeed<ReleaseGateAnswer>({ _tag: "unavailable", reason: `key history: ${message}` }),
+            Effect.succeed<ReleaseGateAnswer>({
+              _tag: "unavailable",
+              reason: `key history: ${message}`,
+            }),
         }),
       ),
   });

@@ -130,7 +130,8 @@ describe("the tick's advisory-refresh step", () => {
     const cache = r2();
     const env = await envOf({ CACHE: cache.bucket, ADVISORY_ECOSYSTEMS: ["PyPI"] });
     const exit = await Effect.runPromiseExit(
-      advisoryRefreshStep(env, DAY, (b) => workerAdvisoryPorts(b, nodeStreams, server.fetch)).effect,
+      advisoryRefreshStep(env, DAY, (b) => workerAdvisoryPorts(b, nodeStreams, server.fetch))
+        .effect,
     );
     expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({
       _tag: "AdvisoryRefreshIncomplete",
@@ -142,9 +143,7 @@ describe("the tick's advisory-refresh step", () => {
 
   it("runs on every minute tick, stores nothing where the overlay names no ecosystem, and fails without a CACHE bucket or with a malformed list", async () => {
     const env = await envOf({ DEPLOYMENT: "production", PLANE_ID: "plane" });
-    const unit = tickDeps(env)
-      .units!(DAY)
-      .find((u) => u.step === "advisory-refresh");
+    const unit = tickDeps(env).units!(DAY).find((u) => u.step === "advisory-refresh");
     expect(unit).toBeDefined();
     expect(await Effect.runPromise(unit!.effect)).toEqual({
       refreshed: [],
@@ -204,7 +203,12 @@ describe("the tick's advisory-snapshot-stale watch", () => {
         ),
       );
     expect(await check(DAY)).toMatchObject({ alarm: "sent" });
-    await recordSnapshot(set.DB, "npm", { digest: sha256(archive("npm")), lastModified: PUBLISHED, size: 9 }, DAY);
+    await recordSnapshot(
+      set.DB,
+      "npm",
+      { digest: sha256(archive("npm")), lastModified: PUBLISHED, size: 9 },
+      DAY,
+    );
     expect(await check(DAY + 60_000)).toMatchObject({ alarm: "sent" });
     expect(alarms.delivered.map((a) => [a.name, a.severity, a.state])).toEqual([
       ["advisory-snapshot-stale", "page", "raised"],

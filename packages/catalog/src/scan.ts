@@ -181,13 +181,18 @@ export const scannerInvocation = (
  * binary that cannot start, is a tool error that names the end.
  */
 export const resultOf = (id: string, exitMap: ExitMap, exit: CommandExit): ScanResultOf => {
-  const toolError = (end: string): ScanResultOf => ({ result: "tool-error", reason: ScanReason.error(id, end) });
+  const toolError = (end: string): ScanResultOf => ({
+    result: "tool-error",
+    reason: ScanReason.error(id, end),
+  });
   return Match.value(exit).pipe(
     Match.tagsExhaustive({
       Exited: ({ code }): ScanResultOf => {
         const key = String(code);
         const result = Object.hasOwn(exitMap, key) ? exitMap[key] : undefined;
-        return result === undefined || result === "tool-error" ? toolError(`exit ${code}`) : { result };
+        return result === undefined || result === "tool-error"
+          ? toolError(`exit ${code}`)
+          : { result };
       },
       Signalled: ({ signal }) => toolError(`signal ${signal}`),
       TimedOut: () => toolError("timeout"),
@@ -230,12 +235,7 @@ export const runScanTools = (input: ScanToolsInput): Effect.Effect<ScanReport, n
   Effect.gen(function* () {
     const exec = yield* GateExec;
     const { ctx, prepared, checkout, files } = input;
-    const run = (
-      id: string,
-      invocation: ScanInvocation,
-      exitMap: ExitMap,
-      scanner?: Scanner,
-    ) =>
+    const run = (id: string, invocation: ScanInvocation, exitMap: ExitMap, scanner?: Scanner) =>
       Effect.gen(function* () {
         const options: ArgvOptions = {
           argv: invocation.argv,

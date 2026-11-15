@@ -15,7 +15,10 @@ import {
 } from "@fractalboxdev/flare-dispatch-ops";
 import { Effect, Layer, Match } from "effect";
 import { Outcome } from "../../../../packages/catalog/src/reasons.ts";
-import { ADVISORY_MAX_AGE_DEFAULT_HOURS, runScan } from "../../../../packages/catalog/src/scan-bundle.ts";
+import {
+  ADVISORY_MAX_AGE_DEFAULT_HOURS,
+  runScan,
+} from "../../../../packages/catalog/src/scan-bundle.ts";
 import {
   digestOf,
   envelopeBytes,
@@ -89,7 +92,11 @@ export const simulateAdvisorySchedule = async (seed: number): Promise<AdvisorySc
   const publishes = new Map<string, number[]>(
     ECOSYSTEMS.map((e) => {
       const times: number[] = [];
-      for (let at = start - Math.floor(rand() * 12 * HOUR); at < end; at += HOUR + Math.floor(rand() * 11 * HOUR))
+      for (
+        let at = start - Math.floor(rand() * 12 * HOUR);
+        at < end;
+        at += HOUR + Math.floor(rand() * 11 * HOUR)
+      )
         times.push(Math.floor(at / 1000) * 1000);
       return [e, times];
     }),
@@ -139,7 +146,7 @@ export const simulateAdvisorySchedule = async (seed: number): Promise<AdvisorySc
       });
   };
 
-  for (let now = start; now < end; ) {
+  for (let now = start; now < end;) {
     served = new Map(
       ECOSYSTEMS.map((e) => {
         const times = publishes.get(e)!.filter((t) => t <= now);

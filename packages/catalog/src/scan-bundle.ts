@@ -52,7 +52,8 @@ interface Version {
   readonly prerelease: readonly string[];
 }
 
-const VERSION = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/;
+const VERSION =
+  /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/;
 
 /** A semver 2.0.0 version, with an optional leading `v`, or `undefined`. */
 export const parseVersion = (text: string): Version | undefined => {
@@ -104,7 +105,8 @@ const PARTIAL =
 
 /** A partial version's parts: each number, or `undefined` from its first wildcard or missing part on. */
 const parsePartial = (text: string) => {
-  if (text === "" || text === "*" || text === "x" || text === "X") return { parts: [] as number[], pre: [] };
+  if (text === "" || text === "*" || text === "x" || text === "X")
+    return { parts: [] as number[], pre: [] };
   const m = PARTIAL.exec(text);
   if (m === null) return undefined;
   const parts: number[] = [];
@@ -189,7 +191,8 @@ export const parseRange = (range: string): readonly (readonly Comparator[])[] | 
       else if (to.parts.length > 0)
         set.push({
           op: "<",
-          version: to.parts.length === 1 ? v(major! + 1, 0, 0, ["0"]) : v(major!, minor! + 1, 0, ["0"]),
+          version:
+            to.parts.length === 1 ? v(major! + 1, 0, 0, ["0"]) : v(major!, minor! + 1, 0, ["0"]),
           implied: true,
         });
     } else
@@ -235,7 +238,8 @@ export const satisfies = (version: string, range: string): boolean => {
       set.every((c) => holds(c, parsed)) &&
       (parsed.prerelease.length === 0 ||
         set.some(
-          (c) => c.implied !== true && c.version.prerelease.length > 0 && sameTuple(c.version, parsed),
+          (c) =>
+            c.implied !== true && c.version.prerelease.length > 0 && sameTuple(c.version, parsed),
         )),
   );
 };
@@ -408,7 +412,9 @@ const pathOf = (path: ReadonlyArray<unknown> | undefined): string =>
     .join(".");
 
 /** The payload as the v1 schema reads it, or the first path it fails at (FD-OPS-097). */
-export const decodePayload = (json: unknown): Effect.Effect<ScanBundlePayload, ScanBundleSchemaInvalid> => {
+export const decodePayload = (
+  json: unknown,
+): Effect.Effect<ScanBundlePayload, ScanBundleSchemaInvalid> => {
   const exit = Schema.decodeUnknownExit(ScanBundlePayload, {
     onExcessProperty: "error",
     errors: "first",
@@ -424,8 +430,7 @@ export const decodePayload = (json: unknown): Effect.Effect<ScanBundlePayload, S
   return Effect.fail(new ScanBundleSchemaInvalid(first));
 };
 
-const RFC3339 =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 const instant = (text: string | undefined): number | undefined =>
   text === undefined || !RFC3339.test(text) ? undefined : Date.parse(text);
@@ -437,7 +442,8 @@ const instant = (text: string | undefined): number | undefined =>
 export const windowHolds = (key: ScanBundleKey, at: number): boolean => {
   const from = instant(key.notBefore);
   const to = instant(key.notAfter);
-  if (from === undefined || to === undefined || Number.isNaN(from) || Number.isNaN(to)) return false;
+  if (from === undefined || to === undefined || Number.isNaN(from) || Number.isNaN(to))
+    return false;
   return from < to && from <= at && at < to;
 };
 
@@ -445,7 +451,11 @@ export const windowHolds = (key: ScanBundleKey, at: number): boolean => {
  * Fails unless some signature of the envelope verifies under a key whose window holds `at`, the one verification time
  * the caller sampled (FD-OPS-095). The envelope's own content names no time the check reads.
  */
-export const verifySignature = (envelope: AnyDsseEnvelope, keys: readonly ScanBundleKey[], at: number) =>
+export const verifySignature = (
+  envelope: AnyDsseEnvelope,
+  keys: readonly ScanBundleKey[],
+  at: number,
+) =>
   Effect.gen(function* () {
     const open = keys.filter((k) => windowHolds(k, at));
     if (open.length === 0)
@@ -581,9 +591,9 @@ export const advisoryPreconditions = (
     const store = yield* AdvisorySnapshots;
     const snapshots: Record<string, AdvisorySnapshot> = {};
     for (const ecosystem of ecosystems) {
-      const snapshot = yield* store.read(ecosystem).pipe(
-        Effect.catchTag("AdvisorySnapshotUnreadable", () => Effect.succeed(null)),
-      );
+      const snapshot = yield* store
+        .read(ecosystem)
+        .pipe(Effect.catchTag("AdvisorySnapshotUnreadable", () => Effect.succeed(null)));
       if (snapshot === null) return yield* refuse(ScanConfigReason.advisoryMissing(ecosystem));
       if (snapshotStale(snapshot, scope.now, scope.advisoryMaxAgeHours))
         return yield* refuse(ScanConfigReason.advisoryStale(ecosystem));
@@ -609,9 +619,9 @@ export const prepareScan = (
     if (pin === undefined || pin === "") return yield* refuse(ScanConfigReason.notPinned);
     const store = yield* ScanBundleStore;
     const image = yield* ScanImage;
-    const bytes = yield* store.read(pin).pipe(
-      Effect.catchTag("ScanBundleUnreadable", () => Effect.succeed(null)),
-    );
+    const bytes = yield* store
+      .read(pin)
+      .pipe(Effect.catchTag("ScanBundleUnreadable", () => Effect.succeed(null)));
     if (bytes === null) return yield* refuse(ScanConfigReason.missing);
     const digest = yield* checkDigest(bytes, pin).pipe(
       Effect.catchTag("ScanBundleDigestMismatch", () => refuse(ScanConfigReason.digest)),
@@ -624,18 +634,21 @@ export const prepareScan = (
     );
     const versions = {} as Record<Scanner, string>;
     for (const scanner of SCANNERS) {
-      const version = yield* image.scannerVersion(scanner).pipe(
-        Effect.catchTag("ScannerVersionUnknown", () =>
-          refuse(ScanConfigReason.scannerVersion(scanner)),
-        ),
-      );
+      const version = yield* image
+        .scannerVersion(scanner)
+        .pipe(
+          Effect.catchTag("ScannerVersionUnknown", () =>
+            refuse(ScanConfigReason.scannerVersion(scanner)),
+          ),
+        );
       if (!satisfies(version, payload.scanners[scanner].versions))
         return yield* refuse(ScanConfigReason.scannerVersion(scanner));
       versions[scanner] = version;
     }
     const tools = new Set(yield* image.scanTools);
     for (const check of payload.baselineChecks)
-      if (!tools.has(check.tool)) return yield* refuse(ScanConfigReason.baselineCheck(check.controlId));
+      if (!tools.has(check.tool))
+        return yield* refuse(ScanConfigReason.baselineCheck(check.controlId));
     const snapshots = yield* advisoryPreconditions(scope);
     return { bundle: { digest, envelope, payload }, versions, snapshots };
   });
@@ -657,7 +670,9 @@ export const runScan = <E, R>(
 
 /** The R2 reads the scan bundle store makes: an `R2Bucket`'s `get`. */
 export interface ContentBucket {
-  readonly get: (key: string) => Promise<{ readonly arrayBuffer: () => Promise<ArrayBuffer> } | null>;
+  readonly get: (
+    key: string,
+  ) => Promise<{ readonly arrayBuffer: () => Promise<ArrayBuffer> } | null>;
 }
 
 /**

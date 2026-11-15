@@ -271,7 +271,8 @@ describe("check", () => {
     expect(decoded.label).toBe("lint");
 
     expect(KEY_PATTERN.source).toBe("^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$");
-    for (const label of ["a", "Z9", "unit.e2e_v2-x", "x".repeat(32)]) expect(isKey(label)).toBe(true);
+    for (const label of ["a", "Z9", "unit.e2e_v2-x", "x".repeat(32)])
+      expect(isKey(label)).toBe(true);
     for (const label of ["", ".a", "_a", "-a", "a b", "a:b", "a/b", "x".repeat(33)])
       expect(isKey(label)).toBe(false);
 

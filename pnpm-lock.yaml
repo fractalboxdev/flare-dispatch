@@ -45,6 +45,9 @@ importers:
 
   apps/control-plane:
     dependencies:
+      '@cloudflare/containers':
+        specifier: 0.3.7
+        version: 0.3.7
       '@fractalboxdev/flare-dispatch-agentic':
         specifier: workspace:*
         version: link:../../packages/agentic
@@ -72,6 +75,9 @@ importers:
       '@fractalboxdev/mameko-coordinator':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/coordinator
+      '@fractalboxdev/mameko-egress':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/egress
       '@fractalboxdev/mameko-host-cloudflare':
         specifier: workspace:*
         version: link:../../vendor/mameko/packages/host-cloudflare
@@ -97,6 +103,9 @@ importers:
       '@fractalboxdev/flare-dispatch-local-ci':
         specifier: workspace:*
         version: link:../../packages/local-ci
+      '@fractalboxdev/mameko-run':
+        specifier: workspace:*
+        version: link:../../vendor/mameko/packages/run
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.1

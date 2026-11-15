@@ -301,8 +301,9 @@ describe("the security gate recipes as intake reads them", () => {
     ).toMatchObject({ sha: HEAD, base: { _tag: "MergeGroup", baseSha: BASE } });
   });
 
-  it("[FD-GATE-110] gives both scan runs no grant in either egress phase", () => {
-    for (const run of SCANS) expect(production(run)!.grants).toEqual({ setup: [], agent: [] });
+  it("[FD-GATE-110] gives both scan runs the git host as their only setup grant and no agent grant", () => {
+    for (const run of SCANS)
+      expect(production(run)!.grants).toEqual({ setup: ["git-remote"], agent: [] });
   });
 
   it("[FD-GATE-111] answers no webhook for security-rescan and refuses a label on its manifest entry", () => {
@@ -348,7 +349,12 @@ describe("the security gate recipes as intake reads them", () => {
       repos: {
         [REPO]: repoWithManifest(
           manifest([
-            { recipe: "check", label: "ci", triggers: ["pull_request"], params: { steps: ["test"] } },
+            {
+              recipe: "check",
+              label: "ci",
+              triggers: ["pull_request"],
+              params: { steps: ["test"] },
+            },
             { recipe: "security-rescan", triggers: ["dispatch"] },
           ]),
         ),
@@ -365,7 +371,9 @@ describe("the security gate recipes as intake reads them", () => {
       authenticated({ run: "security-rescan", label: null, sha: HEAD, inputs, idempotency }),
     );
     expect(admitted.duplicate).toBe(false);
-    expect(h.records()).toMatchObject([{ run: "security-rescan", trigger: "dispatch", label: null }]);
+    expect(h.records()).toMatchObject([
+      { run: "security-rescan", trigger: "dispatch", label: null },
+    ]);
     expect(h.recorded.resolved.map((r) => r.checkName)).toEqual(["flare-dispatch/security-rescan"]);
     // A dispatch naming a label matches no manifest entry.
     expect(
@@ -406,8 +414,12 @@ describe("the security gate recipes as intake reads them", () => {
 
   it("[FD-GATE-112] scans the commit the dispatch pinned in the repository it is authorized for, and refuses inputs naming another", async () => {
     const h = await harness({
-      repos: { [REPO]: repoWithManifest(manifest([{ recipe: "security-rescan", triggers: ["dispatch"] }])) },
-      settings: { catalog: (name) => (name === "security-rescan" ? production(name) : CATALOG[name]) },
+      repos: {
+        [REPO]: repoWithManifest(manifest([{ recipe: "security-rescan", triggers: ["dispatch"] }])),
+      },
+      settings: {
+        catalog: (name) => (name === "security-rescan" ? production(name) : CATALOG[name]),
+      },
     });
     const dispatch = (key: string, inputs: unknown, sha: string | undefined = HEAD) =>
       authenticated({
@@ -417,7 +429,12 @@ describe("the security gate recipes as intake reads them", () => {
         inputs,
         idempotency: { key, body: { repository: REPO, inputs } },
       });
-    const own = { repo: `https://github.com/${REPO}.git`, sha: HEAD, ref: "refs/heads/main", scope: REPO };
+    const own = {
+      repo: `https://github.com/${REPO}.git`,
+      sha: HEAD,
+      ref: "refs/heads/main",
+      scope: REPO,
+    };
     for (const [field, value] of [
       ["repo", "https://github.com/attacker/fork.git"],
       ["repo", "file:///etc"],
@@ -425,7 +442,10 @@ describe("the security gate recipes as intake reads them", () => {
       ["ref", "refs/heads/other"],
       ["scope", "attacker/fork"],
     ] as const)
-      expect(await refusal(h, dispatch(`r-${field}-${value}`, { ...own, [field]: value })), field).toEqual({
+      expect(
+        await refusal(h, dispatch(`r-${field}-${value}`, { ...own, [field]: value })),
+        field,
+      ).toEqual({
         status: 400,
         code: "invalid_inputs",
       });
@@ -438,11 +458,17 @@ describe("the security gate recipes as intake reads them", () => {
 
     // A dispatch with no commit scans the head intake pinned, not one its inputs name.
     const pinned = await harness({
-      repos: { [REPO]: repoWithManifest(manifest([{ recipe: "security-rescan", triggers: ["dispatch"] }])) },
-      settings: { catalog: (name) => (name === "security-rescan" ? production(name) : CATALOG[name]) },
+      repos: {
+        [REPO]: repoWithManifest(manifest([{ recipe: "security-rescan", triggers: ["dispatch"] }])),
+      },
+      settings: {
+        catalog: (name) => (name === "security-rescan" ? production(name) : CATALOG[name]),
+      },
     });
     await admit(pinned, dispatch("r-head", {}, undefined));
-    const [record] = pinned.records().map((r) => JSON.parse(r.inputs_json as string) as { sha: string });
+    const [record] = pinned
+      .records()
+      .map((r) => JSON.parse(r.inputs_json as string) as { sha: string });
     expect(record!.sha).toMatch(/^[0-9a-f]{40}$/);
     expect(pinned.records()[0]!.sha).toBe(record!.sha);
     expect(await refusal(pinned, dispatch("r-other", { sha: BASE }, undefined))).toEqual({

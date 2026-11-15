@@ -63,7 +63,10 @@ export const reproductionSubmitterLayer = Layer.effect(
           const config = yield* IntakeConfig;
           const release = yield* (yield* IntakeStore).get(request.reproduces);
           if (release === null)
-            return { _tag: "refused" as const, reason: `reproduction: no execution ${request.reproduces}` };
+            return {
+              _tag: "refused" as const,
+              reason: `reproduction: no execution ${request.reproduces}`,
+            };
           if (
             release.repo !== request.repository ||
             release.sha !== request.commit ||
@@ -75,11 +78,19 @@ export const reproductionSubmitterLayer = Layer.effect(
             };
           const run = config.catalog(request.run);
           if (run === undefined)
-            return { _tag: "refused" as const, reason: `reproduction: no run named ${request.run}` };
+            return {
+              _tag: "refused" as const,
+              reason: `reproduction: no run named ${request.run}`,
+            };
           const inputs = Schema.decodeUnknownResult(run.input)(request.inputs);
           if (Result.isFailure(inputs))
-            return { _tag: "refused" as const, reason: `reproduction: inputs: ${inputs.failure.message}` };
-          const admitted = yield* submit(reproductionSubmission(release, request, run, inputs.success));
+            return {
+              _tag: "refused" as const,
+              reason: `reproduction: inputs: ${inputs.failure.message}`,
+            };
+          const admitted = yield* submit(
+            reproductionSubmission(release, request, run, inputs.success),
+          );
           return { _tag: "admitted" as const, executionId: admitted.executionId };
         }).pipe(
           Effect.catchTags({
@@ -89,7 +100,8 @@ export const reproductionSubmitterLayer = Layer.effect(
                   ? { _tag: "unavailable" as const, reason: e.message }
                   : { _tag: "refused" as const, reason: `${e.code}: ${e.message}` },
               ),
-            StoreUnavailable: (e) => Effect.succeed({ _tag: "unavailable" as const, reason: e.message }),
+            StoreUnavailable: (e) =>
+              Effect.succeed({ _tag: "unavailable" as const, reason: e.message }),
           }),
           Effect.provide(context),
         ),

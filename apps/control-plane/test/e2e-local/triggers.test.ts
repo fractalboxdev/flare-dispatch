@@ -147,9 +147,18 @@ describe("security-gate on a pull request the other gates skip", () => {
            where execution_id in (${ids.map(() => "?").join(", ")}) order by run`,
         )
         .bind(...ids)
-        .all<{ execution_id: string; trigger: string; run: string; sha: string; inputs_json: string }>()
+        .all<{
+          execution_id: string;
+          trigger: string;
+          run: string;
+          sha: string;
+          inputs_json: string;
+        }>()
     ).results;
-    return rows.map((r) => ({ ...r, inputs: JSON.parse(r.inputs_json) as Record<string, unknown> }));
+    return rows.map((r) => ({
+      ...r,
+      inputs: JSON.parse(r.inputs_json) as Record<string, unknown>,
+    }));
   };
 
   it("[FD-GATE-085] the Worker admits security-gate for a draft pull request from dependabot[bot], with no skip fact in its input", async () => {
@@ -161,7 +170,11 @@ describe("security-gate on a pull request the other gates skip", () => {
         const pr = payload["pull_request"] as Record<string, unknown>;
         return {
           ...payload,
-          pull_request: { ...pr, draft: true, user: { login: "dependabot[bot]", id: 49699333, type: "Bot" } },
+          pull_request: {
+            ...pr,
+            draft: true,
+            user: { login: "dependabot[bot]", id: 49699333, type: "Bot" },
+          },
           sender: { login: "dependabot[bot]", id: 49699333, type: "Bot" },
         };
       },
@@ -186,6 +199,8 @@ describe("security-gate on a pull request the other gates skip", () => {
     expect(gate!.inputs).not.toHaveProperty("skipAuthors");
     // `check` answers the same delivery with the draft state and author its body skips on.
     const check = rows.find((row) => row.run === "check");
-    expect(check?.inputs).toMatchObject({ pullRequest: { draft: true, author: "dependabot[bot]" } });
+    expect(check?.inputs).toMatchObject({
+      pullRequest: { draft: true, author: "dependabot[bot]" },
+    });
   });
 });
