@@ -8,10 +8,12 @@ import { promptMessages, sanitizeModelText } from "../boundary.ts";
 import { checkSuppression, suppressionKey, suppressionReadFailed } from "../suppression/ledger.ts";
 import { ReadFailed } from "./spec-drift-pr.ts";
 import { Checkout, ModelClient, StagedWrites } from "./services.ts";
+import { AgentLeaseField } from "./lease.ts";
 
 export const TriagePrsInput = Schema.Struct({
   repo: Schema.Struct({ owner: Schema.String, name: Schema.String }),
   baseBranch: Schema.String,
+  ...AgentLeaseField,
 });
 export type TriagePrsInput = typeof TriagePrsInput.Type;
 

@@ -234,8 +234,8 @@ export const scanReport = (facts: ScanFacts): ScanRunReport => {
 /**
  * One scan of `ctx.sha` from `base`: the preconditions, the checkout, the verified bundle's scanner configurations,
  * every scanner and baseline check, then the verdict. A refused precondition records its `config` reason and runs no
- * scanner; a checkout that fails records `infra: CheckoutFailed`, and configurations that cannot be written
- * `infra: WorkspaceWriteFailed`.
+ * scanner; a checkout that fails records `infra: CheckoutFailed`, configurations that cannot be written
+ * `infra: WorkspaceWriteFailed`, and an egress switch that does not hold `infra: EgressPhaseFailed`.
  */
 export const scanFacts = (
   ctx: GateContext,
@@ -296,6 +296,13 @@ export const scanFacts = (
         WorkspaceWriteFailed: () =>
           Effect.succeed<ScanFacts>({
             outcome: Outcome.failure("infra: WorkspaceWriteFailed"),
+            prepared,
+            steps: [],
+          }),
+        // The egress switch did not hold, so no scanner starts while the git host is still reachable (FD-GATE-110).
+        EgressPhaseFailed: () =>
+          Effect.succeed<ScanFacts>({
+            outcome: Outcome.failure("infra: EgressPhaseFailed"),
             prepared,
             steps: [],
           }),

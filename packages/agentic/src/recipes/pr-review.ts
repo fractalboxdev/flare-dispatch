@@ -7,6 +7,7 @@ import * as Activity from "effect/workflow/Activity";
 import { promptMessages, sanitizeModelText } from "../boundary.ts";
 import { TRUSTED_ASSOCIATIONS } from "../declaration.ts";
 import { Artifacts, ModelClient, RecipeIntents, Shell, type ModelCallError } from "./services.ts";
+import { AgentLeaseField } from "./lease.ts";
 
 export const PR_REVIEW_MARKER = "<!-- flare-dispatch: pr-review -->";
 export const MAX_COMMENT_FINDINGS = 25;
@@ -79,6 +80,7 @@ export const PrReviewInput = Schema.Struct({
    * (FD-AGT-092, FD-AGT-093).
    */
   requiredCheck: Schema.optionalKey(Schema.Boolean),
+  ...AgentLeaseField,
 });
 export type PrReviewInput = typeof PrReviewInput.Type;
 

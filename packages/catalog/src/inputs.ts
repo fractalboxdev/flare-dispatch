@@ -122,6 +122,35 @@ export type SandboxImageInput = typeof SandboxImageInput.Type;
 
 const ScanSha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/));
 
+/** One advisory snapshot a scan lease carries: the snapshot the control plane recorded, and a read of its archive. */
+export const LeasedAdvisory = Schema.Struct({
+  ecosystem: Schema.NonEmptyString,
+  /** The SHA-256 of the OSV `all.zip` archive, which `cas/<digest>` holds. */
+  digest: Schema.NonEmptyString,
+  /** The archive's `Last-Modified` time, epoch ms. */
+  lastModified: Schema.Number,
+  /** A presigned `GET` of `cas/<digest>`, valid for the presigner's URL lifetime and never past `deadline_at`. */
+  url: Schema.NonEmptyString,
+});
+export type LeasedAdvisory = typeof LeasedAdvisory.Type;
+
+/**
+ * A scan lease's executor values, which the control plane writes into the input of a `security-gate` or
+ * `security-rescan` lease and the run reads through the egress handler's object-store pass alone (FD-GATE-110): the
+ * deployment's `scan.bundleDigest` with a presigned `GET` of `cas/<digest>`, `scan.advisoryMaxAgeHours`, and each
+ * recorded advisory snapshot. The control plane drops any value a request recorded under the same key, so no request
+ * changes what the scan reads (FD-GATE-084).
+ */
+export const ScanLease = Schema.Struct({
+  /** `scan.bundleDigest`; absent where the overlay pins none (FD-GATE-101). */
+  bundleDigest: Schema.optionalKey(Schema.NonEmptyString),
+  /** A presigned `GET` of `cas/<bundleDigest>`; absent where the control plane signs none. */
+  bundleUrl: Schema.optionalKey(Schema.NonEmptyString),
+  advisoryMaxAgeHours: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+  advisories: Schema.Array(LeasedAdvisory),
+});
+export type ScanLease = typeof ScanLease.Type;
+
 /**
  * The commit a scan's checkout starts from and the place its range starts: the repository, the head commit and its ref,
  * and the execution's `deadline_at`. A scan run's input holds no command, scanner, flag or skip field (FD-GATE-084), so
@@ -136,6 +165,8 @@ const ScanCommitFields = {
   scope: Schema.optionalKey(Schema.String),
   /** The execution's `deadline_at`, epoch milliseconds. */
   deadlineAt: Schema.optionalKey(Schema.Number),
+  /** The lease's scan values; absent on a lease whose control plane writes none. */
+  cloudLease: Schema.optionalKey(ScanLease),
 };
 
 /**

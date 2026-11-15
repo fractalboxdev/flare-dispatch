@@ -1110,7 +1110,7 @@ describe("a development deployment", () => {
   );
 });
 
-/** A manifest that lists `worker-deploy` and `sandbox-image` for dispatch, beside the repository's own. */
+/** A manifest that lists `worker-deploy`, `sandbox-image` and `security-rescan` for dispatch. */
 const PLACEMENT_REPOSITORY = {
   ...DEV_REPOSITORY,
   files: {
@@ -1132,17 +1132,22 @@ const PLACEMENT_REPOSITORY = {
               ],
             },
           },
+          { recipe: "security-rescan", triggers: ["dispatch"] },
         ],
       }),
     ).toString("base64"),
   },
 };
 
+/** The scan bundle digest the placement deploy pins. */
+const SCAN_PIN = "b".repeat(64);
+
 describe("placement of cloud-pinned runs through admission and the lease path", () => {
   let placement: Miniflare;
   beforeAll(async () => {
     placement = miniflare("development", true, PLACEMENT_REPOSITORY, {
       GATE_IMAGE_DIGEST: `sha256:${"a".repeat(64)}`,
+      SCAN_BUNDLE_DIGEST: SCAN_PIN,
     });
     await placement.ready;
   });
@@ -1226,6 +1231,61 @@ describe("placement of cloud-pinned runs through admission and the lease path", 
       expect(await socket.next("exec.lease")).toMatchObject({ execution_id: id, run });
     },
   );
+
+  it("[FD-GATE-110] [FD-GATE-084] a security-rescan lease's input carries the control plane's scan values in place of the ones the request recorded", async () => {
+    const device = await newDevice();
+    await post(
+      placement,
+      "/v1/executors/register",
+      registration("mac-scan-lease", device.identity, ["isolation:vm"]),
+    );
+    const sha = "f".repeat(40);
+    // A dispatch of the read-only scan run carries an Idempotency-Key (FD-IFC-092).
+    const admitted = await placement.dispatchFetch("http://x/v1/dispatch/security-rescan", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "scan-lease-1",
+        ...(await headersFor(OPERATOR)),
+      },
+      body: JSON.stringify({
+        repository: "fractalboxdev/flare-dispatch",
+        sha,
+        inputs: {
+          cloudLease: {
+            bundleDigest: "0".repeat(64),
+            advisoryMaxAgeHours: 100_000,
+            advisories: [],
+          },
+        },
+      }),
+    });
+    expect(admitted.status).toBe(202);
+    const { execution_id: id, class: className } = (await admitted.json()) as {
+      execution_id: string;
+      class: string;
+    };
+    // The run is cloud-only; with the eligible kinds cleared, the device's claim takes the lease the Container would.
+    await (
+      await placement.getD1Database("DB")
+    )
+      .prepare("update placements set eligible_kinds = null where execution_id = ?")
+      .bind(id)
+      .run();
+    const socket = await connect(placement, "mac-scan-lease", device.keys);
+    socket.send(hello("mac-scan-lease"));
+    await socket.next("session.welcome");
+    socket.send({ type: "exec.claim", id: "c1", free: { [className]: 1 } });
+    const lease = (await socket.next("exec.lease")) as { inputs: Record<string, unknown> };
+    expect(lease).toMatchObject({ execution_id: id, run: "security-rescan" });
+    // The deploy pins a bundle and signs no read, records no advisory snapshot, and keeps the default maximum age.
+    expect(lease.inputs["cloudLease"]).toEqual({
+      bundleDigest: SCAN_PIN,
+      advisoryMaxAgeHours: 48,
+      advisories: [],
+    });
+    await endStandingClaim(socket);
+  });
 });
 
 describe("the declared dispatch route", () => {

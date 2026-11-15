@@ -5,11 +5,20 @@ import {
   agenticRuns,
   type CloudAgenticServices,
 } from "@fractalboxdev/flare-dispatch-agentic/executor";
-import { defineRun, type Intents, type LocalContent } from "@fractalboxdev/mameko-run";
+import {
+  defineRun,
+  type Artifact,
+  type Exec,
+  type Intents,
+  type LocalContent,
+  type RunResult,
+  type Workspace,
+} from "@fractalboxdev/mameko-run";
 import { Effect, Layer } from "effect";
 import { runCheck } from "./check.ts";
 import { processGateExec, type GateExec } from "./command.ts";
 import { runDeploySmoke } from "./deploy-smoke.ts";
+import { ExecutionLease, type LeaseLayerFailure } from "./execution-lease.ts";
 import { githubReadLayer, type GithubRead } from "./github-read.ts";
 import {
   CheckInput,
@@ -46,25 +55,34 @@ import {
 } from "./spec.ts";
 import { runWorkerDeploy, type DeployLedger } from "./worker-deploy.ts";
 
+/**
+ * One gate run through `defineRun`, with its body beside the definition, so an executor whose services depend on the
+ * lease builds them inside each execution around the same body.
+ */
 const define = <I extends Parameters<typeof defineRun>[0]["input"], R>(
   spec: RunSpecFields,
   input: I,
   body: (input: I["Type"]) => Effect.Effect<Parameters<typeof toRunResult>[0], never, R>,
-) =>
-  defineRun(
-    {
-      ...spec,
-      input,
-      requires: [...spec.requires],
-      labels: [...spec.labels],
-      constraints: [...spec.constraints],
-      grants: { setup: [...spec.grants.setup], agent: [...spec.grants.agent] },
-      outputPaths: [...spec.outputPaths],
-      intentKinds: [...spec.intentKinds],
-    },
-    (i) => body(i).pipe(Effect.map(toRunResult)),
-    { classRanks },
-  );
+) => {
+  const run = (i: I["Type"]) => body(i).pipe(Effect.map(toRunResult));
+  return {
+    ...defineRun(
+      {
+        ...spec,
+        input,
+        requires: [...spec.requires],
+        labels: [...spec.labels],
+        constraints: [...spec.constraints],
+        grants: { setup: [...spec.grants.setup], agent: [...spec.grants.agent] },
+        outputPaths: [...spec.outputPaths],
+        intentKinds: [...spec.intentKinds],
+      },
+      run,
+      { classRanks },
+    ),
+    body: run,
+  };
+};
 
 export const checkRun = define(checkSpec, CheckInput, runCheck);
 export const oxlintRun = define(oxlintSpec, OxlintInput, runOxlint);
@@ -110,21 +128,30 @@ export const deviceLayers: Layer.Layer<GateExec | GateArtifacts | GithubRead, ne
 /** The services the gate runs a cloud executor serves require: the device's, and the deploy ledger. */
 export type CloudGateServices = GateExec | GateArtifacts | GithubRead | DeployLedger;
 
+/** The runner's services a per-lease Layer may read beside `ExecutionLease`. */
+export type LeaseLayerContext = ExecutionLease | Intents | Workspace | Exec | Artifact;
+
 /** The executor a runner entry serves: the device, or the cloud executor with the Layers of the runs it serves. */
 export type RunnerExecutor =
   | { readonly kind: "device" }
   | {
       readonly kind: "cloud";
       /**
-       * The agentic recipes' services for the execution's job sandbox, from `cloudAgenticLayers`. Without them the cloud
-       * executor serves no agentic recipe.
+       * The agentic recipes' services for the execution's job sandbox, from `cloudAgenticLayers`, built inside each
+       * execution from its `ExecutionLease` and the runner's services. A Layer that fails ends the run with
+       * `infra: <tag>` before the body starts. Without them the cloud executor serves no agentic recipe.
        */
-      readonly layers?: Layer.Layer<CloudAgenticServices, never, Intents>;
+      readonly layers?: Layer.Layer<CloudAgenticServices, LeaseLayerFailure, LeaseLayerContext>;
       /**
        * The scan runs' services for the execution's job sandbox: its processes, the scan bundle store, the image, the
-       * advisory snapshots and the deployment's scan settings. Without them the cloud executor serves no scan run.
+       * advisory snapshots and the deployment's scan settings, built inside each execution as `layers` is. Without them
+       * the cloud executor serves no scan run.
        */
-      readonly scan?: Layer.Layer<Exclude<ScanServices, Intents>>;
+      readonly scan?: Layer.Layer<
+        Exclude<ScanServices, Intents>,
+        LeaseLayerFailure,
+        LeaseLayerContext
+      >;
       /**
        * The gate runs' services where the Container is the job sandbox: processes on its host, artifacts on the
        * execution's local content store, GitHub reads and a deploy ledger that outlives a reclaim. Without them the
@@ -197,34 +224,78 @@ const gateRunsWith = <R extends (typeof registry)[number]>(
           ),
         }));
 
-/** The agentic recipes of `available`, each with the cloud executor's agentic Layers provided; none without them. */
+/** What `perExecution` reads of a run: its workflow and the body its `layer` registers. */
+interface RunBody {
+  readonly workflow: (typeof registry)[number]["workflow"];
+  readonly body: (input: never) => Effect.Effect<RunResult, never, unknown>;
+}
+
+/** The run payload fields a per-lease Layer reads. */
+interface LeasePayload {
+  readonly execution_id: string;
+  readonly epoch: number;
+  readonly input: unknown;
+}
+
+/**
+ * `run` with its body registered on the engine inside each execution: `layer` is built there from the payload's
+ * execution id, epoch and decoded input as `ExecutionLease`, beside the runner's services, so the one bundle serves
+ * every lease. A Layer that fails ends the run with `failure` and `infra: <tag>` before the body starts; no default
+ * stands in for a missing value.
+ */
+const perExecution = <R extends RunBody, A>(
+  run: R,
+  layer: Layer.Layer<A, LeaseLayerFailure, LeaseLayerContext>,
+): R & { readonly layer: Layer.Layer<never, never, unknown> } => {
+  const body = run.body as (input: unknown) => Effect.Effect<RunResult, never, A>;
+  const workflow = run.workflow as unknown as {
+    readonly toLayer: (
+      execute: (payload: LeasePayload) => Effect.Effect<RunResult, never, unknown>,
+    ) => Layer.Layer<never, never, unknown>;
+  };
+  return {
+    ...run,
+    layer: workflow.toLayer((payload) =>
+      body(payload.input).pipe(
+        Effect.provide(
+          layer.pipe(
+            Layer.provide(
+              Layer.succeed(ExecutionLease, {
+                executionId: payload.execution_id,
+                epoch: payload.epoch,
+                input: payload.input,
+              }),
+            ),
+          ),
+        ),
+        Effect.catch((failure: LeaseLayerFailure) =>
+          Effect.succeed<RunResult>({ _tag: "failure", reason: `infra: ${failure._tag}` }),
+        ),
+      ),
+    ),
+  };
+};
+
+/** The agentic recipes of `available`, each with the cloud executor's agentic Layers built per execution; none without them. */
 const agenticRunsWith = <R extends (typeof registry)[number]>(
   available: readonly R[],
-  layers: Layer.Layer<CloudAgenticServices, never, Intents> | undefined,
+  layers: Layer.Layer<CloudAgenticServices, LeaseLayerFailure, LeaseLayerContext> | undefined,
 ) =>
   layers === undefined
     ? []
     : available
         .filter((run) => AGENTIC_NAMES.has(run.spec.name))
-        .map((run) => ({
-          ...run,
-          layer: (run.layer as Layer.Layer<never, never, CloudAgenticServices>).pipe(
-            Layer.provide(layers),
-          ),
-        }));
+        .map((run) => perExecution(run, layers));
 
-/** The scan runs of `available`, each with the cloud executor's scan Layers provided; none without them. */
+/** The scan runs of `available`, each with the cloud executor's scan Layers built per execution; none without them. */
 const scanRunsWith = <R extends (typeof registry)[number]>(
   available: readonly R[],
-  scan: Layer.Layer<Exclude<ScanServices, Intents>> | undefined,
+  scan:
+    | Layer.Layer<Exclude<ScanServices, Intents>, LeaseLayerFailure, LeaseLayerContext>
+    | undefined,
 ) =>
   scan === undefined
     ? []
     : available
         .filter((run) => SCAN_NAMES.has(run.spec.name))
-        .map((run) => ({
-          ...run,
-          layer: (run.layer as Layer.Layer<never, never, Exclude<ScanServices, Intents>>).pipe(
-            Layer.provide(scan),
-          ),
-        }));
+        .map((run) => perExecution(run, scan));

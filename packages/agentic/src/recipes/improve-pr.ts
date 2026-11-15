@@ -5,6 +5,7 @@ import type { RunResult } from "@fractalboxdev/mameko-run";
 import { Effect, Schema } from "effect";
 import { checkSuppression, suppressionReadFailed, suppressionKey } from "../suppression/ledger.ts";
 import { EditLoop, editLoopUnavailable, Shell, StagedWrites } from "./services.ts";
+import { AgentLeaseField } from "./lease.ts";
 
 export const Dimension = Schema.Struct({
   name: Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,31}$/)),
@@ -22,6 +23,7 @@ export const ImprovePrInput = Schema.Struct({
   repo: Schema.Struct({ owner: Schema.String, name: Schema.String }),
   baseBranch: Schema.String,
   dimension: Dimension,
+  ...AgentLeaseField,
 });
 export type ImprovePrInput = typeof ImprovePrInput.Type;
 

@@ -150,6 +150,11 @@ export interface ControlPlaneEnv extends CacheEnv {
    * the overlay sets none (FD-OPS-103). Wrangler delivers it as a number, a `.dev.vars` entry as its text.
    */
   readonly ADVISORY_MAX_AGE_HOURS?: unknown;
+  /**
+   * The rendered `{{scan.bundleDigest}}`: the scan bundle's SHA-256, empty where the overlay pins none (FD-GATE-101). A
+   * scan lease carries it with a presigned read of `cas/<digest>`.
+   */
+  readonly SCAN_BUNDLE_DIGEST?: string;
   /** The gate image's digest, `sha256:<hex>`, which every lease outside a device host execution names. */
   readonly GATE_IMAGE_DIGEST?: string;
   /** The repository a `development` deployment with no GitHub App reads (`dev-repository.ts`). */

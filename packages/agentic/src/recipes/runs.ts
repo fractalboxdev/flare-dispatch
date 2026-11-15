@@ -1,5 +1,6 @@
 // The agentic runs with bodies, through mameko's `defineRun`: the runner registers each `layer` on its engine.
-import { defineRun } from "@fractalboxdev/mameko-run";
+import { defineRun, type RunResult } from "@fractalboxdev/mameko-run";
+import type { Effect, Schema } from "effect";
 import { AGENTIC_CATALOG, agenticClassRanks, type AgenticSpec } from "./catalog.ts";
 import { CiTriageInput, runCiTriage } from "./ci-triage-pr.ts";
 import { ImprovePrInput, runImprovePr } from "./improve-pr.ts";
@@ -29,49 +30,27 @@ const asRunSpec = (s: AgenticSpec) => ({
 
 const catalogue = { classRanks: agenticClassRanks };
 
-export const prReviewRun = defineRun(
-  { ...asRunSpec(specOf("pr-review")), input: PrReviewInput },
-  runPrReview,
-  catalogue,
-);
-export const improvePrRun = defineRun(
-  { ...asRunSpec(specOf("improve-pr")), input: ImprovePrInput },
-  runImprovePr,
-  catalogue,
-);
-export const selfHealPrRun = defineRun(
-  { ...asRunSpec(specOf("self-heal-pr")), input: SelfHealPrInput },
-  runSelfHealPr,
-  catalogue,
-);
-export const specDriftRun = defineRun(
-  { ...asRunSpec(specOf("spec-drift-pr")), input: SpecDriftInput },
-  runSpecDrift,
-  catalogue,
-);
-export const ciTriageRun = defineRun(
-  { ...asRunSpec(specOf("ci-triage-pr")), input: CiTriageInput },
-  runCiTriage,
-  catalogue,
-);
+/**
+ * One agentic run through `defineRun`, with its body beside the definition, so an executor whose services depend on
+ * the lease builds them inside each execution around the same body.
+ */
+const agenticRun = <I extends Schema.Top, R>(
+  name: string,
+  input: I,
+  body: (input: I["Type"]) => Effect.Effect<RunResult, never, R>,
+) => ({ ...defineRun({ ...asRunSpec(specOf(name)), input }, body, catalogue), body });
 
-export const triageIssuesRun = defineRun(
-  { ...asRunSpec(specOf("triage-issues")), input: TriageIssuesInput },
-  runTriageIssues,
-  catalogue,
-);
+export const prReviewRun = agenticRun("pr-review", PrReviewInput, runPrReview);
+export const improvePrRun = agenticRun("improve-pr", ImprovePrInput, runImprovePr);
+export const selfHealPrRun = agenticRun("self-heal-pr", SelfHealPrInput, runSelfHealPr);
+export const specDriftRun = agenticRun("spec-drift-pr", SpecDriftInput, runSpecDrift);
+export const ciTriageRun = agenticRun("ci-triage-pr", CiTriageInput, runCiTriage);
 
-export const triagePrsRun = defineRun(
-  { ...asRunSpec(specOf("triage-prs")), input: TriagePrsInput },
-  runTriagePrs,
-  catalogue,
-);
+export const triageIssuesRun = agenticRun("triage-issues", TriageIssuesInput, runTriageIssues);
 
-export const releaseNotesRun = defineRun(
-  { ...asRunSpec(specOf("release-notes")), input: ReleaseNotesInput },
-  runReleaseNotes,
-  catalogue,
-);
+export const triagePrsRun = agenticRun("triage-prs", TriagePrsInput, runTriagePrs);
+
+export const releaseNotesRun = agenticRun("release-notes", ReleaseNotesInput, runReleaseNotes);
 
 /** The eight agentic runs, in catalogue order (FD-AGT-001). */
 export const agenticRuns = [

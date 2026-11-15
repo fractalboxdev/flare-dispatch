@@ -95,6 +95,36 @@ describe("Container pools", () => {
       ).toEqual(["cf-api"]);
   });
 
+  it("[FD-AGT-010] an agentic recipe that calls models reaches the dispatcher's model route in its agent phase alone, with no credential, and its setup phase reaches no host", () => {
+    const settings = poolSettings(env({ PUBLIC_ORIGIN: "https://ci.example.com/" }), profile);
+    for (const run of ["pr-review", "improve-pr", "self-heal-pr", "release-notes"]) {
+      const grants = launchGrants(settings, run);
+      expect(grants.setup, run).toEqual([]);
+      expect(grants.agent, run).toEqual([
+        expect.objectContaining({
+          name: "model-gateway",
+          host: "ci.example.com",
+          methods: ["POST"],
+          pathPrefix: "/v1/model/",
+        }),
+      ]);
+      expect(grants.agent[0]?.credential, run).toBeUndefined();
+    }
+    // `triage-prs` calls no model, so its agent phase reaches no host.
+    expect(launchGrants(settings, "triage-prs")).toEqual({ setup: [], agent: [] });
+    // A gate run's phases hold no model route.
+    for (const run of ["worker-deploy", "security-gate", "sandbox-image"])
+      expect(
+        launchGrants(settings, run).agent.map((g) => g.name),
+        run,
+      ).not.toContain("model-gateway");
+    // A deploy that names no public origin has no dispatcher host to grant.
+    expect(launchGrants(poolSettings(env(), profile), "pr-review")).toEqual({
+      setup: [],
+      agent: [],
+    });
+  });
+
   it("[FD-ARCH-001] the launch keys are the secret's P-256 private JWK and its public half, and none for any other value", async () => {
     const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
       "sign",
