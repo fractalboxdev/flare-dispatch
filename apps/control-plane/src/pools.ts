@@ -1,7 +1,11 @@
 // The Container pools of the `cloudflare` executor kind (specs/architecture.md § Components, specs/profile.md § Pools and
 // browser sessions): each pool's declaration for mameko's composition, the `PoolController` settings derived from the
 // profile, the grant catalogue a Container's outbound handler decides over, and the launch keys.
-import { DEPLOY_CLAIM_ROUTE, RUN_CATALOG } from "@fractalboxdev/flare-dispatch-catalog";
+import {
+  DEPLOY_CLAIM_ROUTE,
+  MODEL_GATEWAY_PATH,
+  RUN_CATALOG,
+} from "@fractalboxdev/flare-dispatch-catalog";
 import { poolAdmissionCaps, type Profile } from "@fractalboxdev/flare-dispatch-profile";
 import {
   poolPartition,
@@ -71,13 +75,19 @@ const CLIENT_HEADERS = [
 /** A git smart-HTTP client's methods; a push needs `POST` to `git-receive-pack`, which no repository grant serves. */
 const GIT_METHODS = ["GET", "POST"];
 
+/** The largest model request a job sends through the `model-gateway` grant. */
+const MODEL_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
+
 /**
  * The grant catalogue each Container's outbound handler decides over (MAMEKO-ISO-021): `git-remote`, the repository's git
  * host for the checkout of the `setup` phase (FD-GATE-110); `cf-api`, the Cloudflare API under the deploy token the
- * Worker holds (FD-GATE-066); and `deploy-claim`, `POST` to the dispatcher's deploy-claim route alone, where
- * `worker-deploy` presents its lease's deploy-claim token (FD-GATE-067). `cf-api` carries no credential on a deploy
- * without that token, so a request under it leaves unauthenticated and the API refuses it. `deploy-claim` attaches no
- * credential, and a deploy that names no `PUBLIC_ORIGIN` has no such grant, so its leases carry no deploy claim either.
+ * Worker holds (FD-GATE-066); `deploy-claim`, `POST` to the dispatcher's deploy-claim route alone, where
+ * `worker-deploy` presents its lease's deploy-claim token (FD-GATE-067); and `model-gateway`, `POST` to the dispatcher's
+ * model route alone, which an agentic recipe reaches in its `agent` phase (FD-AGT-010). `cf-api` carries no credential
+ * on a deploy without that token, so a request under it leaves unauthenticated and the API refuses it. `deploy-claim`
+ * attaches no credential. `model-gateway` attaches none either: a grant's credential is one value for every lease, and
+ * the per-lease token the model route takes is minted for one lease. A deploy that names no `PUBLIC_ORIGIN` has neither
+ * dispatcher grant, so its leases carry no deploy claim and no model route either.
  */
 export const poolGrants = (
   env: Pick<ControlPlaneEnv, "DEPLOY_API_TOKEN" | "PUBLIC_ORIGIN">,
@@ -115,15 +125,33 @@ export const poolGrants = (
             maxBodyBytes: 1024,
             headers: CLIENT_HEADERS,
           },
+          {
+            name: "model-gateway",
+            host: dispatcher,
+            methods: ["POST"],
+            pathPrefix: MODEL_GATEWAY_PATH,
+            maxBodyBytes: MODEL_REQUEST_MAX_BYTES,
+            headers: CLIENT_HEADERS,
+          },
         ]),
   ];
 };
 
-/** Each catalogue run's grant names per egress phase, as its spec declares them. */
+/**
+ * Each catalogue run's grant names per egress phase: the grants its spec declares, and for an agentic recipe that calls
+ * models, the `agent` profile's `model-gateway` base grant (FD-PROF-050), so its `agent` phase reaches the model route
+ * and no other host.
+ */
 export const RUN_GRANTS: PoolControllerSettings["runGrants"] = Object.fromEntries(
-  Object.values(RUN_CATALOG).map(({ spec }) => [
+  Object.values(RUN_CATALOG).map(({ spec, agentic }) => [
     spec.name,
-    { setup: [...spec.grants.setup], agent: [...spec.grants.agent] },
+    {
+      setup: [...spec.grants.setup],
+      agent: [
+        ...spec.grants.agent,
+        ...(agentic?.declaration.needsModel === true ? ["model-gateway"] : []),
+      ],
+    },
   ]),
 );
 

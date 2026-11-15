@@ -37,6 +37,7 @@ import { guardLease } from "./agentic.ts";
 import { isolateServices, presignerLayer } from "./composition.ts";
 import { leaseCache, presignOnFrame } from "./cache.ts";
 import { leaseCacheAt } from "./cache-execution.ts";
+import { leaseCloudValues, withCloudLease } from "./cloud-lease.ts";
 import { leaseDeployClaim, withDeployClaim } from "./deploy-claim.ts";
 import { prProposeOnFrame } from "./pr-propose.ts";
 import { type ChannelSocket, cloudStatementOnFrame } from "./provenance.ts";
@@ -65,6 +66,26 @@ const PROGRESS_TIMEOUT_MS = 300_000;
  * The FlareDispatch hooks of mameko's channel, which `ExecutorChannel` and `PoolController` share: the cloud-builder
  * statement after an accepted result, the presigner, the cache namespaces, the lease fields and the nonce revoke.
  */
+/**
+ * Signs each `exec.presign` URL with the object-store presigner over the presign token, on the bucket's S3 endpoint
+ * (MAMEKO-HOST-051, FD-CACHE-091). A deploy without the presign token, the account id or the bucket name signs none.
+ */
+const presignWith =
+  (bindings: ControlPlaneEnv) =>
+  (
+    key: string,
+    method: "GET" | "PUT",
+    length: number | null,
+    expiresAt: number,
+  ): Promise<{ readonly url: string; readonly expiresAt: number } | null> => {
+    if (presignerConfigOf(bindings) === undefined) return Promise.resolve(null);
+    return Effect.runPromise(
+      ObjectStorePresigner.use((p) => p.presign(key, method, length, expiresAt)).pipe(
+        Effect.provide(presignerLayer(bindings)),
+      ),
+    );
+  };
+
 const channelHooks = (bindings: ControlPlaneEnv) => ({
   /**
    * An `exec.presign` for cache objects under an entry's writer prefix or for log segments is answered by
@@ -101,24 +122,8 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
     await cloudStatementOnFrame(bindings, ws as ChannelSocket, message, Date.now());
   },
 
-  /**
-   * Signs each `exec.presign` URL with the object-store presigner over the presign token, on the bucket's S3 endpoint
-   * (MAMEKO-HOST-051, FD-CACHE-091). A deploy without the presign token, the account id or the bucket name signs none,
-   * so mameko answers the request `refused`.
-   */
-  presign: (
-    key: string,
-    method: "GET" | "PUT",
-    length: number | null,
-    expiresAt: number,
-  ): Promise<{ readonly url: string; readonly expiresAt: number } | null> => {
-    if (presignerConfigOf(bindings) === undefined) return Promise.resolve(null);
-    return Effect.runPromise(
-      ObjectStorePresigner.use((p) => p.presign(key, method, length, expiresAt)).pipe(
-        Effect.provide(presignerLayer(bindings)),
-      ),
-    );
-  },
+  /** Signs each `exec.presign` URL; a deploy that signs none has mameko answer the request `refused`. */
+  presign: presignWith(bindings),
 
   /**
    * The profile's `cache_namespaces` binding for a claim (MAMEKO-LEASE-088): the namespaces of the execution's
@@ -155,7 +160,8 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
    * The inputs and request context intake recorded for a won claim, the run registry's run and workflow versions
    * (FD-PROF-063), and the `deadline_at` admission wrote on the execution row (MAMEKO-EXEC-002), which a gate run's
    * input carries as its `deadlineAt` (FD-GATE-007). A `worker-deploy` input carries the deploy claim minted for the
-   * execution at the placement's epoch (FD-GATE-067). A payload that carries a write credential fails the grant
+   * execution at the placement's epoch (FD-GATE-067), and an agentic or scan input its executor values
+   * (`cloud-lease.ts`). A payload that carries a write credential fails the grant
    * (FD-AGT-008). The nonce is 128 random bits bound to the execution and the placement's epoch (FD-PROV-010).
    */
   leaseFields: (executionId: string): Promise<ClaimedLease> =>
@@ -192,10 +198,20 @@ const channelHooks = (bindings: ControlPlaneEnv) => ({
             expiresAt: row.deadline_at,
           }),
         );
+        // An agentic or scan lease's input carries the executor values the Container's runner builds its Layers from.
+        const presign = presignWith(bindings);
+        const cloud = yield* Effect.promise(() =>
+          leaseCloudValues(
+            bindings,
+            entry,
+            { deadlineAt: row.deadline_at, now: Date.now() },
+            (key, expiresAt) => presign(key, "GET", null, expiresAt),
+          ),
+        );
         return yield* guardLease(bindings, {
           run: row.run,
           ...request,
-          inputs: withDeployClaim(entry, request.inputs, claim),
+          inputs: withCloudLease(entry, withDeployClaim(entry, request.inputs, claim), cloud),
           image_digest: yield* imageDigestOf(
             entry,
             row.kind ?? "device",
