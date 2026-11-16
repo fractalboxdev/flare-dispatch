@@ -115,6 +115,19 @@ describe("the committed Worker templates", () => {
     ]);
   });
 
+  it("[FD-OPS-001] the control plane's PUBLIC_ORIGIN is the HTTPS origin of the overlay's dispatcher hostname", () => {
+    const template = templateOf(CONTROL_PLANE);
+    expect((parseJsonc(template)["vars"] as Record<string, unknown>)["PUBLIC_ORIGIN"]).toBe(
+      "{{origins.dispatcher}}",
+    );
+    const rendered = parseJsonc(
+      Effect.runSync(renderTemplate("control-plane", template, placeholderOverlay)),
+    );
+    expect((rendered["vars"] as Record<string, unknown>)["PUBLIC_ORIGIN"]).toBe(
+      `https://${placeholderOverlay.hostnames.dispatcher}`,
+    );
+  });
+
   it("[FD-OPS-001] fd deploy deploys the docs Worker on its hostname from the overlay, and a hostname written into its template stops the deploy at the drift stage", async () => {
     const w = world();
     const report = await deploy(w, OVERLAY, { workers: workersWithDocs(DOCS_TEMPLATE) });
