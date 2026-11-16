@@ -1,5 +1,6 @@
 // The committed GitHub App manifest: the permissions and events specs/github-output.md § App registration lists, and
-// nothing else (FD-OPS-076). The drift check compares the registered App against it (FD-OPS-022, FD-OPS-023).
+// nothing else (FD-OPS-076). It names no `installation` or `installation_repositories` event: GitHub delivers both to
+// every App and refuses a manifest that subscribes to them. The drift check compares the registered App against it (FD-OPS-022, FD-OPS-023).
 import type { AppPermissions } from "./drift.ts";
 
 export const APP_PERMISSIONS: AppPermissions = {
@@ -21,8 +22,6 @@ export const APP_PERMISSIONS: AppPermissions = {
     "check_run",
     "check_suite",
     "deployment_status",
-    "installation",
-    "installation_repositories",
     "repository_ruleset",
     "branch_protection_rule",
   ],

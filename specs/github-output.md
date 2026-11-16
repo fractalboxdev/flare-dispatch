@@ -50,7 +50,7 @@ The profile declares every kind the control plane accepts ([profile.md](profile.
 
 ### App registration
 
-The committed App manifest requests these permissions and subscribes to these events, and nothing else. The drift check in [operability.md](operability.md) compares the registered App against this list.
+The committed App manifest requests these permissions and subscribes to these events, and nothing else. GitHub delivers `installation` and `installation_repositories` to every App with no subscription, and refuses a manifest that names them. The drift check in [operability.md](operability.md) compares the registered App against this list.
 
 | Permission | Level | Needed for |
 | --- | --- | --- |
@@ -67,7 +67,7 @@ The committed App manifest requests these permissions and subscribes to these ev
 | Event | Consumer |
 | --- | --- |
 | `pull_request`, `push`, `merge_group`, `check_run`, `check_suite`, `deployment_status` | [intake.md](intake.md) |
-| `installation`, `installation_repositories` | Token and mapping eviction (FD-GH-066) |
+| `installation`, `installation_repositories` (delivered to every App, not subscribed) | Token and mapping eviction (FD-GH-066) |
 | `repository_ruleset`, `branch_protection_rule` | Required-set refresh for class resolution ([profile.md](profile.md)) |
 
 ### Check-run lifecycle
