@@ -319,6 +319,8 @@ export type RenderValues = Omit<
   | "records"
   | "models"
 > & {
+  /** Each hostname's HTTPS origin: `https://<hostname>`, the origin the Worker names in leases and links. */
+  readonly origins: { readonly dispatcher: string };
   /**
    * The provider registry, none where the overlay sets none, so the model route serves no hosted call, and the fallback
    * price at its 75 USD per million tokens default where the overlay sets none (MAMEKO-MDL-022).
@@ -379,6 +381,7 @@ export type RenderValues = Omit<
  */
 export const renderValuesOf = (overlay: OverlayValues): RenderValues => ({
   ...overlay,
+  origins: { dispatcher: `https://${overlay.hostnames.dispatcher}` },
   spend: spendValuesOf(overlay),
   policy: { ...overlay.policy, rules: policyRulesOf(overlay) },
   dispatchers: overlay.dispatchers ?? [],

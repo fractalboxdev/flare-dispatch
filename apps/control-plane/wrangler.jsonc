@@ -15,6 +15,9 @@
   "routes": [{ "pattern": "{{hostnames.dispatcher}}", "custom_domain": true }],
   "vars": {
     "DEPLOYMENT": "production",
+    // The dispatcher's HTTPS origin: the host a lease's model route, deploy claim and executions reads name, and the
+    // origin of every link the control plane mints.
+    "PUBLIC_ORIGIN": "{{origins.dispatcher}}",
     // The plane id every device's `connect` signature binds (FD-IFC-085).
     "PLANE_ID": "{{executors.planeId}}",
     "ALERT_SINK": "{{alerts.sink}}",
@@ -52,7 +55,7 @@
     // The pinned scan bundle's SHA-256, empty where the overlay pins none: the digest a `security-gate` or
     // `security-rescan` scan checks the bundle at `cas/<digest>` against (FD-GATE-100), and reads as unpinned where
     // empty (FD-GATE-101). A deploy whose drift check fails changes no var, so the deployed pin stays the previous one
-    // (FD-OPS-095). No executor serves the scan runs yet (specs/runs/gate.md § Open items).
+    // (FD-OPS-095).
     "SCAN_BUNDLE_DIGEST": "{{scan.bundleDigest}}",
     // The overlay's statement retention in days, 400 where it sets none: logging a statement keeps each artifact it
     // names until the statement's integrated time plus this many days (FD-PROV-075).
