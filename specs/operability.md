@@ -361,7 +361,7 @@ FlareDispatch surfaces no `resolve`, because no FlareDispatch intent kind is `re
 - **FD-OPS-073** · phase 0 · `V-UNIT` — The install flow must bind its `state` parameter to the operator's Access session and accept each state once within 600 s.
 - **FD-OPS-074** · phase 0 · `V-UNIT` — If the install callback carries a `state` that is unknown, used or older than 600 s, then the control plane must answer `403` and exchange no code.
 - **FD-OPS-075** · phase 0 · `V-UNIT` — The page that shows a new App's credentials must set `Cache-Control: no-store` and must be served only to the operator who started the flow.
-- **FD-OPS-076** · phase 0 · `V-UNIT` — The committed App manifest must subscribe to the `installation` and `installation_repositories` events and request only the permissions [github-output.md](github-output.md) lists.
+- **FD-OPS-076** · phase 0 · `V-UNIT` — The committed App manifest must subscribe to no `installation` or `installation_repositories` event, which GitHub delivers to every App and refuses in a manifest, and must request only the permissions [github-output.md](github-output.md) lists.
 
 ### Operator controls
 

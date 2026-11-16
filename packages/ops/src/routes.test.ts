@@ -242,11 +242,10 @@ describe("operator routes", () => {
 });
 
 describe("GitHub App install", () => {
-  it("[FD-OPS-076] the manifest subscribes to installation events and requests only the listed permissions", () => {
+  it("[FD-OPS-076] the manifest names no installation event, which GitHub delivers to every App, and requests only the listed permissions", () => {
     const m = appManifest("https://dispatch.example.com");
-    expect(m.default_events).toEqual(
-      expect.arrayContaining(["installation", "installation_repositories"]),
-    );
+    expect(m.default_events).not.toContain("installation");
+    expect(m.default_events).not.toContain("installation_repositories");
     expect(m.default_permissions).toEqual({
       checks: "write",
       contents: "write",
@@ -259,7 +258,7 @@ describe("GitHub App install", () => {
       merge_queues: "read",
     });
     expect(m.hook_attributes.url).toBe("https://dispatch.example.com/v1/webhooks/github");
-    expect(APP_PERMISSIONS.default_events).toHaveLength(10);
+    expect(APP_PERMISSIONS.default_events).toHaveLength(8);
   });
 });
 
