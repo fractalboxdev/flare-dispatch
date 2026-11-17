@@ -1,5 +1,5 @@
 // A Container lease's read of the control plane (specs/interfaces.md FD-IFC-102, FD-IFC-103): `ci-triage-pr` reads its
-// repository's failed executions from `GET /v1/executions` and their logs from `GET /v1/executions/:id/logs` in its
+// repository's failed executions from `GET /v1/executions` and their logs from `GET /v1/logs/:id` in its
 // `agent` phase, where no Access identity exists.
 //
 // - The control plane mints a control-plane read token (`lease-token.ts`) for the execution at the lease's epoch,

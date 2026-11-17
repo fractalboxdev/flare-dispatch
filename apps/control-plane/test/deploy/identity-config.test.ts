@@ -4,7 +4,12 @@
 // the rendered configuration sets and the Worker secrets the account holds.
 import { createHmac } from "node:crypto";
 import { matchPath, type Surface } from "@fractalboxdev/flare-dispatch-api";
-import { bypassed, placeholderOverlay } from "@fractalboxdev/flare-dispatch-ops";
+import {
+  accessCovers,
+  HUMAN_PATHS,
+  isMachinePath,
+  placeholderOverlay,
+} from "@fractalboxdev/flare-dispatch-ops";
 import { Match } from "effect";
 import type { Miniflare } from "miniflare";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -55,8 +60,8 @@ const GATED: readonly { readonly method: string; readonly path: string }[] = [
       return top !== undefined && gated(top.route.surface);
     }),
   { method: "GET", path: "/v1/unclaimed" },
-  { method: "GET", path: "/" },
-  { method: "GET", path: "/executions/x" },
+  { method: "GET", path: "/dashboard" },
+  { method: "GET", path: "/dashboard/executions/x" },
 ];
 
 const send = (mf: Miniflare, r: { method: string; path: string }, headers = {}) =>
@@ -162,8 +167,14 @@ describe("fd deploy and the dispatcher's identity gate", () => {
     }
 
     // Each request above reaches the Worker with no Access in front of it, so the refusal is the Worker's own on every
-    // route. Access bypasses none of the gated routes at the edge either (FD-OPS-088).
-    expect(GATED.filter((r) => bypassed(r.path)).map((r) => r.path)).toEqual([]);
+    // route. None of the gated routes is a machine path, which Access leaves uncovered at the edge (FD-OPS-088).
+    expect(GATED.filter((r) => isMachinePath(r.path)).map((r) => r.path)).toEqual([]);
+    // Every gated route but an unclaimed path sits under a human path, which an Access application covers.
+    expect(
+      GATED.filter((r) => !HUMAN_PATHS.some((h) => accessCovers(h.path, r.path))).map(
+        (r) => r.path,
+      ),
+    ).toEqual(["/v1/unclaimed"]);
   });
 
   it("[FD-IFC-023] fd deploy fails its post-deploy probe and pages when the link key equals the webhook secret, the OIDC key or the provenance key, and passes with every key distinct", async () => {

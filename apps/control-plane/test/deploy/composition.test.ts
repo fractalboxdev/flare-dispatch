@@ -7,6 +7,7 @@ import {
   compositionFindings,
   DeployTarget,
   deployedCompositionFindings,
+  HUMAN_PATHS,
   MERGE_GATE_CHECKS,
   objectReadWritePolicy,
   parseJsonc,
@@ -88,9 +89,16 @@ const account = (secrets: readonly string[] | null) => {
     floorCanary: () => Effect.succeed({ status: "passed" as const, digest: "sha256:0" }),
     writeRecord: (r) => Effect.sync(() => void writes.push(`record ${r.worker}`)),
     raiseAlarm: (name) => Effect.sync(() => void writes.push(`alarm ${name}`)),
-    accessApplications: Effect.succeed([]),
-    putAccessApplication: () => Effect.sync(() => void writes.push("access")),
-    deleteAccessApplication: () => Effect.sync(() => void writes.push("access")),
+    // The Access application on the human paths, managed outside FlareDispatch, with the overlay's AUD (FD-OPS-088).
+    accessApplications: Effect.succeed([
+      {
+        id: "human",
+        aud: placeholderOverlay.access.aud,
+        destinations: HUMAN_PATHS.map((h) => ({
+          uri: `${placeholderOverlay.hostnames["dispatcher"]!}${h.path}`,
+        })),
+      },
+    ]),
   });
   const fd = makeOperability({
     fail: (message) => new Error(message),

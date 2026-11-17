@@ -29,10 +29,10 @@ const deps = (execution: LogExecution | null = { terminal: true }) => ({
   execution: async () => execution,
   nonce: () => "n0nce",
 });
-/** Reads `/v1/executions/<EXEC>/logs[/<file>][?query]` for a caller already identified. */
+/** Reads `/v1/logs/<EXEC>[/<file>][?query]` for a caller already identified. */
 const logs = (file: string | undefined, query = "", execution?: LogExecution) =>
   serveLogs(
-    new Request(`http://x/v1/executions/${EXEC}/logs${file === undefined ? "" : `/${file}`}${query}`),
+    new Request(`http://x/v1/logs/${EXEC}${file === undefined ? "" : `/${file}`}${query}`),
     { executionId: EXEC, file },
     deps(execution),
   );

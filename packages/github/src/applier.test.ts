@@ -252,7 +252,7 @@ describe("check.conclude", () => {
 });
 
 describe("check.conclude from mameko's outcome row", () => {
-  const LOG = "https://fd.example.com/v1/executions/exec-1/logs?t=token";
+  const LOG = "https://fd.example.com/v1/logs/exec-1?t=token";
   const facts = (overrides: Partial<ConclusionFacts> = {}): ConclusionFacts => ({
     name: ref.name,
     headSha: ref.head_sha,
@@ -591,7 +591,7 @@ describe("check.summary and check.annotations", () => {
 });
 
 describe("a confidential-compute repository's check run", () => {
-  const LOG = "https://fd.example.com/v1/executions/exec-1/logs?t=token";
+  const LOG = "https://fd.example.com/v1/logs/exec-1?t=token";
   /** What the run produced: none of it may reach GitHub. */
   const SECRETS = [
     "const apiKey = readSecret()",

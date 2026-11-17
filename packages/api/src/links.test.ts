@@ -29,15 +29,11 @@ const logsGroup = routerGroup(
   [
     {
       method: "GET",
-      path: "/v1/executions/:id/logs",
+      path: "/v1/logs/:id",
       surface: { _tag: "Link", purpose: "logs", param: "id" },
     },
   ],
-  HttpRouter.add(
-    "GET",
-    "/v1/executions/:id/logs",
-    Effect.succeed(HttpServerResponse.text("log lines")),
-  ),
+  HttpRouter.add("GET", "/v1/logs/:id", Effect.succeed(HttpServerResponse.text("log lines"))),
 );
 
 let access: Signer;
@@ -74,26 +70,23 @@ describe("link surface", () => {
   it("[FD-IFC-017]: a log route serves an Access identity or a link token bound to that execution", async () => {
     const jwt = await access.sign(accessClaims(MEMBER));
     expect(
-      (await call("/v1/executions/exec-1/logs", { headers: { "cf-access-jwt-assertion": jwt } }))
-        .status,
+      (await call("/v1/logs/exec-1", { headers: { "cf-access-jwt-assertion": jwt } })).status,
     ).toBe(200);
-    expect((await call(`/v1/executions/exec-1/logs?t=${await token()}`)).status).toBe(200);
-    const other = await call(`/v1/executions/exec-2/logs?t=${await token()}`);
+    expect((await call(`/v1/logs/exec-1?t=${await token()}`)).status).toBe(200);
+    const other = await call(`/v1/logs/exec-2?t=${await token()}`);
     expect(other.status).toBe(403);
     expect(((await other.json()) as { error: string }).error).toBe("forbidden");
   });
 
   it("[FD-IFC-020]: an expired link token answers 403 link_expired", async () => {
-    const response = await call(
-      `/v1/executions/exec-1/logs?t=${await token({ expiresAtS: now() - 5 })}`,
-    );
+    const response = await call(`/v1/logs/exec-1?t=${await token({ expiresAtS: now() - 5 })}`);
     expect(response.status).toBe(403);
     expect(((await response.json()) as { error: string }).error).toBe("link_expired");
   });
 
   it("[FD-IFC-021]: a link token below the current epoch answers 403 link_revoked", async () => {
     const response = await call(
-      `/v1/executions/exec-1/logs?t=${await token({ epoch: 1 })}`,
+      `/v1/logs/exec-1?t=${await token({ epoch: 1 })}`,
       {},
       baseConfig({ linkEpoch: 2 }),
     );
@@ -102,7 +95,7 @@ describe("link surface", () => {
   });
 
   it("[FD-IFC-013]: a browser with neither is redirected to the Access login; an API caller gets 401", async () => {
-    const browser = await call("/v1/executions/exec-1/logs", {
+    const browser = await call("/v1/logs/exec-1", {
       headers: { accept: "text/html" },
       redirect: "manual",
     });
@@ -110,7 +103,7 @@ describe("link surface", () => {
     expect(browser.headers.get("location")).toMatch(
       /^https:\/\/team\.example\.com\/cdn-cgi\/access\/login\//,
     );
-    expect((await call("/v1/executions/exec-1/logs")).status).toBe(401);
+    expect((await call("/v1/logs/exec-1")).status).toBe(401);
   });
 
   it("[FD-IFC-035], [FD-IFC-019]: a dispatch answers details and logs links whose token opens that execution's logs", async () => {
@@ -131,7 +124,7 @@ describe("link surface", () => {
       "logs_url",
     ]);
     expect(dispatched["details_url"]).toMatch(
-      /^https:\/\/dispatcher\.example\.com\/executions\/exec-1\?t=/,
+      /^https:\/\/dispatcher\.example\.com\/dashboard\/executions\/exec-1\?t=/,
     );
     const expiry = Number(new URL(dispatched["logs_url"]!).searchParams.get("t")!.split(".")[0]);
     expect(expiry - now()).toBeGreaterThan(86_400 - 10);

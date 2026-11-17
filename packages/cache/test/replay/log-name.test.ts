@@ -21,7 +21,7 @@ const keysOf = async (bucket: Bucket) =>
 
 const aggregate = async (bucket: Bucket) => {
   const read = await serveLogs(
-    new Request(`https://ci.example.com/v1/executions/${EXECUTION}/logs?format=text`),
+    new Request(`https://ci.example.com/v1/logs/${EXECUTION}?format=text`),
     { executionId: EXECUTION, file: undefined },
     { bucket, execution: async () => ({ terminal: true }) },
   );

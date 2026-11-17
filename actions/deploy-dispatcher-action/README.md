@@ -164,7 +164,7 @@ See [`action.yml`](./action.yml).
 | ------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------- |
 | `upstream-ref`           | yes      | A commit SHA on the upstream repository, usually the contents of `infra/flare-dispatch/UPSTREAM_SHA`.                 |
 | `overlay`                | yes      | Path to your operator overlay JSON, relative to the repository root. A missing file fails the action before checkout. |
-| `cloudflare-api-token`   | yes      | Account-scoped token: Workers Scripts:Edit, Workers R2 Storage:Edit, D1:Edit, Containers:Edit, Account Settings:Read. |
+| `cloudflare-api-token`   | yes      | Account-scoped token: Workers Scripts:Edit, Workers R2 Storage:Edit, D1:Edit, Containers:Edit, Account Settings:Read, Access: Apps and Policies Read. |
 | `github-app-private-key` | yes      | The GitHub App's private key, for the drift check's App registration and ruleset reads.                               |
 | `mameko-deploy-key`      | yes      | Read-only deploy key of the private mameko repository the upstream tree vendors as `vendor/mameko`.                   |
 | `dry-run`                | no       | `true` runs decode, render and the drift check only, and changes no Cloudflare state. Default `false`.                |

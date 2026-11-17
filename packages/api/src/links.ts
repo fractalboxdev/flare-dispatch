@@ -52,8 +52,8 @@ export const executionLinks = (
     const token = yield* linkToken("logs", executionId, audience, nowS);
     const id = encodeURIComponent(executionId);
     return {
-      details_url: withToken(`${publicOrigin}/executions/${id}`, token),
-      logs_url: withToken(`${publicOrigin}/v1/executions/${id}/logs`, token),
+      details_url: withToken(`${publicOrigin}/dashboard/executions/${id}`, token),
+      logs_url: withToken(`${publicOrigin}/v1/logs/${id}`, token),
     };
   });
 

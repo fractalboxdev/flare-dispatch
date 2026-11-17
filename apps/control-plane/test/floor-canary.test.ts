@@ -172,8 +172,9 @@ describe("the floor canary routes", () => {
 describe("the floor-canary tick unit", () => {
   it("[FD-OPS-050] admits each canary pool's canary once per 2 h slot, and pages floor-canary-failed with the stage and image digest for the slot before", async () => {
     const worker = await canary.getWorker();
+    // A slot after the canary the earlier test admits at the current time, so the count below holds this slot's alone.
     const slot =
-      Math.floor(Date.UTC(2026, 10, 16, 8) / FLOOR_CANARY_PERIOD_MS) * FLOOR_CANARY_PERIOD_MS;
+      Math.floor(Date.UTC(2099, 0, 1, 8) / FLOOR_CANARY_PERIOD_MS) * FLOOR_CANARY_PERIOD_MS;
     const tick = (at: number) =>
       worker.scheduled({ cron: "* * * * *", scheduledTime: new Date(at) });
     const canaries = (at: number) =>

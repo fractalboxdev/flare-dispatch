@@ -732,7 +732,7 @@ describe("the source-read token helper", () => {
 describe("the check-run applier of a confidential-compute repository", () => {
   const VAULT = "acme/vault";
   const OPEN = "acme/open";
-  const LOG = "https://fd.example.com/v1/executions/exec-9/logs?t=token";
+  const LOG = "https://fd.example.com/v1/logs/exec-9?t=token";
   /** What the run produced: none of it may reach GitHub from the confidential repository. */
   const SECRETS = [
     "const apiKey = readSecret()",

@@ -32,7 +32,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 | `d1.<binding>` | D1 database id per binding |
 | `kv.<binding>` | KV namespace id per binding |
 | `r2.<binding>` | R2 bucket name per binding |
-| `presign.tokenId` | The id of the account R2 API token the object-store presigner signs with, which is the Access Key ID the Worker secret `R2_PRESIGN_ACCESS_KEY_ID` holds; the drift check reads the token's policies and fails unless they grant Object Read & Write on exactly the cache and artifact buckets ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-091); required where the deploy carries the dispatcher: the drift check fails without it |
+| `presign.tokenId` | The id of the account R2 API token the object-store presigner signs with, which is the Access Key ID the Worker secret `R2_PRESIGN_ACCESS_KEY_ID` holds; the drift check reads the token's policies and fails unless they grant Object Read & Write on exactly the cache and artifact buckets, and reports the scope unchecked as a warning where the deploy token cannot read API tokens ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-091); required where the deploy carries the dispatcher: the drift check fails without it |
 | `hostnames.<worker>` | Custom-domain hostname per Worker |
 | `access.teamDomain`, `access.aud` | Cloudflare Access team domain and application AUD |
 | `operators` | Access identities allowed on operator routes |
@@ -348,6 +348,8 @@ FlareDispatch surfaces no `resolve`, because no FlareDispatch intent kind is `re
 
 ### Dashboard and Access
 
+The dashboard serves its overview at `/dashboard` and one execution's page at `/dashboard/executions/:id`; `/` redirects to `/dashboard`. A dispatch's `details_url` links the execution's dashboard page.
+
 - **FD-OPS-064** · phase 0 · `V-UNIT` `V-E2E-LOCAL` — Every dashboard page and route must pass the identity gate [interfaces.md](interfaces.md) assigns to its surface (FD-IFC-010 to FD-IFC-017), with the Access JWT checked against the overlay's `access.aud` and `access.teamDomain`.
 - **FD-OPS-067** · phase 0 · `V-UNIT` — When the dashboard links a log or an artifact, the link must carry a link token ([interfaces.md](interfaces.md) FD-IFC-018) for that one object that expires within 3600 s.
 - **FD-OPS-068** · phase 0 · `V-UNIT` — The executions view and its JSON route must filter by run, repository, class, status and executor kind, page with a keyset cursor at a default of 50 and a maximum of 200 rows, and show each execution's placement, executor, class, epoch, hold and settled cost.
@@ -371,7 +373,14 @@ FlareDispatch surfaces no `resolve`, because no FlareDispatch intent kind is `re
 
 ### Access configuration and webhook silence
 
-- **FD-OPS-088** · phase 0 · `V-DEPLOY` `V-E2E-LOCAL` — The committed Access configuration must bypass Access on every path whose surface in [interfaces.md](interfaces.md) names an identity other than the Access JWT alone (webhook, dispatch, executor connect, `/health`, `/.well-known/*`, executions list, log, artifact, compile-cache, deploy-claim, model-gateway and `/v1/provenance/*` paths), and the dispatcher must run each such surface's identity check itself.
+The Access applications on the dispatcher's hostname are managed outside FlareDispatch. `packages/ops/src/access-application.ts` lists the hostname's paths in two sets:
+
+- **Machine paths** — every path whose surface in [interfaces.md](interfaces.md) names an identity other than the Access JWT alone: `/health`, `/.well-known/*`, `/v1/webhooks/github`, `/v1/dispatch/*`, `/v1/executors/connect`, `/v1/executions` (the list alone), `/v1/logs/*`, `/v1/artifacts/*`, `/v1/compile-cache/*`, `/v1/deploy-claims/*`, `/v1/model/completions`, `/v1/provenance/executions/*` and `/v1/provenance/subjects/*`. Each stays reachable without Access, and the dispatcher runs the surface's identity check itself.
+- **Human paths** — `/dashboard`, `/dashboard/*`, `/v1/executions/*` (one execution, its failure summary, cancel and its artifacts list), `/v1/executors/register`, `/v1/ops/*`, `/v1/spend`, `/v1/github/install/*`, `/v1/provenance-policy`, `/v1/provenance-policy/*`, `/v1/provenance/log/*` and `/mcp`. Each sits behind an Access application.
+
+Cloudflare Access applies an application to its own path and every path below it, and the application with the most specific covering path decides a request; a trailing `/*` does not cover its parent path. An application on the bare hostname therefore covers every machine path, so the applications name the human paths as their destinations and leave every other path uncovered. `fd deploy` and `fd doctor` read the account's applications with a deploy token that holds Access: Apps and Policies Read, and write none.
+
+- **FD-OPS-088** · phase 0 · `V-DEPLOY` `V-E2E-LOCAL` — Before a deploy step changes Cloudflare state, the drift check must read the Access applications on the dispatcher's hostname and fail if an application with no bypass policy decides a machine path or sits on a path below a machine pattern, if no application decides a human path or one that decides it holds a bypass policy, or if an application that decides a human path carries an AUD tag other than the overlay's `access.aud`; `fd deploy` and `fd doctor` must write no Access application, and the dispatcher must run each machine surface's identity check itself.
 - **FD-OPS-089** · phase 0 · `V-UNIT` `V-LIVE` — If an installation with at least one repository whose manifest enrolls a recipe has no verified webhook delivery ([intake.md](intake.md) FD-INT-031) for `alerts.webhookSilentHours`, then the control plane must raise the notify alarm `webhook-silent` naming the account login.
 
 ### Scoped identities

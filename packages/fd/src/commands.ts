@@ -209,7 +209,11 @@ export const logs = Command.make(
         yield* emit(false, body, body);
       }),
     ),
-).pipe(Command.withDescription("The redacted step log: GET /v1/executions/:id/logs/:file"));
+).pipe(
+  Command.withDescription(
+    "The redacted step logs: GET /v1/logs/:id, or GET /v1/logs/:id/:file with --file",
+  ),
+);
 
 export const cancel = Command.make("cancel", { id: executionId, json }, (f) =>
   reporting(f.json)(

@@ -1,247 +1,179 @@
-// The deploy suites of `V-DEPLOY` for the committed Access configuration (specs/operability.md § Access configuration
-// and webhook silence): `fd deploy` applies the Access applications of the dispatcher's hostname and `fd doctor` reports
-// each difference, on the fakes of `support.ts`, whose dispatcher hostname sits behind the account's Access.
+// The deploy suites of `V-DEPLOY` for the Access check (specs/operability.md § Access configuration and webhook
+// silence): the Access applications on the dispatcher's hostname are managed outside FlareDispatch, and `fd deploy` and
+// `fd doctor` read them, on the fakes of `support.ts`, and fail where one covers a machine path, a human path is left
+// uncovered, or an application on a human path carries an AUD tag other than the overlay's `access.aud`. Neither
+// writes an Access application.
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { ACCESS_BYPASS, placeholderOverlay } from "../../src/index.ts";
-import { API, deploy, fd, isWrite, OVERLAY, SCRIPT, since, world, type World } from "./support.ts";
+import { HUMAN_PATHS, MACHINE_PATHS, placeholderOverlay, samplePath } from "../../src/index.ts";
+import {
+  API,
+  deploy,
+  fd,
+  HOST,
+  HUMAN_ACCESS,
+  isWrite,
+  OVERLAY,
+  since,
+  world,
+  type World,
+} from "./support.ts";
 
-const HOST = placeholderOverlay.hostnames["dispatcher"]!;
 const ACCESS = `api.cloudflare.com${API}/access/apps`;
-
-/** The account's Access applications on the dispatcher's hostname, by domain. */
-const onHost = (w: World) =>
-  new Map(
-    [...w.access.values()]
-      .filter((a) => a["domain"] === HOST || String(a["domain"]).startsWith(`${HOST}/`))
-      .map((a) => [a["domain"] as string, a]),
-  );
-
-const policiesOf = (app: Record<string, unknown> | undefined) =>
-  (app?.["policies"] as { decision: string; include: unknown[] }[] | undefined)?.map((p) => ({
-    decision: p.decision,
-    include: p.include,
-  }));
 
 /** A request to the dispatcher's hostname with no Access session, as the fake edge answers it. */
 const edge = (w: World, path: string) => w.fetcher(`https://${HOST}${path}`);
 
-/** The AUD tag of the account's application on the dispatcher's hostname. */
-const hostAud = (w: World) => onHost(w).get(HOST)?.["aud"] as string;
-
-/** The placeholder overlay with `access.aud` set to `aud`, and any other fields given. */
-const withAud = (aud: string, more: Record<string, unknown> = {}) =>
-  JSON.stringify({ ...placeholderOverlay, ...more, access: { ...placeholderOverlay.access, aud } });
-
-/** One concrete request path under each bypass pattern. */
-const concrete = (pattern: string) => pattern.replace(/\*/g, "x1");
-
 const accessWrites = (calls: readonly string[]) =>
-  calls.filter((c) => /^(POST|PUT|DELETE) api\.cloudflare\.com\/.*\/access\/apps/.test(c));
+  calls.filter((c) => /^(POST|PUT|DELETE|PATCH) api\.cloudflare\.com\/.*\/access\//.test(c));
 
-/** The account's Access applications changed out of band. */
-const tamper = (w: World) => {
-  const hosted = onHost(w);
-  const webhook = hosted.get(`${HOST}/v1/webhooks/github`)!;
-  w.access.delete(webhook["id"] as string);
-  const root = hosted.get(HOST)!;
-  root["policies"] = [{ name: "identities", decision: "allow", include: [{ everyone: {} }] }];
-  w.access.set("out-of-band-ops", {
-    id: "out-of-band-ops",
-    name: "ops bypass",
-    type: "self_hosted",
-    domain: `${HOST}/v1/ops/*`,
-    session_duration: "24h",
-    policies: [{ name: "bypass", decision: "bypass", include: [{ everyone: {} }] }],
-  });
-  w.access.set("other-host", {
-    id: "other-host",
-    name: "another application",
-    type: "self_hosted",
-    domain: "other.example.com",
-    session_duration: "24h",
-    policies: [{ name: "bypass", decision: "bypass", include: [{ everyone: {} }] }],
-  });
+/** An Access application on `paths` of the hostname, with `decision` for everyone. */
+const app = (id: string, paths: readonly string[], decision = "allow", aud = `aud-${id}`) => ({
+  id,
+  name: id,
+  type: "self_hosted",
+  aud,
+  domain: `${HOST}${paths[0]}`,
+  destinations: paths.map((p) => ({ type: "public", uri: `${HOST}${p}` })),
+  policies: [{ id: `${id}-policy`, name: decision, decision, include: [{ everyone: {} }] }],
+});
+
+type Report = {
+  readonly ok: boolean;
+  readonly stages: readonly { stage: string; ok: boolean; detail: string }[];
+};
+const driftDetail = (r: Report) => r.stages.find((s) => s.stage === "drift")!.detail;
+
+/**
+ * `fd doctor`, then `fd deploy`, on the account `change` leaves: both fail at the drift stage, the deploy before any
+ * write; answers the doctor's drift detail.
+ */
+const refused = async (change: (w: World) => void) => {
+  const w = world();
+  change(w);
+  const doctor = await Effect.runPromise(fd(w).doctor(OVERLAY));
+  expect(doctor.ok).toBe(false);
+  const report = await deploy(w);
+  expect(report.ok).toBe(false);
+  expect(report.stages.at(-1)).toMatchObject({ stage: "drift", ok: false });
+  expect(w.calls.filter(isWrite)).toEqual([]);
+  return driftDetail(doctor);
 };
 
-describe("the committed Access configuration", () => {
-  it("[FD-OPS-088] fd deploy creates the hostname's application for the overlay's identities and a bypass application per bypass path after the Worker deploy, then fails on the new application's AUD tag before the probe", async () => {
-    const w = world({ access: "none" });
-    const overlay = JSON.stringify({ ...placeholderOverlay, dispatchers: ["ci@acme.com"] });
-    const report = await deploy(w, overlay);
-    expect(report.ok).toBe(false);
+/** `fd doctor` and `fd deploy` on the account `change` leaves both pass, and no Access application is written. */
+const admitted = async (change: (w: World) => void) => {
+  const w = world();
+  change(w);
+  expect((await Effect.runPromise(fd(w).doctor(OVERLAY))).ok).toBe(true);
+  expect((await deploy(w)).ok).toBe(true);
+  expect(accessWrites(w.calls)).toEqual([]);
+  return w;
+};
 
-    const hosted = onHost(w);
-    expect([...hosted.keys()].sort()).toEqual(
-      [HOST, ...ACCESS_BYPASS.map((b) => `${HOST}${b.path}`)].sort(),
-    );
-    expect(policiesOf(hosted.get(HOST))).toEqual([
-      {
-        decision: "allow",
-        include: [
-          { email: { email: placeholderOverlay.operators[0] } },
-          { email: { email: "ci@acme.com" } },
-        ],
-      },
-      { decision: "non_identity", include: [{ any_valid_service_token: {} }] },
-    ]);
-    for (const b of ACCESS_BYPASS)
-      expect(policiesOf(hosted.get(`${HOST}${b.path}`))).toEqual([
-        { decision: "bypass", include: [{ everyone: {} }] },
-      ]);
-
-    // The Worker deploy, then every Access write; Cloudflare gave the hostname's application a new AUD tag, which the
-    // dispatcher would reject every Access JWT against, so the deploy stops before the probe with that tag.
-    const deployed = w.calls.indexOf(`wrangler deploy ${SCRIPT}`);
-    const writes = w.calls.flatMap((c, i) => (c === `POST ${ACCESS}` ? [i] : []));
-    expect(writes).toHaveLength(ACCESS_BYPASS.length + 1);
-    expect(deployed).toBeGreaterThanOrEqual(0);
-    expect(writes.every((i) => i > deployed)).toBe(true);
-    expect(w.calls).not.toContain(`GET ${HOST}/health`);
-    const aud = hostAud(w);
-    expect(aud).not.toBe(placeholderOverlay.access.aud);
-    const last = report.stages.at(-1)!;
-    expect(last).toMatchObject({ stage: "deploy", ok: false });
-    expect(last.detail).toContain(`access.${HOST}.aud: `);
-    expect(last.detail).toContain(JSON.stringify(aud));
-    // The first deploy applies a migration, so the rollback line says to fix forward.
-    expect(last.detail).toContain("control-plane: fix forward:");
-
-    // With the new tag in the overlay, the deploy passes, writing no Access application.
-    const from = w.calls.length;
-    const again = await deploy(w, withAud(aud, { dispatchers: ["ci@acme.com"] }));
-    expect(again.ok).toBe(true);
-    expect(accessWrites(since(w, from))).toEqual([]);
-
-    // Access now passes every bypassed path with no Access session and sends every other path to the login.
-    for (const b of ACCESS_BYPASS)
-      expect({ path: b.path, status: (await edge(w, concrete(b.path))).status }).toEqual({
-        path: b.path,
+describe("the Access check", () => {
+  it("[FD-OPS-088] passes an account whose Access applications cover the human paths with the overlay's AUD and leave every machine path uncovered, reading the applications and writing none", async () => {
+    const w = await admitted(() => undefined);
+    expect(w.calls.filter((c) => c.startsWith(`GET ${ACCESS}`)).length).toBeGreaterThan(0);
+    // The machine paths reach the dispatcher with no Access session; the human paths go to the login.
+    for (const m of MACHINE_PATHS)
+      expect({ path: m.path, status: (await edge(w, samplePath(m.path))).status }).toEqual({
+        path: m.path,
         status: 200,
       });
-    for (const path of ["/", "/v1/ops/health", "/v1/executions/01X", "/v1/spend", "/mcp"])
-      expect({ path, status: (await edge(w, path)).status }).toEqual({ path, status: 302 });
+    for (const h of HUMAN_PATHS)
+      expect({ path: h.path, status: (await edge(w, samplePath(h.path))).status }).toEqual({
+        path: h.path,
+        status: 302,
+      });
   });
 
-  it("[FD-OPS-088] a deploy over Access as committed reads the applications and writes none", async () => {
+  it("[FD-OPS-088] fails on an Access application that covers a machine path: one on the path, one on the bare hostname, or one below a machine pattern", async () => {
+    const onPath = await refused(
+      (w) => void w.access.set("hook", app("hook", ["/v1/webhooks/github"])),
+    );
+    expect(onPath).toContain(
+      `failure access.${HOST}/v1/webhooks/github: Access application "hook" covers the webhook path, which must be reachable without Access`,
+    );
+    expect(onPath).not.toContain(`access.${HOST}/v1/dispatch/*`);
+
+    const bare = await refused((w) => void w.access.set("bare", app("bare", [""])));
+    for (const m of MACHINE_PATHS)
+      expect(bare).toContain(`failure access.${HOST}${m.path}: Access application "bare" covers`);
+
+    const below = await refused(
+      (w) => void w.access.set("below", app("below", ["/v1/artifacts/secret"])),
+    );
+    expect(below).toContain(`failure access.${HOST}/v1/artifacts/*: Access application "below"`);
+  });
+
+  it("[FD-OPS-088] passes a machine path that an application with a bypass policy decides, the most specific application over the bare hostname's", async () => {
+    await admitted((w) => {
+      w.access.set("bare", app("bare", [""], "allow", placeholderOverlay.access.aud));
+      for (const [i, m] of MACHINE_PATHS.entries())
+        w.access.set(`bypass-${i}`, app(`bypass-${i}`, [m.path], "bypass"));
+    });
+    await admitted(
+      (w) => void w.access.set("dispatch", app("dispatch", ["/v1/dispatch/*"], "bypass")),
+    );
+  });
+
+  it("[FD-OPS-088] fails on a human path no Access application covers, or that only a bypass application decides", async () => {
+    const none = await refused((w) => void w.access.clear());
+    for (const h of HUMAN_PATHS)
+      expect(none).toContain(
+        `failure access.${HOST}${h.path}: no Access application covers the ${h.surface} path`,
+      );
+
+    const mcp = await refused((w) => {
+      const human = w.access.get(HUMAN_ACCESS.id)!;
+      human["destinations"] = HUMAN_ACCESS.destinations.filter((d) => !d.uri.endsWith("/mcp"));
+    });
+    expect(mcp.split("\n").filter((l) => l.startsWith("failure"))).toEqual([
+      `failure access.${HOST}/mcp: no Access application covers the mcp path without a bypass policy: cover it with an application whose AUD is access.aud`,
+    ]);
+
+    const bypassed = await refused(
+      (w) => void w.access.set("ops", app("ops", ["/v1/ops/*"], "bypass")),
+    );
+    expect(bypassed).toContain(`failure access.${HOST}/v1/ops/*: no Access application covers`);
+  });
+
+  it("[FD-OPS-088] fails on an application deciding a human path whose AUD tag is not the overlay's access.aud, and passes once the overlay carries it", async () => {
+    const change = (w: World) => void (w.access.get(HUMAN_ACCESS.id)!["aud"] = "recreated-aud");
+    const detail = await refused(change);
+    expect(detail.split("\n").filter((l) => l.startsWith("failure"))).toEqual([
+      `failure access.${HOST}.aud: Access application "${HUMAN_ACCESS.name}" has AUD "recreated-aud", the overlay's access.aud is ${JSON.stringify(placeholderOverlay.access.aud)}: the dispatcher rejects every Access JWT it issues; set access.aud to the application's AUD`,
+    ]);
+
+    // A second application on one human path, more specific than the first, with its own AUD tag.
+    const ops = await refused((w) => void w.access.set("ops", app("ops", ["/v1/ops/*"])));
+    expect(ops).toContain(`failure access.${HOST}.aud: Access application "ops" has AUD "aud-ops"`);
+
     const w = world();
-    expect((await deploy(w)).ok).toBe(true);
-    expect(w.calls.filter((c) => c.startsWith(`GET ${ACCESS}`)).length).toBeGreaterThan(0);
+    change(w);
+    const overlay = JSON.stringify({
+      ...placeholderOverlay,
+      access: { ...placeholderOverlay.access, aud: "recreated-aud" },
+    });
+    expect((await deploy(w, overlay)).ok).toBe(true);
     expect(accessWrites(w.calls)).toEqual([]);
   });
 
-  it("[FD-OPS-088] deploy admits service tokens through Service Auth without turning their common names into email rules", async () => {
-    const w = world();
-    const overlay = withAud(placeholderOverlay.access.aud, {
-      operators: ["operator-ci.access"],
-      dispatchers: ["dispatcher-ci.access"],
+  it("[FD-OPS-088] reads the hostname's applications past the first page of the account's list, and leaves other hostnames' applications out of the check", async () => {
+    await admitted((w) => {
+      for (let i = 0; i < 120; i++)
+        w.access.set(`other-${i}`, {
+          id: `other-${i}`,
+          name: `other ${i}`,
+          type: "self_hosted",
+          domain: `app${i}.example.org`,
+          policies: [],
+        });
+      // The human application last, on the second page.
+      const human = w.access.get(HUMAN_ACCESS.id)!;
+      w.access.delete(HUMAN_ACCESS.id);
+      w.access.set(HUMAN_ACCESS.id, human);
     });
-    expect((await deploy(w, overlay)).ok).toBe(true);
-    expect(policiesOf(onHost(w).get(HOST))).toEqual([
-      { decision: "non_identity", include: [{ any_valid_service_token: {} }] },
-    ]);
-    expect((await Effect.runPromise(fd(w).doctor(overlay))).ok).toBe(true);
-    for (const b of ACCESS_BYPASS)
-      expect(policiesOf(onHost(w).get(`${HOST}${b.path}`))).toEqual([
-        { decision: "bypass", include: [{ everyone: {} }] },
-      ]);
-  });
-
-  it("[FD-OPS-088] fd doctor fails on a removed bypass, an edited policy and an uncommitted application on the hostname, and changes nothing", async () => {
-    const w = world();
-    expect((await deploy(w)).ok).toBe(true);
-    expect((await Effect.runPromise(fd(w).doctor(OVERLAY))).ok).toBe(true);
-    tamper(w);
-    const before = w.snapshot();
-    const from = w.calls.length;
-
-    const report = await Effect.runPromise(fd(w).doctor(OVERLAY));
-    expect(report.ok).toBe(false);
-    const detail = report.stages.find((s) => s.stage === "drift")!.detail.split("\n");
-    expect(detail).toContain(
-      `failure access.${HOST}/v1/webhooks/github: a committed Access application is absent`,
-    );
-    expect(detail).toContainEqual(
-      expect.stringMatching(
-        new RegExp(`^failure access\\.${HOST.replace(/\./g, "\\.")}: deployed .*"everyone"`),
-      ),
-    );
-    expect(detail).toContain(
-      `failure access.${HOST}/v1/ops/*: an Access application on the dispatcher's hostname the committed configuration does not hold`,
-    );
-    expect(detail.filter((l) => l.includes("other.example.com"))).toEqual([]);
-    expect(since(w, from).filter(isWrite)).toEqual([]);
-    expect(w.snapshot()).toBe(before);
-  });
-
-  it("[FD-OPS-088] fd deploy restores a removed bypass, replaces an edited application and removes an uncommitted one, leaving other hostnames alone", async () => {
-    const w = world();
-    expect((await deploy(w)).ok).toBe(true);
-    tamper(w);
-    expect((await edge(w, "/v1/webhooks/github")).status).toBe(302);
-    expect((await edge(w, "/v1/ops/health")).status).toBe(200);
-
-    const from = w.calls.length;
-    const report = await deploy(w);
-    expect(report.ok).toBe(true);
-    // The Worker deploy, then every Access write, then the probe.
-    const calls = since(w, from);
-    const deployed = calls.indexOf(`wrangler deploy ${SCRIPT}`);
-    const writes = calls.flatMap((c, i) => (accessWrites([c]).length > 0 ? [i] : []));
-    const probe = calls.indexOf(`GET ${HOST}/health`);
-    expect(writes).toHaveLength(3);
-    expect(deployed).toBeGreaterThanOrEqual(0);
-    expect(writes.every((i) => i > deployed && i < probe)).toBe(true);
-    const detail = report.stages.find((s) => s.stage === "deploy")!.detail;
-    expect(detail).toContain(`access created ${HOST}/v1/webhooks/github`);
-    expect(detail).toContain(`access replaced ${HOST}`);
-    expect(detail).toContain(`access removed ${HOST}/v1/ops/*`);
-    expect(w.access.has("other-host")).toBe(true);
-    expect((await edge(w, "/v1/webhooks/github")).status).toBe(200);
-    expect((await edge(w, "/v1/ops/health")).status).toBe(302);
-    expect((await Effect.runPromise(fd(w).doctor(OVERLAY))).ok).toBe(true);
-  });
-
-  it("[FD-OPS-088] reads the hostname's applications past the first page of the account's list", async () => {
-    const w = world({ access: "none" });
-    for (let i = 0; i < 120; i++)
-      w.access.set(`other-${i}`, {
-        id: `other-${i}`,
-        name: `other ${i}`,
-        type: "self_hosted",
-        domain: `app${i}.example.org`,
-        session_duration: "24h",
-        policies: [],
-      });
-    expect((await deploy(w)).ok).toBe(false);
-    const overlay = withAud(hostAud(w));
-    expect((await Effect.runPromise(fd(w).doctor(overlay))).ok).toBe(true);
-    const from = w.calls.length;
-    expect((await deploy(w, overlay)).ok).toBe(true);
-    expect(accessWrites(since(w, from))).toEqual([]);
-    expect(onHost(w).size).toBe(ACCESS_BYPASS.length + 1);
-  });
-
-  it("[FD-OPS-088] fd doctor and fd deploy fail on a hostname application whose AUD tag is not the overlay's access.aud, and fd deploy writes nothing", async () => {
-    const w = world();
-    expect((await deploy(w)).ok).toBe(true);
-    // The hostname's application deleted and created again out of band, which gives it a new AUD tag.
-    onHost(w).get(HOST)!["aud"] = "recreated-aud";
-    const finding = `access.${HOST}.aud: the hostname's Access application has AUD "recreated-aud"`;
-
-    const doctor = await Effect.runPromise(fd(w).doctor(OVERLAY));
-    expect(doctor.ok).toBe(false);
-    expect(doctor.stages.find((s) => s.stage === "drift")!.detail).toContain(`failure ${finding}`);
-
-    const from = w.calls.length;
-    const report = await deploy(w);
-    expect(report.ok).toBe(false);
-    const last = report.stages.at(-1)!;
-    expect(last).toMatchObject({ stage: "drift", ok: false });
-    expect(last.detail).toContain(finding);
-    expect(since(w, from).filter(isWrite)).toEqual([]);
-
-    expect((await deploy(w, withAud("recreated-aud"))).ok).toBe(true);
   });
 
   it("[FD-OPS-088] a token that cannot read the Access applications stops fd deploy at the drift check, before any write", async () => {
@@ -256,23 +188,5 @@ describe("the committed Access configuration", () => {
     expect(last).toMatchObject({ stage: "drift", ok: false });
     expect(last.detail).toContain("403 Authentication error");
     expect(since(w, from).filter(isWrite)).toEqual([]);
-  });
-
-  it("[FD-OPS-088] a failed Access write stops the deploy before the probes and prints each Worker's rollback line", async () => {
-    const w = world();
-    expect((await deploy(w)).ok).toBe(true);
-    tamper(w);
-    w.state.accessFails = true;
-    const from = w.calls.length;
-
-    const report = await deploy(w);
-    expect(report.ok).toBe(false);
-    const last = report.stages.at(-1)!;
-    expect(last.stage).toBe("deploy");
-    expect(last.ok).toBe(false);
-    expect(last.detail).toContain("403 Authentication error");
-    expect(last.detail).toMatch(new RegExp(`wrangler rollback \\S+ --name ${SCRIPT}`));
-    expect(since(w, from)).not.toContain(`GET ${HOST}/health`);
-    expect(since(w, from).filter((c) => c.includes("/r2/") && c.startsWith("PUT"))).toEqual([]);
   });
 });

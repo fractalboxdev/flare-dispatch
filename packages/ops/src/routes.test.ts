@@ -67,14 +67,20 @@ const post = (body: unknown): RequestInit => ({
 describe("operability routes", () => {
   it("[FD-OPS-064] every dashboard page passes the Access gate before any page logic", async () => {
     const s = await setup();
-    for (const path of ["/", "/executions/e1"]) {
+    for (const path of ["/dashboard", "/dashboard/executions/e1"]) {
       expect((await s.call(null, path)).status).toBe(401);
       expect((await s.call("x.y.z", path)).status).toBe(403);
     }
-    expect((await s.call(s.viewer, "/")).status).toBe(200);
-    const unconfigured = await opsFetch(requestWith(s.operator, "/"), { DB: t.db }, s.deps);
+    expect((await s.call(s.viewer, "/dashboard")).status).toBe(200);
+    const unconfigured = await opsFetch(
+      requestWith(s.operator, "/dashboard"),
+      { DB: t.db },
+      s.deps,
+    );
     expect(unconfigured!.status).toBe(503);
     for (const path of [
+      "/",
+      "/executions/e1",
       "/v1/webhooks/github",
       "/v1/executions",
       "/v1/ops/health",
@@ -86,10 +92,10 @@ describe("operability routes", () => {
       expect(await opsFetch(requestWith(s.operator, path), s.env, s.deps), path).toBeNull();
   });
 
-  it("[FD-CACHE-090] GET / reports the 28-day cache hit rate per tier and executor kind on a deploy with no lookup yet", async () => {
+  it("[FD-CACHE-090] GET /dashboard reports the 28-day cache hit rate per tier and executor kind on a deploy with no lookup yet", async () => {
     const now = 1_800_000_000_000;
     const s = await setup({}, now);
-    const empty = await s.call(s.viewer, "/");
+    const empty = await s.call(s.viewer, "/dashboard");
     expect(empty.status).toBe(200);
     expect(await empty.text()).toContain("No cache lookup in the last 28 days.");
     await recordCacheLookups(t.db, [
@@ -103,12 +109,12 @@ describe("operability routes", () => {
         at: now - 1000,
       },
     ]);
-    expect(await (await s.call(s.viewer, "/")).text()).toContain(
+    expect(await (await s.call(s.viewer, "/dashboard")).text()).toContain(
       "<tr><td>aws</td><td>compile-cache</td><td>pull-request</td><td>1 / 1</td><td>100.0%</td><td>7</td></tr>",
     );
   });
 
-  it("[FD-AGT-018] GET /executions/:id serves the execution page with every reason of its refused pr.propose row", async () => {
+  it("[FD-AGT-018] GET /dashboard/executions/:id serves the execution page with every reason of its refused pr.propose row", async () => {
     const s = await setup();
     await t.db
       .prepare(
@@ -125,16 +131,16 @@ describe("operability routes", () => {
       )
       .bind("writeback: outside-allowlist; outside-allowlist src/a.ts; too-many-files")
       .run();
-    const res = await s.call(s.viewer, "/executions/e%201");
+    const res = await s.call(s.viewer, "/dashboard/executions/e%201");
     expect(res.status).toBe(200);
     const page = await res.text();
     expect(page).toContain("<tr><th>Verdict</th><td>success</td></tr>");
     expect(page).toContain(
       '<li class="mono">outside-allowlist src/a.ts</li><li class="mono">too-many-files</li>',
     );
-    expect(page).toContain("/v1/executions/e%201/logs?t=");
-    expect((await s.call(s.viewer, "/executions/nope")).status).toBe(404);
-    expect((await s.call(s.viewer, "/executions/%E0")).status).toBe(404);
+    expect(page).toContain("/v1/logs/e%201?t=");
+    expect((await s.call(s.viewer, "/dashboard/executions/nope")).status).toBe(404);
+    expect((await s.call(s.viewer, "/dashboard/executions/%E0")).status).toBe(404);
   });
 });
 

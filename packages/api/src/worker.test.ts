@@ -98,7 +98,9 @@ describe("the router on workerd", () => {
     const first = await dispatch();
     expect(first.status).toBe(202);
     const admitted = (await first.json()) as Record<string, string>;
-    expect(admitted["details_url"]).toContain(`/executions/${admitted["execution_id"]}?t=`);
+    expect(admitted["details_url"]).toContain(
+      `/dashboard/executions/${admitted["execution_id"]}?t=`,
+    );
     const second = (await (await dispatch()).json()) as Record<string, unknown>;
     expect(second).toMatchObject({ execution_id: admitted["execution_id"], duplicate: true });
 

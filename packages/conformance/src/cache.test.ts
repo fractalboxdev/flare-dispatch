@@ -511,10 +511,9 @@ describe("a confidential-compute repository on the composed control plane", () =
       ).put(name!, `${JSON.stringify({ line: "confidential build output" })}\n`, {
         customMetadata: { executor_id: "device", executor_kind: "device" },
       });
-      const read = await mf.dispatchFetch(
-        `${ORIGIN}/v1/executions/${lease.execution_id}/logs?format=html`,
-        { headers: { "cf-access-jwt-assertion": await team.jwt(OPERATOR) } },
-      );
+      const read = await mf.dispatchFetch(`${ORIGIN}/v1/logs/${lease.execution_id}?format=html`, {
+        headers: { "cf-access-jwt-assertion": await team.jwt(OPERATOR) },
+      });
       expect(read.status).toBe(200);
       return read.text();
     };

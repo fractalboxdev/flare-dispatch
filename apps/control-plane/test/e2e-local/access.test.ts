@@ -39,8 +39,8 @@ const FORGED = { "cf-access-jwt-assertion": "eyJhbGciOiJSUzI1NiJ9.e30.c2ln" };
 
 /** The paths the operability routes serve beside the declared groups: the dashboard, the fleet and the install flow. */
 const OPERABILITY_PATHS: readonly (readonly [string, string])[] = [
-  ["GET", "/"],
-  ["GET", "/executions/01E2EGATE0000000000000000"],
+  ["GET", "/dashboard"],
+  ["GET", "/dashboard/executions/01E2EGATE0000000000000000"],
   ["GET", "/v1/ops/fleet"],
   ["GET", "/v1/github/install/new"],
   ["GET", "/v1/github/install/callback"],
@@ -114,8 +114,8 @@ describe("the Access gate on the HTTP API", () => {
 describe("the dashboard's identity gate", () => {
   /** Every dashboard page and JSON route, each with the status a valid operator token gets past the gate. */
   const pages: readonly (readonly [string, number])[] = [
-    ["/", 200],
-    ["/executions/01E2EGATE0000000000000000", 404],
+    ["/dashboard", 200],
+    ["/dashboard/executions/01E2EGATE0000000000000000", 404],
     ["/v1/executions", 200],
     ["/v1/ops/health", 200],
     ["/v1/ops/fleet", 200],
@@ -143,7 +143,7 @@ describe("the dashboard's identity gate", () => {
   });
 
   it("[FD-OPS-064] sends a browser with no identity to the overlay team's Access login", async () => {
-    const r = await fetch(`${stack.url}/`, {
+    const r = await fetch(`${stack.url}/dashboard`, {
       headers: { accept: "text/html", "sec-fetch-mode": "navigate" },
       redirect: "manual",
     });
@@ -151,5 +151,12 @@ describe("the dashboard's identity gate", () => {
     expect(r.headers.get("location")).toMatch(
       new RegExp(`^${stack.overlay.access.teamDomain}/cdn-cgi/access/login/`),
     );
+  });
+
+  it("[FD-OPS-064] redirects / to the dashboard, serving no page there", async () => {
+    const r = await fetch(`${stack.url}/`, { redirect: "manual" });
+    expect(r.status).toBe(302);
+    expect(new URL(r.headers.get("location")!).pathname).toBe("/dashboard");
+    expect(await r.text()).not.toContain("<table");
   });
 });

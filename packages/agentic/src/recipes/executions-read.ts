@@ -44,7 +44,7 @@ const PAGE = 200;
 /**
  * `ExecutionsRead` over the control plane's routes: `failedSince` pages `GET /v1/executions` for the repository's
  * executions done at or after `since` and keeps those whose verdict is `failure`, newest first; `failedJobLog` answers
- * `GET /v1/executions/<id>/logs?format=text`, every step log of the execution in step order (FD-CACHE-083). The Layer
+ * `GET /v1/logs/<id>?format=text`, every step log of the execution in step order (FD-CACHE-083). The Layer
  * sends no credential of its own: a request carries only what the egress proxy attaches to it. A request that fails,
  * an answer other than 200, a page outside the shape and a log not served as plain text each fail the read.
  */
@@ -97,7 +97,7 @@ export const executionsApiReadLayer = (
     failedJobLog: (executionId) =>
       Effect.tryPromise({
         try: async () => {
-          const response = await get(`/v1/executions/${encodeURIComponent(executionId)}/logs`, {
+          const response = await get(`/v1/logs/${encodeURIComponent(executionId)}`, {
             format: "text",
           });
           if (!(response.headers.get("content-type") ?? "").startsWith("text/plain"))

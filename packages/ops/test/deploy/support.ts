@@ -1,9 +1,10 @@
 // The fakes the deploy suites of `V-DEPLOY` run on (specs/verification.md § Harness catalog): `fd deploy` and `fd doctor`
 // through the Operability service over the committed Worker templates and the placeholder overlay, with the live
 // `DeployTarget` on fakes of the Cloudflare API, the GitHub API, `wrangler` and the Workers' hostnames. The fake
-// Cloudflare account keeps each deployed Worker's settings, versions and Container applications and its Access
-// applications between runs, so a suite deploys, changes the account out of band and deploys again. Access sits in
-// front of the dispatcher's hostname as the account's applications configure it. AWS STS, AWS Budgets, IAM and AWS
+// Cloudflare account keeps each deployed Worker's settings, versions and Container applications between runs, so a suite
+// deploys, changes the account out of band and deploys again. Its Access applications are managed outside FlareDispatch:
+// the API lists them and refuses every write, and Access sits in front of the dispatcher's hostname as they configure
+// it. AWS STS, AWS Budgets, IAM and AWS
 // Organizations answer for one AWS account, and only requests whose SigV4 signature verifies. The account owns the
 // presign token the placeholder overlay names, with Object Read & Write on its cache and artifact buckets, and answers
 // its policies, never its value, as `GET /accounts/{account_id}/tokens/{token_id}` does. The runner repository
@@ -23,10 +24,10 @@ import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { Effect, Layer, Schema } from "effect";
 import {
   APP_PERMISSIONS,
-  committedAccess,
+  bypasses,
+  decidingApplications,
   DeployTarget,
-  onHostname,
-  pathMatches,
+  HUMAN_PATHS,
   MERGE_GATE_CHECKS,
   OBJECT_READ_WRITE,
   parseJsonc,
@@ -34,6 +35,7 @@ import {
   renderTemplate,
   type AgenticRegistry,
   type AppPermissions,
+  type DeployedAccessApplication,
   type OverlayValues,
   type WorkerConfig,
 } from "../../src/index.ts";
@@ -133,6 +135,32 @@ const PEM = generateKeyPairSync("rsa", { modulusLength: 2048 })
   .toString();
 
 /** The operator's Access service token, whose common name the overlay lists among `operators`. */
+/** The dispatcher hostname of the placeholder overlay. */
+export const HOST = placeholderOverlay.hostnames["dispatcher"]!;
+
+/**
+ * The Access application on the human paths as one managed outside FlareDispatch sets it up: one destination per human
+ * path, the overlay's AUD tag, an allow policy for people and a Service Auth policy for the deploy's service token.
+ */
+export const HUMAN_ACCESS = {
+  id: "human",
+  name: "dispatcher people",
+  type: "self_hosted",
+  aud: placeholderOverlay.access.aud,
+  domain: `${HOST}${HUMAN_PATHS[0]!.path}`,
+  destinations: HUMAN_PATHS.map((h) => ({ type: "public", uri: `${HOST}${h.path}` })),
+  session_duration: "24h",
+  policies: [
+    { id: "people", name: "people", decision: "allow", include: [{ github_organization: {} }] },
+    {
+      id: "deploy",
+      name: "deploy service token",
+      decision: "non_identity",
+      include: [{ service_token: {} }],
+    },
+  ],
+} as const;
+
 export const SERVICE_TOKEN = {
   clientId: "fd-deploy.access",
   clientSecret: "service-token-secret",
@@ -183,9 +211,10 @@ export interface Script {
 }
 
 /**
- * A Cloudflare account, a GitHub App installation, `wrangler` and the Workers' hostnames, behind one call log. The
- * account holds the committed Access applications for the placeholder overlay, the hostname's application with the
- * overlay's `access.aud`, unless `access` is `"none"`, as the App registration matches the committed manifest.
+ * A Cloudflare account, a GitHub App installation, `wrangler` and the Workers' hostnames, behind one call log. Unless
+ * `access` is `"none"`, the account holds one Access application, `HUMAN_ACCESS`, whose destinations are the human paths
+ * of the placeholder overlay's dispatcher hostname, with the overlay's `access.aud`; the App registration matches the
+ * committed manifest.
  */
 export const world = (opts: { readonly access?: "committed" | "none" } = {}) => {
   const calls: string[] = [];
@@ -206,14 +235,13 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     [PRESIGN_TOKEN_ID, SCOPED_PRESIGN_TOKEN],
   ]);
   /** The account's Access applications by id, each as the API lists it. */
-  const access = new Map<string, Record<string, unknown>>();
-  let accessIds = 0;
+  const access = new Map<string, Record<string, unknown>>(
+    opts.access === "none" ? [] : [[HUMAN_ACCESS.id, structuredClone(HUMAN_ACCESS)]],
+  );
   const state: {
     health: number;
     deploys: number;
     wranglerFails: boolean;
-    /** Every Access write answers 403, as for a token that may read Access applications and not edit them. */
-    accessFails: boolean;
     /** Every Access call answers 403, as for a token with no Access permission. */
     accessReadFails: boolean;
     /** Every API token read answers 403, as for a deploy token without Account API Tokens:Read. */
@@ -253,7 +281,6 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     health: 200,
     deploys: 0,
     wranglerFails: false,
-    accessFails: false,
     accessReadFails: false,
     tokensReadFails: false,
     cacheWriteFails: false,
@@ -276,28 +303,12 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
   };
 
   /**
-   * An application as the API stores it: an id, an AUD tag, and policies with the ids, precedence and rule lists it
-   * adds. A created application takes a new AUD tag; a replaced one keeps its own.
+   * The Access API: the applications in pages. Every write answers 403, as for a token with Access Apps and Policies
+   * Read.
    */
-  const stored = (id: string, body: Record<string, unknown>, aud: unknown = `aud-${id}`) => ({
-    ...body,
-    id,
-    aud,
-    created_at: "2026-11-01T00:00:00Z",
-    policies: arr(body["policies"]).map((p, i) => ({
-      id: `${id}-policy-${i}`,
-      precedence: i + 1,
-      exclude: [],
-      require: [],
-      ...p,
-    })),
-  });
-
-  /** The Access API: list in pages, create, replace and delete. */
-  const accessApi = (method: string, url: URL, path: string, body: string): Response | null => {
-    const m = /^\/access\/apps(?:\/([^/]+))?$/.exec(path);
-    if (m === null) return null;
-    if (state.accessReadFails || (state.accessFails && method !== "GET"))
+  const accessApi = (method: string, url: URL, path: string): Response | null => {
+    if (!/^\/access\/apps(?:\/[^/]+)?$/.test(path)) return null;
+    if (state.accessReadFails || method !== "GET")
       return Response.json(
         {
           success: false,
@@ -306,53 +317,23 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
         },
         { status: 403 },
       );
-    const id = m[1];
-    if (id === undefined && method === "GET") {
-      const page = Number(url.searchParams.get("page") ?? "1");
-      const per = Number(url.searchParams.get("per_page") ?? "25");
-      return ok([...access.values()].slice((page - 1) * per, page * per));
-    }
-    if (id === undefined && method === "POST") {
-      const app = stored(`app-${++accessIds}`, JSON.parse(body) as Record<string, unknown>);
-      access.set(app.id, app);
-      return ok(app);
-    }
-    if (id === undefined || !access.has(id)) return new Response(null, { status: 404 });
-    if (method === "PUT") {
-      const app = stored(id, JSON.parse(body) as Record<string, unknown>, access.get(id)!["aud"]);
-      access.set(id, app);
-      return ok(app);
-    }
-    if (method === "DELETE") {
-      access.delete(id);
-      return ok({ id });
-    }
-    return new Response(null, { status: 405 });
+    const page = Number(url.searchParams.get("page") ?? "1");
+    const per = Number(url.searchParams.get("per_page") ?? "25");
+    return ok([...access.values()].slice((page - 1) * per, page * per));
   };
 
   /**
-   * Access in front of the dispatcher's hostname: once an application covers the hostname, a request with no Access
-   * session is sent to the team's login unless a bypass application covers its path.
+   * Access in front of the dispatcher's hostname: a request with no Access session is sent to the team's login where the
+   * application that decides its path, the most specific that covers it, holds no bypass policy.
    */
   const behindAccess = (host: string, path: string): boolean => {
-    const apps = [...access.values()].filter((a) => onHostname(host, a["domain"] as string));
-    if (!apps.some((a) => a["domain"] === host)) return false;
-    return !apps.some(
-      (a) =>
-        a["domain"] !== host &&
-        pathMatches((a["domain"] as string).slice(host.length), path) &&
-        arr(a["policies"]).some((p) => p["decision"] === "bypass"),
+    const deciding = decidingApplications(
+      host,
+      [...access.values()] as unknown as readonly DeployedAccessApplication[],
+      path,
     );
+    return deciding.length > 0 && !deciding.some(bypasses);
   };
-  if (opts.access !== "none")
-    for (const app of committedAccess(placeholderOverlay)!.applications) {
-      const id = `app-${++accessIds}`;
-      const aud =
-        app.domain === placeholderOverlay.hostnames["dispatcher"]
-          ? placeholderOverlay.access.aud
-          : undefined;
-      access.set(id, stored(id, JSON.parse(JSON.stringify(app)) as Record<string, unknown>, aud));
-    }
 
   const secretBindings = (script: string) =>
     [...(secrets.get(script) ?? new Map<string, string>())].map(([name, text]) => ({
@@ -469,7 +450,7 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
       const stored = objects.get(objectKey);
       return stored === undefined ? new Response(null, { status: 404 }) : new Response(stored);
     }
-    const accessAnswer = accessApi(method, url, path, body);
+    const accessAnswer = accessApi(method, url, path);
     if (accessAnswer !== null) return accessAnswer;
     if (method !== "GET") return new Response(null, { status: 405 });
     const tokenId = /^\/tokens\/([^/]+)$/.exec(path)?.[1];

@@ -275,7 +275,7 @@ A log object is `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.n
 - **FD-CACHE-053** · phase 0 · `V-UNIT` — If an object's declared length exceeds the per-object bound, default 100 MiB for a compile-cache object and 4 GiB for any other object, then the control plane must refuse the request with `413`.
 - **FD-CACHE-054** · phase 0 · `V-UNIT` — If a reservation would raise an execution's reserved bytes above the per-execution bound, default 10 GiB, or the repository's stored bytes above the per-repository bound, default 20 GiB, then the `CacheLedger` must refuse it and the control plane must answer `507`.
 - **FD-CACHE-055** · phase 0 · `V-UNIT` — When an execution reaches a terminal status, the control plane must refuse every later write request for that execution with `403` and release its unused reservations in the `CacheLedger`.
-- **FD-CACHE-091** · phase 0 · `V-DEPLOY` `V-UNIT` — The object-store presigner must sign presigned URLs only with an R2 API token scoped to the cache and artifact buckets with Object Read & Write, held as a Worker secret used for nothing else, and must issue them on the bucket's S3 endpoint `<account_id>.r2.cloudflarestorage.com`, because presigned URLs do not work on a custom domain.
+- **FD-CACHE-091** · phase 0 · `V-DEPLOY` `V-UNIT` — The object-store presigner must sign presigned URLs only with an R2 API token scoped to the cache and artifact buckets with Object Read & Write, held as a Worker secret used for nothing else, and must issue them on the bucket's S3 endpoint `<account_id>.r2.cloudflarestorage.com`, because presigned URLs do not work on a custom domain. The drift check reads the token `presign.tokenId` names and must fail if the overlay names no token or the token grants anything other than that scope; if the deploy token cannot read API tokens, the drift check must report the scope unchecked as a warning and pass, and the token's owner keeps it to that scope.
 
 ### Compile-cache route
 
@@ -315,7 +315,7 @@ A log object is `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.n
 
 - **FD-CACHE-081** · phase 0 · `V-UNIT` `V-REPLAY` — The executor must name each log object `logs/<execution_id>/<epoch>/<step_key>/<stream>-<start>-<end>.ndjson`, with `step_key` derived from the step's journal name, and must not use a process-local counter in a log name.
 - **FD-CACHE-082** · phase 0 · `V-UNIT` — If a log object name does not match that grammar, then the log reader must reject it.
-- **FD-CACHE-083** · phase 0 · `V-UNIT` — The dispatcher must serve `GET /v1/executions/<id>/logs/<file>` as NDJSON, as plain text with `?format=text`, and as one aggregate of every file in step order, paging through R2 listings past 1000 objects.
+- **FD-CACHE-083** · phase 0 · `V-UNIT` — The dispatcher must serve `GET /v1/logs/<id>/<file>` as NDJSON and as plain text with `?format=text`, and `GET /v1/logs/<id>` as one aggregate of every file in step order, paging through R2 listings past 1000 objects.
 - **FD-CACHE-084** · phase 0 · `V-UNIT` — The HTML log viewer must send a nonce-based `Content-Security-Policy` with `default-src 'none'`, insert log text only as text content, and strip ANSI escape sequences.
 - **FD-CACHE-085** · phase 0 · `V-UNIT` — When an execution is terminal, the dispatcher must serve its log objects with `Cache-Control: immutable`.
 - **FD-CACHE-086** · phase 0 · `V-UNIT` — The log viewer must show, for each log object, the executor id, executor kind and epoch that produced it.

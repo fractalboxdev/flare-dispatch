@@ -1,17 +1,23 @@
-// The committed Cloudflare Access configuration of the dispatcher's hostname (FD-OPS-088): one self-hosted application
-// on the hostname, and a bypass application on every path whose surface specs/interfaces.md gives an identity other
-// than the Access JWT alone. The dispatcher runs each bypassed surface's identity check itself. `fd deploy` applies
-// these applications after the Worker deploys and before the probes; `fd doctor` reports each difference.
+// The paths of the dispatcher's hostname as Cloudflare Access must see them (FD-OPS-088). The Access applications on
+// the hostname are managed outside FlareDispatch: they list the human-facing paths, and every other path stays
+// uncovered, because an application on the bare hostname covers every path below it. `fd deploy` and `fd doctor` read
+// the account's applications and check them against these lists; neither writes an Access application.
 
-/** A bypassed path, the surface it serves and the identity check the dispatcher runs on it. */
-export interface BypassPath {
+/** A path pattern of the dispatcher's hostname, the surface it serves and the identity check the dispatcher runs on it. */
+export interface SurfacePath {
   readonly path: string;
   readonly surface: string;
   readonly identity: string;
 }
 
-/** Every path Access bypasses, from specs/interfaces.md § Surfaces and their identity gates. */
-export const ACCESS_BYPASS: readonly BypassPath[] = [
+/**
+ * The machine paths: every path whose surface in specs/interfaces.md § Surfaces and their identity gates names an
+ * identity other than the Access JWT alone. Each must be reachable without Access; the dispatcher runs the identity
+ * check itself.
+ */
+export const MACHINE_PATHS: readonly SurfacePath[] = [
+  { path: "/health", surface: "health", identity: "none" },
+  { path: "/.well-known/*", surface: "well-known", identity: "none" },
   { path: "/v1/webhooks/github", surface: "webhook", identity: "HMAC-SHA256 over the raw body" },
   {
     path: "/v1/dispatch/*",
@@ -23,19 +29,16 @@ export const ACCESS_BYPASS: readonly BypassPath[] = [
     surface: "executor connect",
     identity: "connect signature by the device key",
   },
-  { path: "/health", surface: "health", identity: "none" },
-  { path: "/.well-known/*", surface: "well-known", identity: "none" },
   {
     path: "/v1/executions",
     surface: "executions list",
     identity: "control-plane read token, or Access JWT",
   },
   {
-    path: "/v1/executions/*/logs",
-    surface: "log aggregate",
-    identity: "link token, control-plane read token, or Access JWT",
+    path: "/v1/logs/*",
+    surface: "log",
+    identity: "link token, control-plane read token for the aggregate, or Access JWT",
   },
-  { path: "/v1/executions/*/logs/*", surface: "log", identity: "link token, or Access JWT" },
   { path: "/v1/artifacts/*", surface: "artifact", identity: "link token, or Access JWT" },
   { path: "/v1/compile-cache/*", surface: "compile-cache", identity: "compile-cache token" },
   { path: "/v1/deploy-claims/*", surface: "deploy-claim", identity: "deploy-claim token" },
@@ -44,7 +47,6 @@ export const ACCESS_BYPASS: readonly BypassPath[] = [
     surface: "model-gateway",
     identity: "per-lease token, or capacity-lease proof",
   },
-  // The statement lookups only: the private log's checkpoint and proofs under `/v1/provenance/log/` are Access routes.
   {
     path: "/v1/provenance/executions/*",
     surface: "provenance executions",
@@ -57,109 +59,81 @@ export const ACCESS_BYPASS: readonly BypassPath[] = [
   },
 ];
 
-/** One Access application as the Cloudflare API's `POST /accounts/{account}/access/apps` takes it. */
-export interface AccessApplication {
-  readonly name: string;
-  readonly type: "self_hosted";
-  readonly domain: string;
-  readonly session_duration: string;
-  readonly policies: readonly {
-    readonly name: string;
-    readonly decision: "allow" | "bypass" | "non_identity";
-    readonly include: readonly unknown[];
-  }[];
-}
-
-/**
- * The applications for the dispatcher's hostname: the hostname behind Access for the overlay's operators and
- * dispatchers, a Service Auth policy for valid service tokens, and each bypass path with a bypass policy for
- * everyone. The Worker verifies the resulting JWT and checks the service token's common name against the overlay's
- * operator or dispatcher list on privileged routes; passing the edge's Service Auth policy grants neither role.
- */
-export const accessApplications = (
-  hostname: string,
-  identities: readonly string[],
-): readonly AccessApplication[] => [
+/** The human-facing paths: each must be covered by an Access application whose AUD tag is the overlay's `access.aud`. */
+export const HUMAN_PATHS: readonly SurfacePath[] = [
+  { path: "/dashboard", surface: "dashboard", identity: "Access JWT" },
+  { path: "/dashboard/*", surface: "dashboard", identity: "Access JWT" },
   {
-    name: "flare-dispatch",
-    type: "self_hosted",
-    domain: hostname,
-    session_duration: "24h",
-    policies: [
-      ...(identities.some((id) => id.includes("@"))
-        ? [
-            {
-              name: "identities",
-              decision: "allow" as const,
-              include: identities
-                .filter((id) => id.includes("@"))
-                .map((email) => ({ email: { email } })),
-            },
-          ]
-        : []),
-      {
-        name: "service tokens",
-        decision: "non_identity",
-        include: [{ any_valid_service_token: {} }],
-      },
-    ],
+    path: "/v1/executions/*",
+    surface: "execution",
+    identity: "Access JWT: one execution, its failure summary, cancel and its artifacts list",
   },
-  ...ACCESS_BYPASS.map((b): AccessApplication => ({
-    name: `flare-dispatch ${b.surface}`,
-    type: "self_hosted",
-    domain: `${hostname}${b.path}`,
-    session_duration: "24h",
-    policies: [{ name: "bypass", decision: "bypass", include: [{ everyone: {} }] }],
-  })),
+  { path: "/v1/executors/register", surface: "executor register", identity: "Access JWT" },
+  { path: "/v1/ops/*", surface: "operator routes", identity: "Access JWT" },
+  { path: "/v1/spend", surface: "spend", identity: "Access JWT" },
+  { path: "/v1/github/install/*", surface: "GitHub App install", identity: "Access JWT" },
+  { path: "/v1/provenance-policy", surface: "provenance policy", identity: "Access JWT" },
+  { path: "/v1/provenance-policy/*", surface: "provenance policy", identity: "Access JWT" },
+  { path: "/v1/provenance/log/*", surface: "provenance log", identity: "Access JWT" },
+  { path: "/mcp", surface: "mcp", identity: "Access JWT" },
 ];
 
-/** Whether an Access path pattern, where `*` stands for one segment and anything below it, covers a request path. */
+/**
+ * Whether a path pattern of `MACHINE_PATHS` or `HUMAN_PATHS`, where `*` stands for one segment and anything below it,
+ * matches a request path.
+ */
 export const pathMatches = (pattern: string, path: string): boolean =>
   new RegExp(
     `^${pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]+(?:/.*)?")}$`,
   ).test(path);
 
-/** Whether Access bypasses a request path. */
-export const bypassed = (path: string): boolean =>
-  ACCESS_BYPASS.some((b) => pathMatches(b.path, path));
+/** Whether a request path is a machine path, which Access must leave uncovered. */
+export const isMachinePath = (path: string): boolean =>
+  MACHINE_PATHS.some((m) => pathMatches(m.path, path));
 
-/** The committed applications for an overlay: none when it names no dispatcher hostname. */
-export interface CommittedAccess {
+/** One concrete request path under a pattern: each `*` stands for the segment `x`. */
+export const samplePath = (pattern: string): string => pattern.replace(/\*/g, "x");
+
+/**
+ * Whether an Access application's path covers a request path, as Cloudflare Access matches it: an empty path, `/` or
+ * `/*` covers the hostname and every path on it; any other path covers the request paths it matches and every path
+ * below one of them. A trailing `/*` does not cover its parent path.
+ */
+export const accessCovers = (appPath: string, path: string): boolean => {
+  if (appPath === "" || appPath === "/" || appPath === "/*") return true;
+  const segments = path.split("/");
+  for (let i = segments.length; i > 1; i--)
+    if (pathMatches(appPath, segments.slice(0, i).join("/"))) return true;
+  return false;
+};
+
+/** The Access expectations for an overlay: none when it names no dispatcher hostname. */
+export interface DispatcherAccess {
   readonly hostname: string;
   /** The overlay's `access.aud`: the AUD tag the dispatcher checks Access JWTs against (FD-OPS-064). */
   readonly aud: string;
-  readonly applications: readonly AccessApplication[];
 }
 
-/**
- * The Access configuration `fd deploy` applies and `fd doctor` checks: the dispatcher's hostname behind Access for the
- * overlay's `operators` and `dispatchers`, and each path of `ACCESS_BYPASS` with a bypass policy.
- */
-export const committedAccess = (overlay: {
+/** The hostname and AUD tag `fd deploy` and `fd doctor` check the account's Access applications against. */
+export const dispatcherAccess = (overlay: {
   readonly hostnames: Readonly<Record<string, string>>;
-  readonly operators: readonly string[];
-  readonly dispatchers?: readonly string[] | undefined;
   readonly access: { readonly aud: string };
-}): CommittedAccess | null => {
+}): DispatcherAccess | null => {
   const hostname = overlay.hostnames["dispatcher"];
-  if (hostname === undefined) return null;
-  const identities = [...new Set([...overlay.operators, ...(overlay.dispatchers ?? [])])];
-  return {
-    hostname,
-    aud: overlay.access.aud,
-    applications: accessApplications(hostname, identities),
-  };
+  return hostname === undefined ? null : { hostname, aud: overlay.access.aud };
 };
 
-/** An Access application as the Cloudflare API lists it: the committed fields, its id and whatever else it holds. */
+/** An Access application as the Cloudflare API lists it: the fields the check reads. */
 export interface DeployedAccessApplication {
   readonly id: string;
-  /** The AUD tag Cloudflare gives the application when it creates it; a replace keeps it. */
+  /** The AUD tag Cloudflare gives the application when it creates it. */
   readonly aud?: string;
   readonly name?: string;
   readonly type?: string;
+  /** The primary destination: a hostname, and optionally a path on it. */
   readonly domain?: string;
-  readonly session_duration?: string;
+  readonly self_hosted_domains?: readonly string[];
+  readonly destinations?: readonly { readonly type?: string; readonly uri?: string }[];
   readonly policies?: readonly {
     readonly name?: string;
     readonly decision?: string;
@@ -167,56 +141,74 @@ export interface DeployedAccessApplication {
   }[];
 }
 
-/** Whether an application's domain is the dispatcher's hostname or a path on it. */
-export const onHostname = (hostname: string, domain: string | undefined): boolean =>
-  domain === hostname || domain?.startsWith(`${hostname}/`) === true;
-
-/** The fields `fd` owns of an application, as one comparable value: the API's ids, precedence and dates dropped. */
-export const accessShape = (app: AccessApplication | DeployedAccessApplication) => ({
-  name: app.name ?? null,
-  type: app.type ?? null,
-  domain: app.domain ?? null,
-  session_duration: app.session_duration ?? null,
-  policies: (app.policies ?? []).map((p) => ({
-    name: p.name ?? null,
-    decision: p.decision ?? null,
-    include: p.include ?? [],
-  })),
-});
-
-/** What makes the account's applications on the hostname the committed ones. */
-export interface AccessChanges {
-  readonly create: readonly AccessApplication[];
-  readonly update: readonly { readonly id: string; readonly application: AccessApplication }[];
-  /** Applications on the hostname the committed configuration does not hold. */
-  readonly remove: readonly { readonly id: string; readonly domain: string }[];
-}
+/**
+ * Whether an application's hostname covers the dispatcher's: equal, ignoring case, or a `*.` wildcard that stands for
+ * exactly the first label.
+ */
+const hostCovers = (appHost: string, hostname: string): boolean => {
+  const a = appHost.toLowerCase();
+  const h = hostname.toLowerCase();
+  if (a === h) return true;
+  if (!a.startsWith("*.")) return false;
+  const dot = h.indexOf(".");
+  return dot > 0 && h.slice(dot + 1) === a.slice(2);
+};
 
 /**
- * The changes from the deployed applications to the committed ones, matched by domain: a committed application absent
- * from the account is created, one that differs is replaced, and one on the hostname that is not committed is removed.
- * Applications on any other hostname are not the dispatcher's and are left alone.
+ * The paths an application covers on the dispatcher's hostname, one per destination there: its `domain`, its
+ * `self_hosted_domains` and its public `destinations`. An empty path is the bare hostname.
  */
-export const accessChanges = (
-  committed: CommittedAccess,
-  deployed: readonly DeployedAccessApplication[],
-): AccessChanges => {
-  const ours = deployed.filter((d) => onHostname(committed.hostname, d.domain));
-  const byDomain = new Map(ours.map((d) => [d.domain!, d]));
-  const wanted = new Set(committed.applications.map((a) => a.domain));
-  const create: AccessApplication[] = [];
-  const update: { id: string; application: AccessApplication }[] = [];
-  for (const application of committed.applications) {
-    const live = byDomain.get(application.domain);
-    if (live === undefined) create.push(application);
-    else if (JSON.stringify(accessShape(live)) !== JSON.stringify(accessShape(application)))
-      update.push({ id: live.id, application });
+export const accessPathsOn = (
+  hostname: string,
+  app: DeployedAccessApplication,
+): readonly string[] => {
+  const uris = new Set([
+    ...(app.domain === undefined ? [] : [app.domain]),
+    ...(app.self_hosted_domains ?? []),
+    ...(app.destinations ?? [])
+      .filter((d) => d.type === undefined || d.type === "public")
+      .flatMap((d) => (d.uri === undefined ? [] : [d.uri])),
+  ]);
+  return [...uris].flatMap((uri) => {
+    const bare = uri.replace(/^https?:\/\//, "");
+    const slash = bare.indexOf("/");
+    const host = slash < 0 ? bare : bare.slice(0, slash);
+    return hostCovers(host, hostname) ? [slash < 0 ? "" : bare.slice(slash)] : [];
+  });
+};
+
+/** Whether an application lets a request through without an Access login: it holds a bypass policy. */
+export const bypasses = (app: DeployedAccessApplication): boolean =>
+  (app.policies ?? []).some((p) => p.decision === "bypass");
+
+/** An application path's specificity: its segments, then its literal characters; the bare hostname is the least. */
+const specificity = (appPath: string): readonly [number, number] => {
+  const trimmed = appPath === "/*" || appPath === "/" ? "" : appPath;
+  return [trimmed.split("/").length - 1, trimmed.replace(/\*/g, "").length];
+};
+
+/**
+ * The applications that decide a request path on the hostname: of the applications whose paths cover it, those with
+ * the most specific covering path, which Cloudflare Access applies over any less specific one. Empty where none covers it.
+ */
+export const decidingApplications = (
+  hostname: string,
+  apps: readonly DeployedAccessApplication[],
+  path: string,
+): readonly DeployedAccessApplication[] => {
+  let best: readonly [number, number] | null = null;
+  let deciding: DeployedAccessApplication[] = [];
+  for (const app of apps) {
+    const covering = accessPathsOn(hostname, app).filter((p) => accessCovers(p, path));
+    if (covering.length === 0) continue;
+    const s = covering
+      .map(specificity)
+      .reduce((a, b) => (b[0] > a[0] || (b[0] === a[0] && b[1] > a[1]) ? b : a));
+    const order = best === null ? 1 : s[0] - best[0] || s[1] - best[1];
+    if (order > 0) {
+      best = s;
+      deciding = [app];
+    } else if (order === 0) deciding.push(app);
   }
-  return {
-    create,
-    update,
-    remove: ours
-      .filter((d) => !wanted.has(d.domain!))
-      .map((d) => ({ id: d.id, domain: d.domain! })),
-  };
+  return deciding;
 };
