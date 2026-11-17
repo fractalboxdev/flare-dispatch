@@ -9,7 +9,10 @@
 // Durable Objects merge only when the overlay's migration tags are a strict
 // prefix of the template's: the overlay then takes the template's migrations
 // and every template binding it lacks. An overlay whose migrations diverge
-// keeps its own Durable Objects unchanged.
+// keeps its own Durable Objects unchanged. Cron triggers carry no
+// account-specific value either, so the template's crons replace the overlay's:
+// a stale overlay cannot arm a schedule the committed config dropped, or drop
+// one it added.
 //
 // Usage: node infra/overlay-limits.mjs <template.jsonc> <overlay.jsonc>
 // rewrites <overlay.jsonc> in place as JSON.
@@ -26,12 +29,15 @@ export const parseJsonc = (text) =>
       .replace(/,(\s*[}\]])/g, "$1"),
   );
 
-/** The overlay with the template's limits filled in under its own; JSON text. */
+/** The overlay with the template's limits filled in under its own and the template's crons; JSON text. */
 export const mergeOverlayLimits = (templateText, overlayText) => {
   const template = parseJsonc(templateText);
   const overlay = parseJsonc(overlayText);
   if (template.limits !== undefined) {
     overlay.limits = { ...template.limits, ...overlay.limits };
+  }
+  if (Array.isArray(template.triggers?.crons)) {
+    overlay.triggers = { ...overlay.triggers, crons: template.triggers.crons };
   }
   if (Array.isArray(template.containers) && Array.isArray(overlay.containers)) {
     overlay.containers = overlay.containers.map((container) => {
