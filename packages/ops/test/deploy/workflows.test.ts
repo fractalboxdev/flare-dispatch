@@ -511,6 +511,8 @@ describe("every deploy path renders through the one renderer", () => {
         "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
         "secrets.FD_ACCESS_CLIENT_ID": "fd-deploy.access",
         "secrets.FD_ACCESS_CLIENT_SECRET": "service-token-secret",
+        "secrets.R2_PRESIGN_ACCESS_KEY_ID": "r2-key-id",
+        "secrets.R2_PRESIGN_SECRET_ACCESS_KEY": "r2-secret",
         "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
       },
       (step) => void played.push(step.uses!),
@@ -860,6 +862,8 @@ describe("the deploy workflow over GitHub's rules", () => {
     "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
     "secrets.FD_ACCESS_CLIENT_ID": "fd-deploy.access",
     "secrets.FD_ACCESS_CLIENT_SECRET": "service-token-secret",
+    "secrets.R2_PRESIGN_ACCESS_KEY_ID": "r2-key-id",
+    "secrets.R2_PRESIGN_SECRET_ACCESS_KEY": "r2-secret",
     "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
   });
 
@@ -958,6 +962,8 @@ describe("the deploy workflow over GitHub's rules", () => {
         "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
         "secrets.FD_ACCESS_CLIENT_ID": "fd-deploy.access",
         "secrets.FD_ACCESS_CLIENT_SECRET": "service-token-secret",
+        "secrets.R2_PRESIGN_ACCESS_KEY_ID": "r2-key-id",
+        "secrets.R2_PRESIGN_SECRET_ACCESS_KEY": "r2-secret",
         "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
       },
       () => {},
@@ -989,6 +995,8 @@ describe("the deploy workflow over GitHub's rules", () => {
         "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
         "secrets.FD_ACCESS_CLIENT_ID": "fd-deploy.access",
         "secrets.FD_ACCESS_CLIENT_SECRET": "service-token-secret",
+        "secrets.R2_PRESIGN_ACCESS_KEY_ID": "r2-key-id",
+        "secrets.R2_PRESIGN_SECRET_ACCESS_KEY": "r2-secret",
         "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
       },
       () => {},
@@ -1046,6 +1054,8 @@ describe("the deploy workflow's AWS credentials", () => {
     "secrets.GITHUB_APP_PRIVATE_KEY": "pem",
     "secrets.FD_ACCESS_CLIENT_ID": "fd-deploy.access",
     "secrets.FD_ACCESS_CLIENT_SECRET": "service-token-secret",
+    "secrets.R2_PRESIGN_ACCESS_KEY_ID": "r2-key-id",
+    "secrets.R2_PRESIGN_SECRET_ACCESS_KEY": "r2-secret",
     "secrets.MAMEKO_DEPLOY_KEY": "deploy-key",
   };
 

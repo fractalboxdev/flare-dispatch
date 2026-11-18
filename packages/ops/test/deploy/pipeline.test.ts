@@ -25,6 +25,7 @@ import {
   isWrite,
   OVERLAY,
   RECORD,
+  S3,
   RENDERED,
   ROOT,
   SCRIPT,
@@ -105,12 +106,12 @@ describe("fd deploy over the committed templates and the placeholder overlay", (
       at("GET api.github.com/repos/acme/fd/rules/branches/main"),
       at(`wrangler deploy ${SCRIPT}`),
       at("GET dispatch.example.com/health"),
-      at(`PUT api.cloudflare.com${API}/r2/buckets/flare-dispatch-artifacts/objects/${RECORD}`),
+      at(`PUT ${S3}/flare-dispatch-artifacts/${RECORD}`),
     ];
     expect(order.every((i, n) => i >= 0 && (n === 0 || i > order[n - 1]!))).toBe(true);
     expect(w.calls.filter(isWrite)).toEqual([
       `wrangler deploy ${SCRIPT}`,
-      `PUT api.cloudflare.com${API}/r2/buckets/flare-dispatch-artifacts/objects/${RECORD}`,
+      `PUT ${S3}/flare-dispatch-artifacts/${RECORD}`,
     ]);
 
     // A failing deploy stage: nothing after it runs.
@@ -218,9 +219,9 @@ describe("fd deploy over the committed templates and the placeholder overlay", (
       `${API}/workers/scripts/${SCRIPT}/schedules`,
       `${API}/workers/domains?service=${SCRIPT}`,
       `${API}/containers/applications`,
-      `${API}/r2/buckets/flare-dispatch-artifacts/objects/${RECORD}`,
     ])
       expect(beforeWrite).toContain(`GET api.cloudflare.com${read}`);
+    expect(beforeWrite).toContain(`GET ${S3}/flare-dispatch-artifacts/${RECORD}`);
 
     // The record compares like with like: right after a deploy, nothing drifts, Container images included.
     const clean = await Effect.runPromise(fd(w).doctor(OVERLAY));
@@ -270,7 +271,7 @@ describe("fd deploy over the committed templates and the placeholder overlay", (
     for (const read of [
       `GET api.cloudflare.com${API}/workers/scripts/${SCRIPT}/settings`,
       `GET api.cloudflare.com${API}/workers/scripts/flare-dispatch-docs/settings`,
-      `GET api.cloudflare.com${API}/r2/buckets/flare-dispatch-artifacts/objects/${RECORD}`,
+      `GET ${S3}/flare-dispatch-artifacts/${RECORD}`,
       "GET api.github.com/app",
       "GET api.github.com/repos/acme/fd/rules/branches/main",
     ])
