@@ -58,7 +58,7 @@ import { claimUnlessParentEnded, isParentEnded, leaveQueueForEndedParent } from 
 import { WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { getSandbox } from "@cloudflare/sandbox";
-import { Duration, Effect, Exit, identity, Runtime, Schedule, Schema } from "effect";
+import { Duration, Effect, Exit, identity, Layer, Runtime, Schedule, Schema } from "effect";
 import {
   admissionAcquireAttempts,
   ADMISSION_CLASS_DEFAULT,
@@ -71,6 +71,8 @@ import {
   Email,
   EXECUTION_CREATED_AT_ENV,
   Executions,
+  NativeReceiptRefused,
+  NativeExecutionUnavailable,
   EngineInterrupted,
   isEngineInterruptedCause,
   isEngineInterruption,
@@ -112,8 +114,8 @@ import {
 } from "@fractalboxdev/flare-dispatch-runtime-cf";
 import { WRITEBACK_ARTIFACT } from "@fractalboxdev/flare-dispatch-core";
 import { lookupRun } from "./registry";
-import { contextfulReleaseCell } from "@fractalboxdev/flare-dispatch-runs";
-import { makeNativeReleaseLayer } from "./native-release-layer";
+import { contextfulReleaseCell, nativeGate } from "@fractalboxdev/flare-dispatch-runs";
+import { makeNativeGateLayer, makeNativeReleaseLayer } from "./native-release-layer";
 import { preAssertedApproval, resolveTargets, runGrant, runsOnFacade } from "./grant-catalog";
 import { selectAdmission, selectSandboxNs } from "./sandbox-routing";
 import { nextPositionReport, type PositionReport, queuedSummary, serialQueuedSummary } from "./admission-summary";
@@ -608,6 +610,16 @@ export class RunWorkflow extends WorkflowEntrypoint<Env> {
       ...(payload.run === contextfulReleaseCell.name ? {
         nativeExecution: makeNativeReleaseLayer(this.env, { executionId: event.instanceId,
           repo: payload.github.repo, head: payload.github.sha }),
+      } : {}),
+      ...(payload.run === nativeGate.name ? {
+        nativeExecution: Layer.unwrapEffect(Schema.decodeUnknown(nativeGate.inputs)(payload.inputs).pipe(
+          Effect.mapError(() => new NativeReceiptRefused({ reason: "native gate runtime input invalid" })),
+          Effect.flatMap(input => input.repo === payload.github.repo && input.sha === payload.github.sha
+            ? Effect.succeed(makeNativeGateLayer(this.env, { executionId: event.instanceId,
+              repo: payload.github.repo, head: payload.github.sha, base: input.baseSha }))
+            : Effect.fail(new NativeReceiptRefused({ reason: "native gate runtime source mismatch" }))),
+          Effect.catchTag("NativeReceiptRefused", () => Effect.succeed(NativeExecutionUnavailable)),
+        )),
       } : {}),
       db,
       bucket: this.env.RUNS_STORAGE,

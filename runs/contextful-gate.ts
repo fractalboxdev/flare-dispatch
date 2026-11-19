@@ -26,6 +26,10 @@ import {
   type PrebuiltBinary,
 } from "@fractalboxdev/flare-dispatch-core/primitives";
 import { check } from "./check";
+import { nativeGate, NATIVE_GATE_JOIN_MILLISECONDS } from "./native-gate";
+
+const nativeTarget = (stage: string) => stage === "windows.x86_64-msvc" ? "x86_64-pc-windows-msvc" as const
+  : stage === "windows.aarch64-msvc" ? "aarch64-pc-windows-msvc" as const : undefined;
 
 const REPO = "fractalboxdev/contextful";
 const SHA40 = /^[a-f0-9]{40}$/i;
@@ -84,7 +88,7 @@ export const parseWindow = (raw: string | undefined): number => {
  * The check-run name a part's `check` child posts (`flare-dispatch/check:<label>`,
  * apps/dispatcher/src/check-name.ts); a part not dispatched is posted under it.
  */
-export const partCheckName = (stage: string): string => `flare-dispatch/check:${stage}`;
+export const partCheckName = (stage: string): string => `flare-dispatch/${nativeTarget(stage) === undefined ? "check" : nativeGate.name}:${stage}`;
 export const NOT_AFFECTED_SUMMARY = "not affected by this change";
 
 /**
@@ -564,7 +568,18 @@ export const contextfulGate = defineRun({
         );
       }
       // This tier's parts. The other tier's parts post no check here.
-      const dispatch = tierParts(plan.dispatch, lightLabels ?? undefined, tier);
+      const selected = tierParts(plan.dispatch, lightLabels ?? undefined, tier);
+      if (selected.some(stage => stage.startsWith("windows.") && nativeTarget(stage) === undefined))
+        return yield* Effect.fail(new AcceptanceFailed({ exitCode: 1,
+          summaryMd: "The declared native gate part has no configured executor." }));
+      const native = selected.filter(stage => nativeTarget(stage) !== undefined);
+      // A native leaf requires fresh verdicts for the complete discovered
+      // nonnative wave, including prerequisites normally assigned to the other tier.
+      const predecessors = plan.required.filter(stage => !stage.startsWith("windows."));
+      if (native.length > 0 && predecessors.length === 0)
+        return yield* Effect.fail(new AcceptanceFailed({ exitCode: 1,
+          summaryMd: "The native gate has no declared Linux predecessor inventory." }));
+      const dispatch = native.length === 0 ? selected : [...predecessors, ...native];
 
       // Branch protection requires every part's check: a part the diff cannot
       // reach is posted green under the same name instead of running. Creating
@@ -615,7 +630,11 @@ export const contextfulGate = defineRun({
       const deployedVersion = (yield* io.env(DEPLOYED_VERSION_ENV)) ?? "unknown";
       for (let round = 0; stopped === undefined && (queue.length > 0 || running.length > 0); round++) {
         const free = window - running.length;
-        if (queue.length > 0 && free > 0) {
+        const nativeBatch = queue.length > 0 && nativeTarget(queue[0]!) !== undefined;
+        // No native request may overtake a pending or failed nonnative verdict.
+        if (nativeBatch && running.length === 0 && predecessors.some(stage => failed.has(stage))) break;
+        const waitingForPredecessors = nativeBatch && running.some(part => nativeTarget(part.stage) === undefined);
+        if (queue.length > 0 && free > 0 && !waitingForPredecessors) {
           // Logged on every invocation that reaches a spawn, replays included:
           // an instance created before a deploy that logs this line runs the
           // deployed code.
@@ -624,17 +643,20 @@ export const contextfulGate = defineRun({
             executionCreatedAt: createdAt,
             deployedVersion,
           });
-          const batch = queue.slice(0, free);
-          const spawn = yield* step(`spawn-parts-${spawned}`, () =>
+          const batch = queue.slice(0, free).filter(stage => (nativeTarget(stage) !== undefined) === nativeBatch);
+          const spawn = yield* step(`${nativeBatch ? "spawn-native-parts" : "spawn-parts"}-${spawned}`, () =>
             Effect.gen(function* () {
               // A default-branch head has no open pull request to outlive.
               const liveness = tier === "heavy" ? LIVE : yield* readLiveness(input);
               if (!liveness.live) return { stopped: liveness.reason };
               const fanned = yield* fanOut({
-                run: "check",
+                run: nativeBatch ? nativeGate.name : "check",
                 items: batch,
                 concurrency: batch.length,
-                toInput: (stage) => ({
+                toInput: (stage) => nativeBatch ? {
+                  repo: input.repo, sha: input.sha, baseSha: input.baseSha,
+                  target: nativeTarget(stage)!, checkLabel: stage,
+                } : ({
                   repo: input.repo,
                   sha: input.sha,
                   checkLabel: stage,
@@ -683,7 +705,7 @@ export const contextfulGate = defineRun({
               id: handles[index]!.executionId,
               // A part still inside its queue age and its check run's ceiling
               // is never reported failed.
-              expiresAt: spawnedAt + STAGE_BUDGET_MS,
+              expiresAt: spawnedAt + (nativeBatch ? NATIVE_GATE_JOIN_MILLISECONDS : STAGE_BUDGET_MS),
             });
           });
           spawned += batch.length;
@@ -748,6 +770,18 @@ export const contextfulGate = defineRun({
             ].join("\n\n"),
           }),
         );
+      }
+      if (queue.length > 0 && failed.size > 0) {
+        // Failed predecessors never admit a native child. Conclude the exact
+        // native check names so the unrun required checks do not remain pending.
+        yield* Effect.forEach(queue, stage => Effect.gen(function* () {
+          const name = partCheckName(stage);
+          const output = { title: name, summary: "not run — nonnative predecessor failed" };
+          const checkRunId = yield* step(`open-unrun-${stage}`, () =>
+            checks.create({ repo: input.repo, sha: input.sha, name, output }));
+          yield* step(`conclude-unrun-${stage}`, () =>
+            checks.update({ repo: input.repo, checkRunId, conclusion: "cancelled", output }));
+        }), { concurrency: 4, discard: true });
       }
       const failedInOrder = dispatch.filter((stage) => failed.has(stage));
       if (failedInOrder.length > 0) {
