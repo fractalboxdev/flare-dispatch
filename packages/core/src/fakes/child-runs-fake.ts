@@ -19,6 +19,7 @@ import {
 
 /** A recorded spawn — the resolved id, the original input, and the verdict. */
 export type SpawnRecord = {
+  readonly githubSha?: string;
   readonly run: string;
   readonly input: unknown;
   readonly instanceId: string;
@@ -92,8 +93,8 @@ export const makeChildRunsFake = (opts?: {
       Effect.sync(() => {
         state.admissionHandoffs += 1;
       }),
-    spawn: ({ run, input, instanceId }: SpawnChildRunOpts) => {
-      if (opts?.failSpawn?.({ run, input, instanceId })) {
+    spawn: ({ run, input, instanceId, githubSha }: SpawnChildRunOpts) => {
+      if (opts?.failSpawn?.({ run, input, instanceId, ...(githubSha === undefined ? {} : { githubSha }) })) {
         return Effect.fail(
           new ChildSpawnFailed({ run, instanceId: instanceId ?? `${run}:rejected`, cause: "rejected" }),
         );
@@ -102,7 +103,13 @@ export const makeChildRunsFake = (opts?: {
         const id = instanceId ?? `${run}:${state.spawned.length}`;
         const created = !seen.has(id);
         seen.add(id);
-        state.spawned.push({ run, input, instanceId: id, created });
+        state.spawned.push({
+          run,
+          input,
+          instanceId: id,
+          created,
+          ...(githubSha === undefined ? {} : { githubSha }),
+        });
         return { executionId: id, instanceId: id, created };
       });
     },

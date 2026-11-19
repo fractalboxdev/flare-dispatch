@@ -49,6 +49,7 @@ import {
 } from "./fakes/model-gateway-fake";
 import { OidcFake, type OidcFakeState, makeOidcFake } from "./fakes/oidc-fake";
 import { makeSandboxFake, SandboxFake, type SandboxFakeState } from "./fakes/sandbox-fake";
+import { NativeExecutionUnavailable } from "./services/native-execution";
 import {
   TEST_EXECUTION_ID_DEFAULT,
   makeStepRunnerInline,
@@ -147,6 +148,7 @@ export {
  * its own runtime from `makeCFRuntimeTest`.
  */
 export const CFRuntimeTest: Layer.Layer<RunContext> = Layer.mergeAll(
+  NativeExecutionUnavailable,
   SandboxFake,
   BrowserFake,
   CacheFake,
@@ -285,6 +287,7 @@ export const makeCFRuntimeTest = (
   });
 
   const layer = Layer.mergeAll(
+    NativeExecutionUnavailable,
     sandbox.layer,
     browser.layer,
     CacheFake,

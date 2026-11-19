@@ -18,6 +18,10 @@ export type ArtifactInfo = {
 };
 
 export interface ArtifactService {
+  /** Streaming bytes become usable only after exact size and SHA-256 verification. */
+  readonly uploadVerified: (opts: {
+    name: string; body: ReadableStream<Uint8Array>; size: number; sha256: string; contentType: string;
+  }) => Effect.Effect<string, ArtifactUploadFailed>;
   readonly upload: (opts: {
     name: string;
     path: string;
@@ -34,6 +38,8 @@ export class Artifact extends Context.Tag("@fractalboxdev/flare-dispatch-core/Ar
 >() {}
 
 export const artifact = {
+  uploadVerified: (opts: Parameters<ArtifactService["uploadVerified"]>[0]) =>
+    Effect.flatMap(Artifact, (a) => a.uploadVerified(opts)),
   upload: (opts: {
     name: string;
     path: string;

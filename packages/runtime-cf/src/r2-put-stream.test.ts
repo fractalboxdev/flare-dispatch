@@ -59,6 +59,17 @@ const streamOf = (chunks: Uint8Array[]): ReadableStream<Uint8Array> =>
 const fill = (n: number, byte: number): Uint8Array => new Uint8Array(n).fill(byte);
 
 describe("putStream", () => {
+  it("refuses a wrong whole-file digest before publishing single or multipart bytes", async () => {
+    for (const size of [3, 20 * MiB]) {
+      const { bucket, puts, state } = makeFakeBucket();
+      const result = Reflect.apply(putStream, undefined, [bucket, "unverified", streamOf([fill(size, 7)]), size, {}, "0".repeat(64)]);
+      await expect(result).rejects.toThrow();
+      expect(puts).toHaveLength(0);
+      expect(state.completedParts).toBe(-1);
+      if (size > 16 * MiB) expect(state.aborted).toBe(true);
+    }
+  });
+
   it("small body (≤16 MiB) → one buffered PUT, no multipart", async () => {
     const { bucket, puts, parts } = makeFakeBucket();
     const body = streamOf([fill(3 * MiB, 7), fill(2 * MiB, 9)]);

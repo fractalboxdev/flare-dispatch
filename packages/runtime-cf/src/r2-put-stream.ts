@@ -23,6 +23,8 @@
 // runtime); the R2→R2 path is covered by `artifact-r2.test.ts` (single-PUT) and
 // a >threshold multipart case. The container path needs a `wrangler dev` smoke.
 
+import { createHash } from "node:crypto";
+
 const MULTIPART_THRESHOLD = 16 * 1024 * 1024; // 16 MiB
 const MULTIPART_PART_SIZE = 8 * 1024 * 1024; //  ≥5 MiB except the final part
 
@@ -36,8 +38,36 @@ export const putStream = async (
   body: ReadableStream<Uint8Array>,
   size: number,
   httpMetadata: R2HTTPMetadata,
+  expectedSha256?: string,
 ): Promise<void> => {
-  await putBoundedStream(bucket, key, body, size, httpMetadata, size);
+  if (expectedSha256 === undefined) {
+    await putBoundedStream(bucket, key, body, size, httpMetadata, size);
+    return;
+  }
+  if (!/^[a-f0-9]{64}$/.test(expectedSha256)) {
+    await body.cancel();
+    throw new Error("R2 stream digest invalid");
+  }
+  const reader = body.getReader();
+  const digest = createHash("sha256");
+  const verified = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (digest.digest("hex") !== expectedSha256) throw new Error("R2 stream digest mismatch");
+          reader.releaseLock(); controller.close(); return;
+        }
+        digest.update(value); controller.enqueue(value);
+      } catch (cause) {
+        await reader.cancel().catch(() => {}); reader.releaseLock(); controller.error(cause);
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason); reader.releaseLock();
+    },
+  }, { highWaterMark: 0 });
+  await putBoundedStream(bucket, key, verified, size, httpMetadata, size);
 };
 
 /** Unknown-length downloads share the same bounded writer and report their actual byte count. */

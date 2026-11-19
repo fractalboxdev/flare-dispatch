@@ -59,7 +59,7 @@ const CFG = (
 
 const spawn = (
   cfg: ChildRunsLiveConfig,
-  opts: { run: string; input: unknown; instanceId?: string },
+  opts: { run: string; input: unknown; instanceId?: string; githubSha?: string },
 ) =>
   Effect.runPromiseExit(
     Effect.flatMap(ChildRuns, (c) => c.spawn(opts)).pipe(Effect.provide(makeChildRunsLive(cfg))),
@@ -73,6 +73,30 @@ const handoff = (cfg: ChildRunsLiveConfig) =>
   );
 
 describe("makeChildRunsLive", () => {
+  it("binds an explicit full source SHA without changing inherited repository, ref or installation", async () => {
+    const wf = makeWorkflowStub();
+    const githubSha = "a".repeat(40);
+    expect(Exit.isSuccess(await spawn(CFG(wf), { run: "cell", input: {}, githubSha }))).toBe(true);
+    expect(wf.calls[0]!.params).toMatchObject({
+      github: { repo: "owner/name", ref: "refs/heads/main", sha: githubSha, installation_id: 99 },
+    });
+    for (const invalid of ["", "main", "a".repeat(39), "g".repeat(40)])
+      expect(
+        Exit.isFailure(await spawn(CFG(wf), { run: "cell", input: {}, githubSha: invalid })),
+      ).toBe(true);
+    expect(wf.calls).toHaveLength(1);
+  });
+
+  it("keeps legacy child IDs stable and includes an explicitly rebound source in derived and named IDs", () => {
+    const options = { run: "cell", parentExecutionId: "release", input: { profile: "edge" } };
+    expect(deriveChildInstanceId({ ...options, githubSha: undefined })).toBe(
+      deriveChildInstanceId(options),
+    );
+    for (const instanceId of [undefined, "named-cell"])
+      expect(deriveChildInstanceId({ ...options, instanceId, githubSha: "a".repeat(40) })).not.toBe(
+        deriveChildInstanceId({ ...options, instanceId, githubSha: "b".repeat(40) }),
+      );
+  });
   it("hands off the parent's admission row; a repeated handoff is safe", async () => {
     const deleted: string[] = [];
     const db = {
@@ -168,8 +192,17 @@ describe("makeChildRunsLive", () => {
 
   it("uses Cloudflare's instance-id alphabet for explicit and derived children", () => {
     for (const id of [
-      deriveChildInstanceId({ run: "check", parentExecutionId: "contextful-gate_390_sha", input: { stage: "pins" } }),
-      deriveChildInstanceId({ run: "check", parentExecutionId: "parent", input: {}, instanceId: "review:owner/repo:42" }),
+      deriveChildInstanceId({
+        run: "check",
+        parentExecutionId: "contextful-gate_390_sha",
+        input: { stage: "pins" },
+      }),
+      deriveChildInstanceId({
+        run: "check",
+        parentExecutionId: "parent",
+        input: {},
+        instanceId: "review:owner/repo:42",
+      }),
     ]) {
       expect(id).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
     }
