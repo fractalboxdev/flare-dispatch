@@ -1,0 +1,31 @@
+# Native Windows executor dispatch contract (draft)
+
+Native execution is not ready for production. The reviewed upstream repository must supply the fixed `.github/workflows/native-windows.yml` workflow on its default branch and at the reviewed executor commit, a published immutable release for the dispatch tag, and verified native Windows execution receipts. Local fixtures do not establish those prerequisites. In particular, no live fully qualified tag dispatch or native Windows receipt has been verified by this change.
+
+## Operator policy and request
+
+`NATIVE_EXECUTION_POLICY` must specify `repo`, `executor_ref`, `dispatch_ref`, `timeoutSec`, and `pollIntervalSec`. Neither the executor revision nor the dispatch tag is inferred from the source being tested.
+
+- `executor_ref` is the exact reviewed 40-character lowercase commit SHA containing the native executor workflow. It retains its existing meaning in run, job, artifact, receipt, result and source bindings.
+- `dispatch_ref` is a fully qualified tag, such as `refs/tags/native-executor-v1`, associated with a **published immutable GitHub release**. It is a separately reviewed transport prerequisite. Branches, bare tag names and raw commit SHAs are refused. The complete ref is at most 200 characters; each slash-separated tag segment starts with an ASCII letter or digit, contains only ASCII letters, digits, `.`, `_`, or `-`, and cannot contain `..` or end with `.` or `.lock`.
+- The authenticated request must include the same `repo`, `executor_ref`, and `dispatch_ref` as the policy. Its source `head` and `base`, literal command digest, target and nonce keep their existing independent bindings.
+
+Changing a tag or executor requires a new reviewed operator policy and request. The complete canonical request, including `dispatch_ref`, determines the Workflow instance and is persisted in D1 `request_json` before dispatch preparation. An existing nonce with a changed tag conflicts. Old records omitting the tag are refused; their missing authority is not inferred or adopted.
+
+## Live proof and transport ownership
+
+The GitHub App installation must permit Actions write and Contents read (an existing Contents write installation can be narrowed). Each fresh token is restricted to the configured single repository with `actions: write`, `contents: read`, and automatic `metadata: read`. A token missing Contents read, granting Contents write, naming another repository, or carrying unrelated permissions is refused.
+
+Before claiming a POST, the transport makes authenticated reads against that same repository:
+
+1. `GET /releases/tags/{tag}` must return the exact tag name, a same-repository release URL and positive release ID, `immutable: true`, `draft: false`, and a readable publication timestamp. `target_commitish` is not commit proof.
+2. `GET /git/ref/tags/{tag}` must return the exact full ref. Lightweight tags must point directly to the reviewed commit; annotated tags are peeled through `GET /git/tags/{sha}`. Every object SHA is checked, cycles refuse, and at most eight annotated tag objects can be read. Blobs, trees, missing or malformed objects, and a final commit different from `executor_ref` refuse.
+3. `GET /actions/workflows/native-windows.yml` must identify the fixed active workflow. Separate bounded Contents reads at the default branch (no `ref` query) and the exact executor SHA must identify a file at `.github/workflows/native-windows.yml`; missing paths, explicit symlink metadata and malformed metadata refuse. Metadata responses have a 64 KiB complete-read ceiling and ten-second read deadline; the workflow file has a 48 KiB size ceiling. Redirects and unsuccessful responses refuse, including rate-limit responses. No partial or fallback proof is accepted.
+
+Successful preparation returns an ephemeral single-use POST closure with a frozen request body. Only the durable controller claims the POST, after these read-only checks. It rechecks its admission deadline after preparation and immediately before invoking the closure. A known prerequisite refusal leaves the record reserved and surfaces a typed failure. A crash after claiming, or an ambiguous POST response, still grants no second POST and must reconcile through exact GitHub run evidence. Metadata checks cannot extend the persisted admission duration.
+
+The wire body uses `ref: "refs/tags/<tag>"` verbatim, never a bare name that could be shadowed by a same-named branch. GitHub's dispatch API requires a named branch or tag rather than a raw commit SHA; GitHub's own dispatch implementation also uses fully qualified tag refs. Actual acceptance by the reviewed upstream workflow remains a readiness gate. [Workflow dispatch API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event), [GitHub-owned tag-dispatch contract](https://github.com/github/gh-aw/blob/54d0e335927e9d02463d6e2730e45c62612d3ab1/docs/adr/68348-dispatch-queue-launches-via-verified-sha-tags.md).
+
+GitHub locks a published immutable release's tag to its commit. Deleting that release can permit deleting its tag, but the tag name cannot be reused. Thus a deletion between proof and dispatch may cause refusal; it cannot redirect the qualified tag to unreviewed workflow code. A mutable branch or tag plus a later run-SHA check would permit that code to run before rejection, so it does not satisfy this contract. The guarantee relies on GitHub's immutable release enforcement, not a convention about leaving tags unchanged. The REST release response exposes the `immutable` boolean. [Immutable release guarantees](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases), [Release REST response](https://docs.github.com/en/rest/releases/releases#get-a-release-by-tag-name).
+
+Successful dispatch remains insufficient evidence of successful execution. Existing exact executor SHA, controller App/actor, repository, run attempt, source, command, target, job labels, artifact identity, receipt and byte-digest checks all remain required. The receipt and reader capability retain the immutable executor SHA as their authority; the named dispatch tag is additional transport selection, not a substitute for those checks.

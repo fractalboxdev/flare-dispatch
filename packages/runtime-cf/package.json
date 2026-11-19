@@ -12,7 +12,9 @@
     "./admission-cap": "./src/run-admission-d1.ts",
     "./spend": "./src/spend-d1.ts",
     "./run-supersede": "./src/run-supersede-d1.ts",
-    "./checks-github": "./src/checks-github.ts"
+    "./checks-github": "./src/checks-github.ts",
+    "./native": "./src/native.ts",
+    "./testing": "./src/test-support.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -24,7 +26,8 @@
     "@fractalboxdev/flare-dispatch-core": "workspace:*",
     "@fractalboxdev/flare-dispatch-github-app": "workspace:*",
     "@fractalboxdev/flare-dispatch-substrate-contract": "workspace:*",
-    "effect": "^3.21.0"
+    "effect": "^3.21.0",
+    "yauzl": "3.4.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.12.21",
@@ -34,6 +37,7 @@
     "miniflare": "4.20260515.0",
     "msw": "^2.7.0",
     "typescript": "^5.6.3",
-    "vitest": "^3.2.0"
+    "vitest": "^3.2.0",
+    "@types/yauzl": "3.4.0"
   }
 }
