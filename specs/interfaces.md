@@ -137,7 +137,7 @@ Every error response is a JSON object `{ "error": <code>, "message": <text>, "re
 | 403 | `forbidden`, `repository_mismatch`, `link_expired`, `link_revoked`, `model_route_refused`, `registration_refused` |
 | 404 | `not_found`, `run_not_found`, `execution_not_found` |
 | 405 | `method_not_allowed` |
-| 409 | `conflict`, `not_failed`, `not_finished` |
+| 409 | `conflict`, `not_failed`, `not_finished`, `not_awaiting_approval` |
 | 413 | `payload_too_large` |
 | 422 | `installation_not_found` |
 | 429 | `rate_limited`, with `Retry-After` |
@@ -175,6 +175,7 @@ Every error response is a JSON object `{ "error": <code>, "message": <text>, "re
 | `GET /v1/ops/phase-gate?gate=<n>` | Gate n's `V-MEASURE` thresholds, page alarms and unresolved `kill-line` notifications over the gate window ([verification.md](verification.md) FD-VER-028, FD-VER-029) | 0 |
 | `POST /v1/ops/floor-canary` | Admit one container floor canary on a Container pool; answers its execution, pool and image digest ([operability.md](operability.md) FD-OPS-050) | 0 |
 | `GET /v1/ops/floor-canary/:id` | One floor canary's verdict: running, passed, failed with its stage, or inconclusive ([operability.md](operability.md) FD-OPS-050) | 0 |
+| `POST /v1/ops/stack-approvals` | Approve or reject one `stack-deploy` execution that waits for approval ([runs/gate.md](runs/gate.md) FD-GATE-136) | 2 |
 | `GET /v1/spend` | Month-to-date spend per class line ([spend.md](spend.md)) | 0 |
 | `GET /v1/ops/fleet` | Each executor's kind, heartbeat age, drain and quarantine flags and slots per class ([operability.md](operability.md) FD-OPS-071) | 1 |
 | `GET /v1/github/install/new`, `GET /v1/github/install/callback` | The GitHub App manifest flow and the new App's credentials ([operability.md](operability.md) FD-OPS-072 to FD-OPS-075) | 0 |
@@ -369,6 +370,10 @@ flowchart LR
 - **FD-IFC-049** · phase 0 · `V-UNIT` — If the store transaction of an operator operation fails, then the dispatcher must answer 503 `unavailable`, and the control state stays unchanged.
 - **FD-IFC-050** · phase 0 · `V-UNIT` — If the coordinator rejects a force-admit or top-up request for its `expires_at` ([MAMEKO-OPS-033](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/operability.md)), then the dispatcher must answer 400 `invalid_body`.
 - **FD-IFC-083** · phase 0 · `V-UNIT` — The dispatcher must pass the request id it assigns to every `/v1/ops/*` call, the operator's Access identity and the `reason` to the coordinator's operation, which writes them on the audit row ([MAMEKO-OPS-032](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/operability.md)).
+- **FD-IFC-104** · phase 2 · `V-UNIT` — When an `operators` identity posts `{ "execution_id", "decision", "reason" }` to `POST /v1/ops/stack-approvals`, with `decision` `approve` or `reject`, the dispatcher must record the decision with the execution id, the execution's commit SHA and stack, the identity, the `reason`, the request id and the time, and answer 200 with the record.
+- **FD-IFC-105** · phase 2 · `V-UNIT` — If the named execution does not exist, then the dispatcher must answer 404 `execution_not_found`; if it is not a `stack-deploy` execution whose entry sets `approval: required`, or it has ended, then the dispatcher must answer 409 `not_awaiting_approval`.
+- **FD-IFC-106** · phase 2 · `V-UNIT` — If the execution already has a recorded decision, then the dispatcher must answer 409 `conflict` and keep the first decision.
+- **FD-IFC-107** · phase 2 · `V-UNIT` — If a stack-approval request has no `reason`, then the dispatcher must answer 400 `reason_required`.
 
 ### Scoped dispatch
 
