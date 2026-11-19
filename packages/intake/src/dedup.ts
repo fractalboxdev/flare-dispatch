@@ -37,7 +37,13 @@ export const validIdempotencyKey = (value: string) => IDEMPOTENCY_KEY.test(value
  * The runs whose every request keys on the commit, so a push and a dispatch of one commit reach one execution; an
  * `Idempotency-Key` on their dispatch keys nothing (FD-GATE-062).
  */
-export const COMMIT_SCOPED_RUNS: ReadonlySet<string> = new Set(["worker-deploy"]);
+export const COMMIT_SCOPED_RUNS: ReadonlySet<string> = new Set([
+  "worker-deploy",
+  // A push, a dispatch and a follow-on of one commit reach one publish, and one apply per stack (FD-GATE-128,
+  // FD-GATE-134).
+  "image-publish",
+  "stack-deploy",
+]);
 
 const runLabel = (r: KeyedRequest) => (r.label === null ? r.run : `${r.run}:${r.label}`);
 
@@ -52,7 +58,10 @@ export const dedupRecipes: readonly DedupRecipe<KeyedRequest>[] = [
   },
   {
     name: "follow-on",
-    run: (r) => (r.followOn === null ? null : `${r.followOn.executionId}/${r.followOn.intentKey}`),
+    run: (r) =>
+      r.followOn === null || COMMIT_SCOPED_RUNS.has(r.run)
+        ? null
+        : `${r.followOn.executionId}/${r.followOn.intentKey}`,
   },
   {
     name: "commit",

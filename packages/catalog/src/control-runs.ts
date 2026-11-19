@@ -6,17 +6,33 @@
 // - `canary`, the synthetic webhook canary, answers `success` with no service at all (FD-OPS-039).
 // - `offload-test`, the job matrix parent, reaches `MatrixChildren` and `GithubRead`, which the control plane builds
 //   inside each execution from its `ExecutionLease` (FD-GATE-045).
+// - `image-publish` and `stack-deploy` reach CodeBuild and ECS through the control plane's `AwsBuilds`, with the build
+//   ledger, staged release assets, the approval record and durable waits (FD-GATE-116 to FD-GATE-141).
 import { Effect, Layer } from "effect";
+import {
+  durablePause,
+  type AwsBuilds,
+  type BuildLedger,
+  type ReleaseAssets,
+  type StackApprovals,
+} from "./aws.ts";
 import { CanaryInput, canarySpec } from "./canary.ts";
 import { fetchSmokeHttp, runDeploySmoke } from "./deploy-smoke.ts";
 import { perExecution, type ExecutionLease, type LeaseLayerFailure } from "./execution-lease.ts";
 import { defineGateRun } from "./gate-run.ts";
 import type { GithubRead } from "./github-read.ts";
-import { DeploySmokeInput, OffloadTestInput } from "./inputs.ts";
+import { runImagePublish } from "./image-publish.ts";
+import {
+  DeploySmokeInput,
+  ImagePublishInput,
+  OffloadTestInput,
+  StackDeployInput,
+} from "./inputs.ts";
 import { runOffloadTest } from "./offload-test.ts";
 import type { MatrixChildren } from "./ports.ts";
 import { Outcome } from "./reasons.ts";
-import { deploySmokeSpec, offloadTestSpec } from "./spec.ts";
+import { deploySmokeSpec, imagePublishSpec, offloadTestSpec, stackDeploySpec } from "./spec.ts";
+import { runStackDeploy } from "./stack-deploy.ts";
 
 export const deploySmokeRun = defineGateRun(deploySmokeSpec, DeploySmokeInput, (i) =>
   runDeploySmoke(i),
@@ -32,8 +48,20 @@ export const offloadTestRun = defineGateRun(offloadTestSpec, OffloadTestInput, (
   runOffloadTest(i),
 );
 
+/** Each wait is a `DurableClock.sleep` of the execution's workflow, in scope where the body runs (MAMEKO-RUN-037). */
+export const imagePublishRun = defineGateRun(imagePublishSpec, ImagePublishInput, (i) =>
+  runImagePublish(i).pipe(Effect.provide(durablePause)),
+);
+
+export const stackDeployRun = defineGateRun(stackDeploySpec, StackDeployInput, (i) =>
+  runStackDeploy(i).pipe(Effect.provide(durablePause)),
+);
+
 /** The services the control plane builds for one `offload-test` execution. */
 export type ControlRunServices = MatrixChildren | GithubRead;
+
+/** The services the control plane builds for one `image-publish` or `stack-deploy` execution. */
+export type AwsRunServices = AwsBuilds | BuildLedger | ReleaseAssets | StackApprovals | GithubRead;
 
 /**
  * The `control` pool's runs, each with the Layers the pool's Durable Object supplies. `services` is built inside each
@@ -42,6 +70,7 @@ export type ControlRunServices = MatrixChildren | GithubRead;
  */
 export const controlRuns = (
   services: Layer.Layer<ControlRunServices, LeaseLayerFailure, ExecutionLease>,
+  aws: Layer.Layer<AwsRunServices, LeaseLayerFailure, ExecutionLease>,
 ) =>
   [
     {
@@ -50,4 +79,6 @@ export const controlRuns = (
     },
     canaryRun,
     perExecution(offloadTestRun, services),
+    perExecution(imagePublishRun, aws),
+    perExecution(stackDeployRun, Layer.merge(aws, fetchSmokeHttp)),
   ] as const;

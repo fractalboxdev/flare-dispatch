@@ -154,6 +154,7 @@ export const operabilityGroup = <R>(
       phaseGate: operator,
       floorCanaryStart: operator,
       floorCanaryVerdict: operator,
+      stackApproval: operator,
       spend: member,
       installNew: installOperator,
       installCallback: installOperator,

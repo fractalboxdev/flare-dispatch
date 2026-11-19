@@ -22,6 +22,8 @@ export {
   FLOOR_CANARY_CLASS,
   floorCanary,
   gateJobSpec,
+  imagePublishSpec,
+  stackDeploySpec,
   isReadOnlyScanRun,
   lookupRun,
   offloadTestSpec,
@@ -53,6 +55,10 @@ export * from "./triggers.ts";
 export * from "./github-read.ts";
 export * from "./signals.ts";
 export * from "./egress.ts";
+export * from "./aws.ts";
+export * from "./aws-build.ts";
+export * from "./image-publish.ts";
+export * from "./stack-deploy.ts";
 export {
   deploymentStatusDecoder,
   fetchSmokeHttp,

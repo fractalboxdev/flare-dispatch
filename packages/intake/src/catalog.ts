@@ -17,6 +17,8 @@ import {
   DeploySmokeEntrySchema,
   deploymentStatusDecoder,
   gateContextOf,
+  ImagePublishEntrySchema,
+  imagePublishDecoder,
   isReadOnlyScanRun,
   lookupRun,
   MatrixEntrySchema,
@@ -30,6 +32,10 @@ import {
   securityGateDecoder,
   securityGateSourceBase,
   securityRescanDecoder,
+  StackDeployEntrySchema,
+  stackDeployDecoder,
+  StackDeployInput,
+  stackDeploySerialGroup,
   WorkerDeployEntrySchema,
   workerDeployDecoder,
   WorkerDeployInput,
@@ -173,6 +179,12 @@ const MANIFEST_RECIPES: Readonly<Record<string, ManifestRecipe>> = {
   ),
   deploySmoke: gateRecipe(DeploySmokeEntrySchema, (p) => deploymentStatusDecoder(p)),
   sandboxImage: gateRecipe(SandboxImageEntrySchema, (p) => sandboxImageDecoder(p)),
+  // The entry's label is the publish's label, so the dedup key, the check name and the OIDC audience agree (FD-GATE-117).
+  imagePublish: gateRecipe(ImagePublishEntrySchema, (p, view) =>
+    imagePublishDecoder(view.label === null ? p : { ...p, label: view.label }),
+  ),
+  // The entry's label is the stack (FD-GATE-133).
+  stackDeploy: gateRecipe(StackDeployEntrySchema, (p, view) => stackDeployDecoder(p, view.label)),
   securityGate: {
     ...gateRecipe(SecurityGateEntrySchema, () => securityGateDecoder()),
     labelless: true,
@@ -239,16 +251,27 @@ export const requestDecoderOf =
  * The serial group of a request to a run that declares `serialize`: a `worker-deploy` request joins its repository,
  * branch and label's group (FD-GATE-063); an input that does not decode joins none.
  */
-const serialKeyOf = (entry: CatalogEntry): Pick<IntakeRun, "serialKey"> =>
-  entry.spec.serialize === true && entry.spec.name === "worker-deploy"
-    ? {
-        serialKey: (inputs) =>
-          Option.match(Schema.decodeUnknownOption(WorkerDeployInput)(inputs), {
-            onNone: () => null,
-            onSome: (i) => workerDeploySerialGroup(i.scope, i.branch, i.entry.label),
-          }),
-      }
-    : {};
+const serialKeyOf = (entry: CatalogEntry): Pick<IntakeRun, "serialKey"> => {
+  if (entry.spec.serialize !== true) return {};
+  if (entry.spec.name === "worker-deploy")
+    return {
+      serialKey: (inputs) =>
+        Option.match(Schema.decodeUnknownOption(WorkerDeployInput)(inputs), {
+          onNone: () => null,
+          onSome: (i) => workerDeploySerialGroup(i.scope, i.branch, i.entry.label),
+        }),
+    };
+  // One apply at a time per repository and stack (FD-GATE-134).
+  if (entry.spec.name === "stack-deploy")
+    return {
+      serialKey: (inputs) =>
+        Option.match(Schema.decodeUnknownOption(StackDeployInput)(inputs), {
+          onNone: () => null,
+          onSome: (i) => stackDeploySerialGroup(i.scope, i.stack),
+        }),
+    };
+  return {};
+};
 
 /**
  * The runs whose input holds a field only intake builds, with the schema a caller's inputs pass instead: a
@@ -273,7 +296,9 @@ const requiredCheckOf = (entry: CatalogEntry): Pick<IntakeRun, "requiredCheck" |
 
 /** A run only the `control` pool serves is pinned to it (MAMEKO-LEASE-101). */
 const poolOf = (entry: CatalogEntry): Pick<IntakeRun, "pool"> =>
-  entry.executors.length === 1 && entry.executors[0] === "control" ? { pool: CONTROL_POOL_NAME } : {};
+  entry.executors.length === 1 && entry.executors[0] === "control"
+    ? { pool: CONTROL_POOL_NAME }
+    : {};
 
 /**
  * A host execution under `production` runs only in a cloud Container, so its request carries the `cloud-only` label
@@ -307,7 +332,8 @@ export const catalogRuns =
         gating: true,
         retries: entry.spec.retries,
         grants: { setup: [...entry.spec.grants.setup], agent: [...entry.spec.grants.agent] },
-        placement: (inputs) => hostExecutionPlacement(deployment, entry, requestPlacement(entry.spec, inputs)),
+        placement: (inputs) =>
+          hostExecutionPlacement(deployment, entry, requestPlacement(entry.spec, inputs)),
         ...serialKeyOf(entry),
         ...requiredCheckOf(entry),
         ...(manifestRecipeOf(entry)?.dispatchOnly === true ? { dispatchOnly: true } : {}),

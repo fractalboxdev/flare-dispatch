@@ -5,8 +5,10 @@ import {
   CacheEntrySchema,
   CheckEntrySchema,
   GateContextFields,
+  ImagePublishEntrySchema,
   MatrixEntrySchema,
   SandboxImageEntrySchema,
+  StackDeployEntrySchema,
   WorkerDeployEntrySchema,
   WritebackSchema,
 } from "./manifest.ts";
@@ -20,6 +22,8 @@ export const DEPLOY_SMOKE_MAX_DURATION_SEC = 300;
 export const SANDBOX_IMAGE_MAX_DURATION_SEC = 3600;
 export const SECURITY_GATE_MAX_DURATION_SEC = 1800;
 export const SECURITY_RESCAN_MAX_DURATION_SEC = 1800;
+export const IMAGE_PUBLISH_MAX_DURATION_SEC = 7200;
+export const STACK_DEPLOY_MAX_DURATION_SEC = 86_400;
 /** The run ceiling of `gate-job`, the run of one matrix job. */
 export const GATE_JOB_MAX_DURATION_SEC = 3600;
 
@@ -119,6 +123,46 @@ export const SandboxImageInput = Schema.Struct({
   executorLabels: Schema.Array(Schema.String),
 });
 export type SandboxImageInput = typeof SandboxImageInput.Type;
+
+/** An image by digest, `<registry>/<repository>@sha256:<64 hex digits>` (FD-GATE-131, FD-GATE-133). */
+export const IMAGE_BY_DIGEST = /^[a-z0-9.-]+(:[0-9]+)?\/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$/;
+export const ImageDigests = Schema.Record(
+  Schema.String,
+  Schema.String.check(Schema.isPattern(IMAGE_BY_DIGEST)),
+);
+export type ImageDigests = typeof ImageDigests.Type;
+
+/**
+ * The commit an AWS build runs for. Intake sets every field from the trusted event or the parent execution's record;
+ * a dispatch supplies no field of it (FD-GATE-128, FD-GATE-133).
+ */
+const AwsBuildContext = {
+  /** `<owner>/<repo>`. */
+  scope: Schema.NonEmptyString,
+  sha: Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/)),
+  ref: Schema.String,
+};
+
+export const ImagePublishInput = Schema.Struct({
+  ...AwsBuildContext,
+  entry: ImagePublishEntrySchema,
+});
+export type ImagePublishInput = typeof ImagePublishInput.Type;
+
+export const StackDeployInput = Schema.Struct({
+  ...AwsBuildContext,
+  /** The stack: the manifest entry's label. */
+  stack: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/)),
+  /** The branch whose head the apply re-reads (FD-GATE-135). */
+  branch: Schema.NonEmptyString,
+  entry: StackDeployEntrySchema,
+  /** The images the apply rolls out, from the `image-publish` follow-on or the dispatch (FD-GATE-133). */
+  images: ImageDigests,
+});
+export type StackDeployInput = typeof StackDeployInput.Type;
+
+/** What a dispatch or a follow-on intent of `stack-deploy` supplies: the images alone (FD-GATE-133). */
+export const StackDeployRequest = Schema.Struct({ images: ImageDigests });
 
 const ScanSha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/));
 

@@ -419,6 +419,30 @@ export const FloorCanaryVerdictBody = Schema.Struct({
 });
 export type FloorCanaryVerdictBody = typeof FloorCanaryVerdictBody.Type;
 
+/**
+ * What `POST /v1/ops/stack-approvals` takes (FD-IFC-104): the `stack-deploy` execution, the decision and the reason.
+ * `reason` stays loose so the handler answers its absence with `reason_required` (FD-IFC-107).
+ */
+export const StackApprovalBody = Schema.Struct({
+  execution_id: Schema.String,
+  decision: Schema.Literals(["approve", "reject"]),
+  reason: Schema.optionalKey(Schema.String),
+});
+export type StackApprovalBody = typeof StackApprovalBody.Type;
+
+/** The recorded decision: the execution, its commit and stack, who decided, why, under which request, and when. */
+export const StackApprovalRecord = Schema.Struct({
+  execution_id: Schema.String,
+  sha: Schema.String,
+  stack: Schema.String,
+  decision: Schema.Literals(["approve", "reject"]),
+  decided_by: Schema.String,
+  reason: Schema.String,
+  request_id: Schema.String,
+  decided_at: Schema.Number,
+});
+export type StackApprovalRecord = typeof StackApprovalRecord.Type;
+
 // --- Groups ----------------------------------------------------------------------------------------------------------
 
 const errors = { error: ApiErrors };
@@ -679,6 +703,12 @@ export class OperabilityGroup extends HttpApiGroup.make("operability")
     HttpApiEndpoint.get("floorCanaryVerdict", "/v1/ops/floor-canary/:id", {
       ...IdParam,
       success: FloorCanaryVerdictBody,
+      ...errors,
+    }),
+    /** Approves or rejects one `stack-deploy` execution that waits for approval (FD-IFC-104 to FD-IFC-107). */
+    HttpApiEndpoint.post("stackApproval", "/v1/ops/stack-approvals", {
+      payload: StackApprovalBody,
+      success: StackApprovalRecord,
       ...errors,
     }),
     HttpApiEndpoint.get("spend", "/v1/spend", { success: SpendViewBody, ...errors }),

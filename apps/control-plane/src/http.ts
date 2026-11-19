@@ -66,6 +66,7 @@ import { leaseReadTokens } from "./control-plane-read.ts";
 import { failureSummaries } from "./failure-summary.ts";
 import { floorCanaryLayer } from "./floor-canary.ts";
 import { appOptionsOf } from "./github.ts";
+import { stackApprovalDecisions } from "./aws-records.ts";
 import { intakeCancellation, intakePort } from "./intake-port.ts";
 import { revokeDevice } from "./operator-revoke.ts";
 import { spendViewOf } from "./spend.ts";
@@ -284,6 +285,7 @@ const requestServices = (env: ControlPlaneEnv, isolate: Context.Context<IsolateS
     cacheReads(env),
     Layer.succeed(OpsStore)({ db: env.DB, now: Date.now }),
     floorCanaryLayer(env, isolate, profileOf(env)),
+    stackApprovalDecisions(env.DB),
     spendViewOf(env),
     policies(env),
     statements(env),

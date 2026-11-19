@@ -20,6 +20,10 @@ import {
   CheckInput,
   DeploySmokeInput,
   GateJobInput,
+  IMAGE_PUBLISH_MAX_DURATION_SEC,
+  ImagePublishInput,
+  STACK_DEPLOY_MAX_DURATION_SEC,
+  StackDeployInput,
   OffloadTestInput,
   OxlintInput,
   SandboxImageInput,
@@ -304,6 +308,31 @@ export const deploySmokeSpec = gate("deploy-smoke", {
   },
   constraints: ["control-pool"],
 });
+/**
+ * `image-publish` and `stack-deploy` run in the `control` pool and reach AWS through the control plane's services, so
+ * no sandbox capability is declared (FD-GATE-116).
+ */
+export const imagePublishSpec = gate("image-publish", {
+  requires: ["IO", "Intents"],
+  limits: {
+    maxDurationSec: IMAGE_PUBLISH_MAX_DURATION_SEC,
+    qosClass: "release",
+    qosCeiling: "release",
+  },
+  constraints: ["control-pool"],
+  intentKinds: ["check.summary", "dispatch.followOn"],
+});
+export const stackDeploySpec = gate("stack-deploy", {
+  requires: ["IO", "Intents"],
+  limits: {
+    maxDurationSec: STACK_DEPLOY_MAX_DURATION_SEC,
+    qosClass: "release",
+    qosCeiling: "release",
+  },
+  constraints: ["control-pool"],
+  serialize: true,
+  intentKinds: ["check.summary"],
+});
 export const sandboxImageSpec = gate("sandbox-image", {
   requires: JOB,
   limits: {
@@ -440,6 +469,28 @@ const gateEntries: Readonly<Record<string, CatalogEntry>> = {
     executors: ["cloud"],
     containerRateUsdPerHour: null,
     appCapabilities: [],
+    hostExecution: false,
+    workflowVersion: 1,
+  },
+  "image-publish": {
+    spec: imagePublishSpec,
+    input: ImagePublishInput,
+    defaultClass: "release",
+    manifestKey: "imagePublish",
+    executors: ["control"],
+    containerRateUsdPerHour: 0,
+    appCapabilities: [],
+    hostExecution: false,
+    workflowVersion: 1,
+  },
+  "stack-deploy": {
+    spec: stackDeploySpec,
+    input: StackDeployInput,
+    defaultClass: "release",
+    manifestKey: "stackDeploy",
+    executors: ["control"],
+    containerRateUsdPerHour: 0,
+    appCapabilities: ["GithubRead"],
     hostExecution: false,
     workflowVersion: 1,
   },

@@ -25,7 +25,9 @@ import {
   OpsStore,
   SpendUnreadable,
   SpendView,
+  StackApprovalDecisions,
   STATE_TTL_MS,
+  type StackApprovalRequest,
   type AppCredentials,
   type SpendViewBody,
 } from "./index.ts";
@@ -73,6 +75,7 @@ interface Setup {
   readonly spend?: SpendView["Service"];
   /** Whether the deploy supplies a manifest conversion. */
   readonly conversion?: boolean;
+  readonly approvals?: StackApprovalDecisions["Service"];
 }
 
 /** A client of the mounted group; each call names its Access identity and Access session. */
@@ -87,6 +90,8 @@ const setup = (options: Setup = {}) => {
       options.spend ?? { view: (m) => Effect.sync(() => (months.push(m), VIEW)) },
     ),
   );
+  if (options.approvals !== undefined)
+    services = services.pipe(Context.add(StackApprovalDecisions, options.approvals)) as never;
   if (options.conversion !== false)
     services = services.pipe(
       Context.add(ManifestConversion, {
@@ -99,7 +104,8 @@ const setup = (options: Setup = {}) => {
     init: RequestInit & { readonly sub?: string } = {},
   ) => {
     const { sub, ...rest } = init;
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> =
+      rest.body === undefined ? {} : { "content-type": "application/json" };
     if (identity !== null)
       headers["cf-access-jwt-assertion"] = await access.sign(
         accessClaims(identity, { sub: sub ?? `session-of-${identity}` }),
@@ -267,5 +273,76 @@ describe("GitHub App install", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.text()).toContain("GITHUB_APP_PRIVATE_KEY");
+  });
+});
+
+describe("POST /v1/ops/stack-approvals", () => {
+  const approvalsRecording = () => {
+    const seen: StackApprovalRequest[] = [];
+    const service: StackApprovalDecisions["Service"] = {
+      decide: (request) =>
+        Effect.sync(() => {
+          seen.push(request);
+          return {
+            execution_id: request.executionId,
+            sha: "a".repeat(40),
+            stack: "production",
+            decision: request.decision,
+            decided_by: request.identity,
+            reason: request.reason,
+            request_id: request.requestId,
+            decided_at: 1,
+          };
+        }),
+    };
+    return { seen, service };
+  };
+  const post = (body: unknown) => ({
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+  it("[FD-IFC-104] records an operator's decision with the identity, reason and request id", async () => {
+    const approvals = approvalsRecording();
+    const s = setup({ approvals: approvals.service });
+    const response = await s.call(
+      OPERATOR,
+      "/v1/ops/stack-approvals",
+      post({ execution_id: "01JEXEC", decision: "approve", reason: "release window" }),
+    );
+    expect(response.status).toBe(200);
+    expect(await s.body(response)).toMatchObject({
+      execution_id: "01JEXEC",
+      decision: "approve",
+      decided_by: OPERATOR,
+      reason: "release window",
+    });
+    expect(approvals.seen).toHaveLength(1);
+    expect(approvals.seen[0]!.requestId).not.toBe("");
+  });
+
+  it("[FD-IFC-104] serves only an operator", async () => {
+    const approvals = approvalsRecording();
+    const s = setup({ approvals: approvals.service });
+    const response = await s.call(
+      MEMBER,
+      "/v1/ops/stack-approvals",
+      post({ execution_id: "01JEXEC", decision: "approve", reason: "r" }),
+    );
+    expect(response.status).toBe(403);
+    expect(approvals.seen).toEqual([]);
+  });
+
+  it("[FD-IFC-107] answers 400 reason_required to a request with no reason and records nothing", async () => {
+    const approvals = approvalsRecording();
+    const s = setup({ approvals: approvals.service });
+    const response = await s.call(
+      OPERATOR,
+      "/v1/ops/stack-approvals",
+      post({ execution_id: "01JEXEC", decision: "reject", reason: "  " }),
+    );
+    expect(response.status).toBe(400);
+    expect((await s.body(response))["error"]).toBe("reason_required");
+    expect(approvals.seen).toEqual([]);
   });
 });

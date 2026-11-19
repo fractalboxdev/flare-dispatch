@@ -3,8 +3,12 @@
 // as `<execution_id>/<intent_key>`, so a repeated apply starts no second
 // execution (FD-GH-088).
 import { FollowOnSubmitter } from "@fractalboxdev/flare-dispatch-github";
-import { DeploySmokeEntrySchema } from "@fractalboxdev/flare-dispatch-catalog";
-import { Effect, Layer, Result, Schema } from "effect";
+import {
+  DeploySmokeEntrySchema,
+  StackDeployEntrySchema,
+  stackDeployInputOf,
+} from "@fractalboxdev/flare-dispatch-catalog";
+import { Effect, Layer, Option, Result, Schema } from "effect";
 import { IntakeConfig, type Admission, type ClassResolver } from "./config.ts";
 import type { HeldCheckReporter } from "./ports.ts";
 import { ManifestSource } from "./manifest.ts";
@@ -44,6 +48,52 @@ export const followOnSubmitterLayer = Layer.effect(
               reason: `follow-on: ${intent.run} starts only from a dispatch`,
             };
           let requested = intent.inputs;
+          // Only a publish starts an apply, and only with the stack entry the parent's commit holds: the intent carries
+          // the image digests alone, so it cannot name a role, a project or skip an approval (FD-GATE-133).
+          if (intent.run === "stack-deploy") {
+            if (parent.run !== "image-publish" || intent.label === null)
+              return {
+                _tag: "refused" as const,
+                reason:
+                  "follow-on: stack-deploy starts only from image-publish, labelled with its stack",
+              };
+            const manifest = yield* (yield* ManifestSource).read(
+              parent.repo,
+              parent.sha,
+              config.catalog,
+            );
+            if (manifest._tag === "Unreadable")
+              return {
+                _tag: "unavailable" as const,
+                reason: `follow-on manifest: ${manifest.reason}`,
+              };
+            if (manifest._tag !== "Valid")
+              return {
+                _tag: "refused" as const,
+                reason: "follow-on: stack-deploy manifest absent or invalid",
+              };
+            const entry = manifest.manifest.runs.find(
+              (e) => e.recipe === "stack-deploy" && (e.label ?? null) === intent.label,
+            );
+            const params = Schema.decodeUnknownResult(StackDeployEntrySchema)(entry?.params);
+            if (Result.isFailure(params))
+              return {
+                _tag: "refused" as const,
+                reason: `follow-on: stack-deploy entry ${intent.label} absent or invalid`,
+              };
+            const input = stackDeployInputOf(
+              params.success,
+              intent.label,
+              { scope: parent.repo, sha: parent.sha, ref: parent.ref },
+              intent.inputs,
+            );
+            if (Option.isNone(input))
+              return {
+                _tag: "refused" as const,
+                reason: "follow-on: stack-deploy images or branch invalid",
+              };
+            requested = input.value;
+          }
           if (parent.run === "worker-deploy" && intent.run === "deploy-smoke") {
             // The deploy executor cannot select another commit or arbitrary probe targets. The parent pins the
             // repository and commit; that commit's manifest supplies deploySmoke.hosts and paths (FD-GATE-069/071).

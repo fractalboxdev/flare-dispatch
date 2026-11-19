@@ -8,16 +8,21 @@
 //   fails every read `GithubUncredentialed` (FD-RUN-017).
 import {
   controlRuns,
+  type AwsRunServices,
   type ControlRunServices,
 } from "@fractalboxdev/flare-dispatch-catalog/control-runs";
 import {
+  AssetFailed,
+  CloudLeaseMissing,
+  ExecutionLease,
   GithubRead,
   GithubReadFailed,
   GithubUncredentialed,
   githubReadOver,
-  type ExecutionLease,
+  ReleaseAssets,
   type GithubGet,
 } from "@fractalboxdev/flare-dispatch-catalog";
+import { r2Presigner } from "@fractalboxdev/flare-dispatch-cache";
 import {
   GithubApp,
   InstallationDirectory,
@@ -33,7 +38,10 @@ import {
   type MatrixChildrenOptions,
 } from "@fractalboxdev/flare-dispatch-intake";
 import { Context, Effect, Layer, Schema } from "effect";
-import type { ControlPlaneEnv } from "./config.ts";
+import { awsBuildsLayer } from "./aws.ts";
+import { awsRecordsLayer } from "./aws-records.ts";
+import { presignerConfigOf, type ControlPlaneEnv } from "./config.ts";
+import { r2AssetStore, stageReleaseAsset, type AssetBucket } from "./release-assets.ts";
 import { appOptionsOf, type DeployedApp } from "./github.ts";
 
 /** The isolate's services did not build, so the execution has no services to run on. */
@@ -119,9 +127,71 @@ export const controlRunServices = <S>(
     }),
   );
 
+/**
+ * An installation token for `repo` scoped to it with `contents: read`, for a release-asset download (FD-GATE-129);
+ * `null` where no installation serves the repository.
+ */
+const assetToken =
+  <S>(services: Context.Context<S>) =>
+  (repo: string): Effect.Effect<string | null, AssetFailed> =>
+    Effect.gen(function* () {
+      const github = yield* GithubApp;
+      const directory = yield* InstallationDirectory;
+      const installation = yield* directory.installationFor(repo);
+      if (installation === null) return null;
+      const name = repo.slice(repo.indexOf("/") + 1);
+      const token = yield* github.token(installation, {
+        scope: { repositories: [name], permissions: { contents: "read" } },
+      });
+      return token.token;
+    }).pipe(
+      Effect.provide(services as unknown as Context.Context<GithubApp | InstallationDirectory>),
+      Effect.catch(() => Effect.fail(new AssetFailed({ key: repo, kind: "unavailable" }))),
+    );
+
+/**
+ * The services of one `image-publish` or `stack-deploy` execution: CodeBuild and ECS under the role the control plane
+ * assumes, the build ledger and approval record in D1, release assets staged in the `CACHE` bucket, and `GithubRead`
+ * under the App installation token (FD-GATE-116 to FD-GATE-141).
+ */
+export const awsRunServices = <S>(
+  env: ControlPlaneEnv,
+  isolate: () => Promise<Context.Context<S>>,
+): Layer.Layer<AwsRunServices, ControlServicesUnavailable | CloudLeaseMissing, ExecutionLease> =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const services = yield* Effect.tryPromise({
+        try: isolate,
+        catch: (cause) => new ControlServicesUnavailable({ detail: String(cause) }),
+      });
+      const lease = yield* ExecutionLease;
+      const presign = presignerConfigOf(env);
+      const app = appOptionsOf(env);
+      const assets = Layer.succeed(ReleaseAssets, {
+        stage: stageReleaseAsset({
+          tokenFor:
+            app === undefined ? () => Effect.succeed<string | null>(null) : assetToken(services),
+          fetch: (input, init) => globalThis.fetch(input, init),
+          apiBase: app?.baseUrl ?? "https://api.github.com",
+          store:
+            env.CACHE === undefined ? undefined : r2AssetStore(env.CACHE as unknown as AssetBucket),
+          presigner: presign === undefined ? undefined : r2Presigner(presign, Date.now),
+          deadlineAt: lease.deadlineAt,
+          now: Date.now,
+        }),
+      });
+      return Layer.mergeAll(
+        awsBuildsLayer(env, { fetch: (input, init) => globalThis.fetch(input, init) }),
+        awsRecordsLayer(env.DB),
+        assets,
+        controlGithubRead(env, services),
+      );
+    }),
+  );
+
 /** The `control` pool's run catalogue, with each run's services over the isolate's. */
 export const controlPoolRuns = <S>(
   env: ControlPlaneEnv,
   isolate: () => Promise<Context.Context<S>>,
   options: MatrixChildrenOptions = {},
-) => controlRuns(controlRunServices(env, isolate, options));
+) => controlRuns(controlRunServices(env, isolate, options), awsRunServices(env, isolate));

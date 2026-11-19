@@ -90,6 +90,12 @@ describe("reason kinds", () => {
       writeback: "policy",
       intent: "policy",
       release: "policy",
+      build: "finding",
+      rollout: "finding",
+      health: "finding",
+      asset: "finding",
+      aws: "infra",
+      approval: "policy",
     });
     expect(Object.keys(FD_REASON_KINDS)).not.toContain("provenance");
     for (const kind of Object.keys(FD_REASON_KINDS))

@@ -74,6 +74,7 @@ imagePublish:
   roleArn: arn:aws:iam::111122223333:role/fd-image-publish
   project: app-images
   registries: [111122223333.dkr.ecr.us-east-1.amazonaws.com/app]
+  stacks: [staging, production]
   assets:
     - key: TOOL
       repo: example-org/tool
@@ -82,7 +83,6 @@ imagePublish:
       sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
 stackDeploy:
   - stack: staging
-    after: image-publish
     region: us-east-1
     roleArn: arn:aws:iam::111122223333:role/fd-stack-staging
     project: app-deploy-staging
@@ -92,7 +92,6 @@ stackDeploy:
     health:
       urls: [https://staging.app.example.com/health]
   - stack: production
-    after: image-publish
     approval: required
     region: us-east-1
     roleArn: arn:aws:iam::111122223333:role/fd-stack-production
@@ -523,26 +522,26 @@ These requirements hold for `image-publish` and `stack-deploy`, each of which ru
 - **FD-GATE-121** · phase 2 · `V-UNIT` `V-SIM` — The control plane must start at most one build per execution and target, recording the build id before it reports the build as started; when a later epoch of the execution runs, the recipe must poll the recorded build and must not call `StartBuild`.
 - **FD-GATE-122** · phase 2 · `V-UNIT` — While a build runs, the recipe must read its status with `BatchGetBuilds` at 30 s intervals, sleeping with `DurableClock.sleep` between reads.
 - **FD-GATE-123** · phase 2 · `V-UNIT` — When a build ends, the recipe must take the verdict from its `buildStatus`: `SUCCEEDED` continues the recipe; `FAILED` is `failure` with the reason `build: <first failed phase> failed`; `TIMED_OUT` is `failure` with the reason `timeout: build`; `FAULT` is `failure` with the reason `infra: build fault`; and `STOPPED` that the recipe did not request is `failure` with the reason `build: stopped`.
-- **FD-GATE-124** · phase 2 · `V-UNIT` — If a build is still running 60 s before the execution's `deadline_at`, or the execution is cancelled while a build runs, then the recipe must call `StopBuild` for it and record `failure` with the reason `deadline`, or `cancelled` with the cancel cause.
-- **FD-GATE-125** · phase 2 · `V-UNIT` — If a CodeBuild, ECS or STS call fails with a network error or a 5xx status 3 times in a row, then the recipe must record `failure` with the reason `infra: aws <service> <operation>`.
+- **FD-GATE-124** · phase 2 · `V-UNIT` — If a build is still running 60 s before the execution's `deadline_at`, then the recipe must call `StopBuild` for it and record `failure` with the reason `deadline`; if the execution is cancelled while a build runs, then the recipe must call `StopBuild` for it.
+- **FD-GATE-125** · phase 2 · `V-UNIT` — If a CodeBuild or ECS call fails with a network error or a 5xx status 3 times in a row, then the recipe must record `failure` with the reason `infra: aws <service> <operation>`; if it fails with a 4xx status, then the recipe must record `failure` with the reason `aws: <service> <operation> <error code>`.
 - **FD-GATE-126** · phase 2 · `V-UNIT` — When a build ends, the recipe must emit one `check.summary` intent naming the build id, its status, each phase's status and duration and the CloudWatch log group and stream, and must not copy any build log line into the summary.
 - **FD-GATE-127** · phase 2 · `V-UNIT` — If a manifest entry's `region` is not an AWS region name, its `roleArn` is not an IAM role ARN, or its `project` is empty, then the recipe must record `failure` with the reason `config: <field>` and call no AWS API.
 
 ### `image-publish`
 
 - **FD-GATE-128** · phase 2 · `V-UNIT` — When a `push` to the manifest's `imagePublish.branch` (default the default branch) changes a file that matches `imagePublish.paths` (default `**`), or an Actions dispatch requests it, intake must request `image-publish` with the dedup key `image-publish[:<label>]:<owner>/<repo>:<sha>`.
-- **FD-GATE-129** · phase 2 · `V-UNIT` — Before it starts the build, for each entry of `imagePublish.assets` the control plane must download the asset named `name` of the release tagged `tag` in `repo` under the installation token for `repo`, write it to the object key `cas/<sha256>` and pass the build the overrides `FD_ASSET_<key>_URL`, a GET URL from the object-store presigner, and `FD_ASSET_<key>_SHA256`.
-- **FD-GATE-130** · phase 2 · `V-UNIT` — If an asset's repository has no installation of the GitHub App, its release or asset is absent, it exceeds 512 MiB, or its SHA-256 differs from the entry's `sha256`, then the recipe must start no build and record `failure` with the reason `asset: <key> <uninstalled | not found | too large | digest mismatch>`.
+- **FD-GATE-129** · phase 2 · `V-UNIT` — Before it starts the build, for each entry of `imagePublish.assets` the control plane must download the asset named `name` of the release tagged `tag` in `repo` under an installation token scoped to `repo` with `contents: read`, write it to the object key `cas/<sha256>`, where `sha256` is the entry's required digest, and pass the build the overrides `FD_ASSET_<key>_URL`, a GET URL from the object-store presigner, and `FD_ASSET_<key>_SHA256`.
+- **FD-GATE-130** · phase 2 · `V-UNIT` — If an asset's repository has no installation of the GitHub App, its release or asset is absent, it exceeds 512 MiB, or the SHA-256 of its bytes differs from the entry's `sha256`, then the recipe must start no build and record `failure` with the reason `asset: <key> <uninstalled | not found | too large | digest mismatch>`.
 - **FD-GATE-131** · phase 2 · `V-UNIT` — When an `image-publish` build succeeds, the recipe must read the build's exported variable `FD_IMAGE_DIGESTS` as a JSON object from image name to `<registry>/<repository>@sha256:<64 hex digits>`, and if it is absent, does not decode, is empty, or names a repository outside every prefix in `imagePublish.registries`, then the recipe must record `failure` with the reason `image: digests`.
-- **FD-GATE-132** · phase 2 · `V-UNIT` `V-REPLAY` — When an `image-publish` execution records `success`, the recipe must emit one `dispatch.followOn` intent per `stackDeploy` entry whose `after` is `image-publish`, labelled with the entry's `stack` and carrying the image digests as the input `images`.
+- **FD-GATE-132** · phase 2 · `V-UNIT` `V-REPLAY` — When an `image-publish` execution records `success`, the recipe must emit one `dispatch.followOn` intent per stack in `imagePublish.stacks`, labelled with the stack and carrying the image digests as the input `images`.
 
 ### `stack-deploy`
 
 - **FD-GATE-133** · phase 2 · `V-UNIT` — When a `dispatch.followOn` intent of an `image-publish` execution starts `stack-deploy`, intake must take the stack's entry from the repo manifest at the parent's commit and the `images` from the intent, and must refuse the intent where an image is not `<registry>/<repository>@sha256:<64 hex digits>`.
 - **FD-GATE-134** · phase 2 · `V-UNIT` `V-SIM` — The control plane must run `stack-deploy` executions for one repository and stack in the serial group `stack-deploy:<owner>/<repo>@<stack>`, with the dedup key `stack-deploy:<stack>:<owner>/<repo>:<sha>`.
-- **FD-GATE-135** · phase 2 · `V-UNIT` — Before the apply build starts, the recipe must read the head of the manifest's `stackDeploy[].branch` (default the default branch), and if the head is not the execution's commit and `requireHead` is not `false`, then it must record `cancelled` with the cause `superseded: branch head moved` and start no build.
+- **FD-GATE-135** · phase 2 · `V-UNIT` — Before it waits for an approval and again before the apply build starts, the recipe must read the head of the entry's `branch` (default the branch the execution's ref names), and if the head is not the execution's commit and `requireHead` is not `false`, then it must record `cancelled` with the cause `superseded: branch head moved` and start no build.
 - **FD-GATE-136** · phase 2 · `V-UNIT` — Where a stack's entry sets `approval: required`, the recipe must emit a `check.summary` intent that names the execution id and the approval route, and must start no apply build until the control plane records a decision for that execution and its commit, reading it at 30 s intervals with `DurableClock.sleep` between reads.
-- **FD-GATE-137** · phase 2 · `V-UNIT` — If the recorded decision is `reject`, then the recipe must record `failure` with the reason `approval: rejected`; if no decision is recorded within the entry's `approvalTimeoutSec` (60 s to 43200 s, default 14400 s), then the recipe must record `cancelled` with the cause `approval: timeout`.
+- **FD-GATE-137** · phase 2 · `V-UNIT` — If the recorded decision is `reject`, then the recipe must record `failure` with the reason `approval: rejected`; if no decision is recorded within the entry's `approvalTimeoutSec` (60 s to 43200 s, default 14400 s), then the recipe must record `failure` with the reason `approval: timeout`.
 - **FD-GATE-138** · phase 2 · `V-UNIT` — When the recipe starts the apply build, it must add to the overrides of FD-GATE-120 `FD_STACK`, the stack's name, and `FD_IMAGES`, the JSON of the execution's `images`.
 - **FD-GATE-139** · phase 2 · `V-UNIT` — Where a stack's entry names `rollout`, after the apply build succeeds the recipe must read ECS `DescribeServices` for `rollout.services` in `rollout.cluster` at 30 s intervals until every service's `PRIMARY` deployment has `rolloutState` `COMPLETED` and `runningCount` equal to `desiredCount`, within `rollout.timeoutSec` (60 s to 3600 s, default 1800 s).
 - **FD-GATE-140** · phase 2 · `V-UNIT` — If a rollout service is absent, its `PRIMARY` deployment's `rolloutState` is `FAILED`, or the rollout does not complete within `rollout.timeoutSec`, then the recipe must record `failure` with the reason `rollout: <service> <missing | failed | timeout>`.
