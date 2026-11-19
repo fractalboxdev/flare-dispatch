@@ -53,6 +53,7 @@ describe("alarm port", () => {
       {
         url: "https://alerts.example.com/hook",
         body: expect.objectContaining({
+          text: expect.stringContaining("canary-missed"),
           alarm: "canary-missed",
           severity: "page",
           state: "raised",

@@ -46,7 +46,7 @@ The operator overlay is a JSON document of values only. The value schema, a `Sch
 | `intake.webhookEvents` | The webhook events intake admits ([intake.md](intake.md) FD-INT-027); the control plane's `WEBHOOK_EVENTS` var carries the list, `null` where the overlay sets none, so the Worker tells an absent list from an empty one |
 | `dispatch.oidcAudience` | The Actions OIDC audience of a dispatch ([interfaces.md](interfaces.md) FD-IFC-024); the control plane's `DISPATCH_OIDC_AUDIENCE` var carries it, empty where the overlay sets none, which refuses every Actions token |
 | `executors.planeId` | This control plane's `plane_id`, which every device's `connect` signature binds ([interfaces.md](interfaces.md) FD-IFC-085) |
-| `alerts.sink` | An HTTPS webhook URL or an email address |
+| `alerts.sink` | An HTTPS webhook URL or an email address; the webhook body carries the alarm message as `text`, so a Slack incoming webhook URL works as the sink |
 | `alerts.webhookSilentHours` | The delivery gap that raises `webhook-silent`, default 24 |
 | `spend.*` | The budget and reserve settings [spend.md](spend.md) defines; the control plane's `SPEND` var carries them, each the overlay leaves out at its default of [profile.md](profile.md) § Spend configuration (FD-PROF-054) |
 | `pools.<pool>.maxInstances` | Container `max_instances` per pool, bounded by the account's limits |

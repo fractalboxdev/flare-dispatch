@@ -140,7 +140,9 @@ export const deliverAlarm = (config: AlarmPortConfig, alarm: Alarm) =>
         (config.fetch ?? fetch)(config.sink, {
           method: "POST",
           headers: { "content-type": "application/json" },
+          // `text` is the message a Slack incoming webhook posts; it rejects a body without one.
           body: JSON.stringify({
+            text: message,
             alarm: alarm.name,
             severity: alarm.severity,
             state: alarm.state,
