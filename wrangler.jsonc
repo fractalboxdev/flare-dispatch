@@ -42,9 +42,8 @@
       "45 5 * * *", // org-spec-audit — daily, after spec-drift-pr
       "0 6 * * *", // ci-triage-pr   — daily
       "0 7 * * 1", // finops-audit   — Mondays
-      // contextful-measures ("17 2 * * *") and contextful-protocol
-      // ("17 3 * * SUN") are unarmed: contextful uses FlareDispatch for tag
-      // releases only.
+      // No contextful run is scheduled: contextful runs its gate and releases
+      // locally.
       // The verdict reconcile sweep, not a run: re-sends the conclusion of
       // every finished execution GitHub never received (DELIVERY_SWEEP_CRON,
       // apps/dispatcher/src/delivery-sweep.ts).
