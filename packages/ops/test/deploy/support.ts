@@ -69,6 +69,10 @@ export const withRescan = (declaration: RunDeclaration = READ_ONLY_SCAN): RunReg
 });
 export const ACCOUNT = placeholderOverlay.accountId;
 export const API = `/client/v4/accounts/${ACCOUNT}`;
+/** The buckets' S3 endpoint, which the deploy reads and writes its record and the scan bundle on. */
+export const S3 = `${ACCOUNT}.r2.cloudflarestorage.com`;
+/** The presign token's key pair, which signs the deploy's object requests. */
+export const OBJECT_STORE = { accessKeyId: "r2-key-id", secretAccessKey: "r2-secret" } as const;
 export const CONTROL_PLANE = V2_WORKERS.find((w) => w.worker === "control-plane")!;
 export const SCRIPT = "flare-dispatch-control-plane";
 export const RECORD = recordKey(SCRIPT);
@@ -424,32 +428,10 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
   };
 
   const ok = (result: unknown) => Response.json({ success: true, result, errors: [] });
-  const cloudflare = (
-    method: string,
-    url: URL,
-    body: string,
-    bytes: Uint8Array | null,
-  ): Response => {
+  const cloudflare = (method: string, url: URL): Response => {
     const path = url.pathname.slice(API.length);
-    const cacheKey = new RegExp(
-      `^/r2/buckets/${placeholderOverlay.r2["CACHE"]}/objects/(.+)$`,
-    ).exec(path)?.[1];
-    if (cacheKey !== undefined) {
-      if (method !== "PUT") return new Response(null, { status: 405 });
-      if (state.cacheBucketMissing) return new Response(null, { status: 404 });
-      if (state.cacheWriteFails) return new Response(null, { status: 403 });
-      cacheObjects.set(cacheKey, new Uint8Array(bytes ?? new TextEncoder().encode(body)));
-      return new Response(null, { status: 200 });
-    }
-    const objectKey = /^\/r2\/buckets\/flare-dispatch-artifacts\/objects\/(.+)$/.exec(path)?.[1];
-    if (objectKey !== undefined) {
-      if (method === "PUT") {
-        objects.set(objectKey, body);
-        return new Response(null, { status: 200 });
-      }
-      const stored = objects.get(objectKey);
-      return stored === undefined ? new Response(null, { status: 404 }) : new Response(stored);
-    }
+    // The R2 REST object API refuses the bucket-scoped tokens the deploy holds.
+    if (path.startsWith("/r2/buckets/")) return new Response(null, { status: 401 });
     const accessAnswer = accessApi(method, url, path);
     if (accessAnswer !== null) return accessAnswer;
     if (method !== "GET") return new Response(null, { status: 405 });
@@ -716,15 +698,42 @@ export const world = (opts: { readonly access?: "committed" | "none" } = {}) => 
     return Response.json({ error: "not_found", message: "no such route" }, { status: 404 });
   };
 
+  /** The buckets' S3 endpoint: an object `GET` or `PUT` presigned with the presign token's key pair. */
+  const s3 = (method: string, url: URL, bytes: Uint8Array | null): Response => {
+    if (!url.searchParams.get("X-Amz-Credential")?.startsWith(`${OBJECT_STORE.accessKeyId}/`))
+      return new Response(null, { status: 403 });
+    const [, bucket, ...rest] = url.pathname.split("/");
+    const key = rest.join("/");
+    const data = bytes ?? new Uint8Array();
+    if (bucket === placeholderOverlay.r2["CACHE"]) {
+      if (method !== "PUT") return new Response(null, { status: 405 });
+      if (state.cacheBucketMissing) return new Response(null, { status: 404 });
+      if (state.cacheWriteFails) return new Response(null, { status: 403 });
+      cacheObjects.set(key, new Uint8Array(data));
+      return new Response(null, { status: 200 });
+    }
+    if (bucket === "flare-dispatch-artifacts") {
+      if (method === "PUT") {
+        objects.set(key, new TextDecoder().decode(data));
+        return new Response(null, { status: 200 });
+      }
+      const stored = objects.get(key);
+      return stored === undefined ? new Response(null, { status: 404 }) : new Response(stored);
+    }
+    return new Response(null, { status: 404 });
+  };
+
   const fetcher = (async (input: string, init?: RequestInit) => {
     const url = new URL(input);
     const method = init?.method ?? "GET";
     const body = typeof init?.body === "string" ? init.body : "";
     const bytes = init?.body instanceof Uint8Array ? init.body : null;
-    calls.push(`${method} ${url.host}${url.pathname}${url.search}`);
+    // A presigned URL's query changes with the clock, so an S3 call is recorded by its path alone.
+    calls.push(`${method} ${url.host}${url.pathname}${url.host === S3 ? "" : url.search}`);
+    if (url.host === S3) return s3(method, url, bytes);
     if (AWS_SERVICES[url.host] !== undefined)
       return aws(url.host, new Headers(init?.headers), body);
-    if (url.host === "api.cloudflare.com") return cloudflare(method, url, body, bytes);
+    if (url.host === "api.cloudflare.com") return cloudflare(method, url);
     if (url.host === "api.github.com")
       return (
         runnerRepository(method, url.pathname, new Headers(init?.headers), body) ??
@@ -806,6 +815,7 @@ export const targetOn =
       repository: "acme/fd",
       ...(w.state.awsCredentials ? { aws: AWS_CREDENTIALS } : {}),
       access: SERVICE_TOKEN,
+      objectStore: OBJECT_STORE,
       floorCanaryPoll: { intervalMs: 0, timeoutMs: 60_000 },
       fetch: w.fetcher,
       writeFile: (path, text) => void w.files.set(path, text),
@@ -854,4 +864,6 @@ export const deploy = (w: World, overlay = OVERLAY, opts: Parameters<typeof fd>[
 /** The calls a run made from `from` on: what the second deploy did, after the first. */
 export const since = (w: World, from: number) => w.calls.slice(from);
 export const isWrite = (c: string) =>
-  c.startsWith("wrangler ") || /^(PUT|POST|DELETE|PATCH) api\.cloudflare\.com/.test(c);
+  c.startsWith("wrangler ") ||
+  /^(PUT|POST|DELETE|PATCH) api\.cloudflare\.com/.test(c) ||
+  /^(PUT|POST|DELETE) [^ ]+\.r2\.cloudflarestorage\.com/.test(c);

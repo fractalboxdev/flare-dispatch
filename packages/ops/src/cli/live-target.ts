@@ -1,5 +1,6 @@
 // The live `DeployTarget`: the Cloudflare API for the deployed Workers, their schedules, domains and Container
-// applications and the record of the last deploy in the artifacts bucket; `wrangler` for D1 migrations and Worker
+// applications; the buckets' S3 endpoint, under the presign token's key pair, for the record of the last deploy in the
+// artifacts bucket and the scan bundle in the cache bucket; `wrangler` for D1 migrations and Worker
 // deploys; the GitHub API with the App JWT for the App's registration and the default branch's ruleset; the Workers'
 // own hostnames for the post-deploy probes; the control plane's floor canary routes on the dispatcher hostname under
 // the operator's Access service token; the Cloudflare Access applications of the account, read only; the account API
@@ -8,6 +9,7 @@
 // overlay's alert sink for `deploy-probe-failed`; the local file system for the scan bundle envelope the overlay pins.
 import { signRequest, type AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
 import { contentObjectKey } from "@fractalboxdev/flare-dispatch-cache/namespaces";
+import { amzDateOf, presignV4 } from "@fractalboxdev/flare-dispatch-cache/sigv4";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -75,6 +77,12 @@ export interface LiveTargetConfig {
    * plane's floor canary routes on the dispatcher hostname with it (FD-OPS-050).
    */
   readonly access?: { readonly clientId: string; readonly clientSecret: string };
+  /**
+   * The R2 S3 key pair the deploy reads and writes its record and the scan bundle with: the presign token's, whose
+   * Object Read & Write covers the cache and artifacts buckets. The R2 REST object API refuses a bucket-scoped token,
+   * so these objects go through the bucket's S3 endpoint.
+   */
+  readonly objectStore?: { readonly accessKeyId: string; readonly secretAccessKey: string };
   /** How often the deploy reads the floor canary's verdict, and how long it waits for one. */
   readonly floorCanaryPoll?: { readonly intervalMs: number; readonly timeoutMs: number };
   readonly fetch?: typeof fetch;
@@ -216,6 +224,56 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
       });
     });
 
+  /**
+   * One object request on a bucket's S3 endpoint, presigned with the object-store key pair; answers the body of a
+   * `GET`, or `null` where the object (or, for a `PUT`, the bucket) does not exist.
+   */
+  const objectRequest = (
+    operation: string,
+    method: "GET" | "PUT",
+    bucketName: string,
+    key: string,
+    body?: string | Uint8Array,
+  ) =>
+    Effect.gen(function* () {
+      const store = c.objectStore;
+      if (store === undefined)
+        return yield* new TargetFailed({
+          operation,
+          message: "R2_PRESIGN_ACCESS_KEY_ID and R2_PRESIGN_SECRET_ACCESS_KEY are not set",
+        });
+      const failed = (e: unknown) => new TargetFailed({ operation, message: String(e) });
+      const bytes = typeof body === "string" ? new TextEncoder().encode(body) : body;
+      const url = yield* Effect.tryPromise({
+        try: () =>
+          presignV4({
+            method,
+            host: `${c.overlay.accountId}.r2.cloudflarestorage.com`,
+            path: `/${bucketName}/${key}`,
+            ...(bytes === undefined ? {} : { headers: { "content-length": String(bytes.length) } }),
+            region: "auto",
+            service: "s3",
+            accessKeyId: store.accessKeyId,
+            secretAccessKey: store.secretAccessKey,
+            amzDate: amzDateOf(now()),
+            expiresSec: 300,
+          }),
+        catch: failed,
+      });
+      const res = yield* Effect.tryPromise({
+        try: () => fetcher(url, { method, ...(bytes === undefined ? {} : { body: bytes }) }),
+        catch: failed,
+      });
+      const text = yield* Effect.tryPromise({ try: () => res.text(), catch: failed });
+      if (res.status === 404) return null;
+      if (!res.ok)
+        return yield* new TargetFailed({
+          operation,
+          message: `${method} ${bucketName}/${key}: ${res.status} ${text.slice(0, 500)}`,
+        });
+      return text;
+    });
+
   const readRecord = (r: RenderedWorker) =>
     Effect.gen(function* () {
       if (bucket === undefined)
@@ -223,10 +281,7 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
           operation: "record",
           message: "the overlay names no r2.ARTIFACTS bucket",
         });
-      const raw = yield* c.cloudflare.raw(
-        "GET",
-        `${account}/r2/buckets/${bucket}/objects/${recordKey(scriptName(r))}`,
-      );
+      const raw = yield* objectRequest("record", "GET", bucket, recordKey(scriptName(r)));
       if (raw === null) return null;
       return JSON.parse(raw) as DeployRecord;
     });
@@ -738,10 +793,12 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
             operation: "scan-bundle",
             message: "the overlay names no r2.CACHE bucket",
           });
-        // The R2 object API answers 404 for a bucket that does not exist, which `raw` answers as null.
-        const stored = yield* c.cloudflare.raw(
+        // The S3 endpoint answers 404 for a bucket that does not exist, which `objectRequest` answers as null.
+        const stored = yield* objectRequest(
+          "scan-bundle",
           "PUT",
-          `${account}/r2/buckets/${cache}/objects/${contentObjectKey(digest)}`,
+          cache,
+          contentObjectKey(digest),
           bytes,
         );
         if (stored === null)
@@ -961,9 +1018,11 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
             operation: "record",
             message: "the overlay names no r2.ARTIFACTS bucket",
           });
-        yield* c.cloudflare.raw(
+        yield* objectRequest(
+          "record",
           "PUT",
-          `${account}/r2/buckets/${bucket}/objects/${recordKey(scriptName(r))}`,
+          bucket,
+          recordKey(scriptName(r)),
           JSON.stringify({
             rendered: r.text,
             secrets: deployed?.secrets ?? [],

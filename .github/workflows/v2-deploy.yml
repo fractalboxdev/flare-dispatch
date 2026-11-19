@@ -7,9 +7,12 @@ name: v2-deploy
 # check and raises the notify alarm `drift` when it fails (FD-OPS-025).
 #
 # CREDENTIALS. `FD_OPERATOR_OVERLAY`: the operator overlay's JSON. `CLOUDFLARE_API_TOKEN`: account-scoped, Workers
-# Scripts:Edit, Workers R2 Storage:Edit, D1:Edit, Containers:Edit, Account Settings:Read, and Access: Apps and Policies
-# Read for the drift check's read of the Access applications (FD-OPS-088); with no Account API Tokens:Read, the drift
-# check reports the presign token's scope unchecked (FD-CACHE-091). `GITHUB_APP_PRIVATE_KEY`: the
+# Scripts:Edit, D1:Edit, Containers:Edit, Account Settings:Read, and Access: Apps and Policies Read for the drift check's
+# read of the Access applications (FD-OPS-088); with no Account API Tokens:Read, the drift check reports the presign
+# token's scope unchecked (FD-CACHE-091). `R2_PRESIGN_ACCESS_KEY_ID`, `R2_PRESIGN_SECRET_ACCESS_KEY`: the presign
+# token's S3 key pair, the control plane's secrets of the same names, with which `fd deploy` and `fd doctor` read and
+# write the deploy record in the artifacts bucket and the scan bundle in the cache bucket on the buckets' S3 endpoint;
+# the R2 REST object API refuses a bucket-scoped token. `GITHUB_APP_PRIVATE_KEY`: the
 # App's key, for the App registration and the ruleset reads of the drift check. `FD_AWS_ROLE_ARN`, a repository
 # variable, set where the overlay carries the `aws` kind: the AWS role the deploy and doctor jobs assume through GitHub's
 # OIDC provider, for the drift check's read of the AWS account's Budgets actions (FD-EXEC-083); it needs
@@ -73,6 +76,8 @@ jobs:
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
           FD_ACCESS_CLIENT_ID: ${{ secrets.FD_ACCESS_CLIENT_ID }}
           FD_ACCESS_CLIENT_SECRET: ${{ secrets.FD_ACCESS_CLIENT_SECRET }}
+          R2_PRESIGN_ACCESS_KEY_ID: ${{ secrets.R2_PRESIGN_ACCESS_KEY_ID }}
+          R2_PRESIGN_SECRET_ACCESS_KEY: ${{ secrets.R2_PRESIGN_SECRET_ACCESS_KEY }}
         run: node --experimental-strip-types --no-warnings packages/ops/scripts/fd-operability.ts deploy --overlay "@$RUNNER_TEMP/fd/overlay.json"
 
   doctor:
@@ -107,4 +112,6 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+          R2_PRESIGN_ACCESS_KEY_ID: ${{ secrets.R2_PRESIGN_ACCESS_KEY_ID }}
+          R2_PRESIGN_SECRET_ACCESS_KEY: ${{ secrets.R2_PRESIGN_SECRET_ACCESS_KEY }}
         run: node --experimental-strip-types --no-warnings packages/ops/scripts/fd-operability.ts doctor --overlay "@$RUNNER_TEMP/fd/overlay.json" --alarm-on-drift

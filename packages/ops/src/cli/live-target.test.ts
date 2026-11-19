@@ -24,6 +24,9 @@ import {
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const PEM = privateKey.export({ type: "pkcs1", format: "pem" }).toString();
 const ACCOUNT = `/client/v4/accounts/${placeholderOverlay.accountId}`;
+/** The buckets' S3 endpoint and the presign token's key pair the deploy signs its object requests with. */
+const S3 = `${placeholderOverlay.accountId}.r2.cloudflarestorage.com`;
+const OBJECT_STORE = { accessKeyId: "r2-key-id", secretAccessKey: "r2-secret" };
 
 const TEMPLATE = `{
   "name": "fd-cp",
@@ -47,25 +50,24 @@ const world = (over: { deployed?: boolean; health?: number; record?: string | nu
   const calls: string[] = [];
   const objects = new Map<string, string>();
   if (over.record !== undefined && over.record !== null)
-    objects.set(
-      `${ACCOUNT}/r2/buckets/flare-dispatch-artifacts/objects/${recordKey("fd-cp")}`,
-      over.record,
-    );
+    objects.set(`/flare-dispatch-artifacts/${recordKey("fd-cp")}`, over.record);
   const ok = (result: unknown) => Response.json({ success: true, result });
   const fetcher = (async (input: string, init?: RequestInit) => {
     const url = new URL(input);
     const method = init?.method ?? "GET";
-    calls.push(`${method} ${url.host}${url.pathname}${url.search}`);
+    calls.push(`${method} ${url.host}${url.pathname}${url.host === S3 ? "" : url.search}`);
     const path = url.pathname + url.search;
-    if (url.host === "api.cloudflare.com") {
-      if (path.includes("/r2/buckets/")) {
-        if (method === "PUT") {
-          objects.set(url.pathname, String(init?.body));
-          return new Response(null, { status: 200 });
-        }
-        const body = objects.get(url.pathname);
-        return body === undefined ? new Response(null, { status: 404 }) : new Response(body);
+    if (url.host === S3) {
+      if (!url.searchParams.get("X-Amz-Credential")?.startsWith(`${OBJECT_STORE.accessKeyId}/`))
+        return new Response(null, { status: 403 });
+      if (method === "PUT") {
+        objects.set(url.pathname, new TextDecoder().decode(init?.body as Uint8Array));
+        return new Response(null, { status: 200 });
       }
+      const body = objects.get(url.pathname);
+      return body === undefined ? new Response(null, { status: 404 }) : new Response(body);
+    }
+    if (url.host === "api.cloudflare.com") {
       if (over.deployed === false && path.includes("/workers/scripts/"))
         return new Response(null, { status: 404 });
       if (path.endsWith("/workers/scripts/fd-cp/settings"))
@@ -153,6 +155,7 @@ const layerFor = (
       apiToken: "cf-token",
       appPrivateKey: extra.key ?? PEM,
       repository: extra.repository ?? "acme/fd",
+      objectStore: OBJECT_STORE,
       fetch: w.fetcher,
       now: () => 1_800_000_000_000,
       writeFile: (p) => void files.push(`write ${p}`),

@@ -18,13 +18,13 @@ import {
   type SigningKey,
 } from "../../../catalog/src/scan-bundle.test-support.ts";
 import { placeholderOverlay, type OverlayValues } from "../../src/index.ts";
-import { API, deploy, fd, isWrite, ROOT, world, type World } from "./support.ts";
+import { deploy, fd, isWrite, ROOT, S3, world, type World } from "./support.ts";
 
 const HOUR = 3_600_000;
 const FILE = "deploy/scan-bundle.dsse.json";
 const READ = `read ${join(ROOT, FILE)}`;
-/** The path of the cache bucket's objects in the R2 object API. */
-const CAS = `${API}/r2/buckets/${placeholderOverlay.r2["CACHE"]}/objects`;
+/** The cache bucket on the buckets' S3 endpoint, where the deploy writes the scan bundle. */
+const CAS = `${S3}/${placeholderOverlay.r2["CACHE"]}`;
 
 type Report = { readonly ok: boolean; readonly stages: readonly { stage: string; ok: boolean; detail: string }[] };
 const driftDetail = (report: Report) => report.stages.find((s) => s.stage === "drift")?.detail ?? "";
@@ -123,10 +123,10 @@ describe("fd deploy over the scan bundle", () => {
     expect([...w.cacheObjects.keys()]).toEqual([`cas/${digest}`]);
     expect(Buffer.from(w.cacheObjects.get(`cas/${digest}`)!).equals(Buffer.from(bytes))).toBe(true);
     // The drift check's reads, then the write, then every other write.
-    const put = w.calls.indexOf(`PUT api.cloudflare.com${CAS}/cas/${digest}`);
+    const put = w.calls.indexOf(`PUT ${CAS}/cas/${digest}`);
     expect(put).toBeGreaterThan(w.calls.indexOf(READ));
     expect(put).toBeGreaterThan(w.calls.indexOf("GET api.github.com/repos/acme/fd/rules/branches/main"));
-    expect(w.calls.filter(isWrite)[0]).toBe(`PUT api.cloudflare.com${CAS}/cas/${digest}`);
+    expect(w.calls.filter(isWrite)[0]).toBe(`PUT ${CAS}/cas/${digest}`);
     expect(w.calls.findIndex((c) => c.startsWith("wrangler "))).toBeGreaterThan(put);
   });
 

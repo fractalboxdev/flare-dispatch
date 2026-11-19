@@ -267,6 +267,18 @@ const accessTokenOf = (env: Readonly<Record<string, string | undefined>>) => {
 };
 
 /**
+ * The R2 S3 key pair the deploy reads and writes the record and the scan bundle with, from `R2_PRESIGN_ACCESS_KEY_ID`
+ * and `R2_PRESIGN_SECRET_ACCESS_KEY`, the same pair the control plane presigns with; none unless both are set.
+ */
+const objectStoreOf = (env: Readonly<Record<string, string | undefined>>) => {
+  const accessKeyId = env["R2_PRESIGN_ACCESS_KEY_ID"] ?? "";
+  const secretAccessKey = env["R2_PRESIGN_SECRET_ACCESS_KEY"] ?? "";
+  return accessKeyId === "" || secretAccessKey === ""
+    ? {}
+    : { objectStore: { accessKeyId, secretAccessKey } };
+};
+
+/**
  * The `Operability` service's two operations. `fd`'s Layer is
  * `Layer.succeed(Operability)(makeOperability({ fail: (message) => new OperabilityFailed({ message }) }))`.
  */
@@ -312,6 +324,7 @@ export const makeOperability = <E>(options: OperabilityOptions<E>) => {
                 ? {}
                 : { repository: env["GITHUB_REPOSITORY"] }),
               ...accessTokenOf(env),
+              ...objectStoreOf(env),
               ...awsCredentialsOf(env),
               ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
             }),
