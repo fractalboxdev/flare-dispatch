@@ -15,6 +15,7 @@ import type {
   VerdictName,
 } from "./declaration.ts";
 import type { ApiError } from "./errors.ts";
+import type { StackApprovalRecord } from "./declaration.ts";
 
 // --- Intake ----------------------------------------------------------------------------------------------------------
 
@@ -277,3 +278,28 @@ export class StatementVisibility extends Context.Service<
 >()("@fractalboxdev/flare-dispatch-api/StatementVisibility") {}
 
 export type { VerdictName };
+
+// --- Stack approvals ---------------------------------------------------------------------------------------------
+
+/** The decision store behind `POST /v1/ops/stack-approvals` (FD-IFC-104 to FD-IFC-107); the control plane implements it. */
+export interface StackApprovalRequest {
+  readonly executionId: string;
+  readonly decision: "approve" | "reject";
+  /** The operator's Access identity. */
+  readonly identity: string;
+  readonly reason: string;
+  readonly requestId: string;
+}
+
+export class StackApprovalDecisions extends Context.Service<
+  StackApprovalDecisions,
+  {
+    /**
+     * Records the decision once: `execution_not_found` for an unknown execution, `not_awaiting_approval` for one that
+     * waits for none or has ended, `conflict` once a decision is recorded.
+     */
+    readonly decide: (
+      request: StackApprovalRequest,
+    ) => Effect.Effect<StackApprovalRecord, ApiError>;
+  }
+>()("@fractalboxdev/flare-dispatch-api/StackApprovalDecisions") {}

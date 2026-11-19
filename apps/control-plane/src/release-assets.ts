@@ -8,8 +8,10 @@ import {
   type StagedAsset,
 } from "@fractalboxdev/flare-dispatch-catalog";
 import type { R2PresignerService } from "@fractalboxdev/flare-dispatch-cache";
-import { MAX_URL_LIFETIME_MS } from "@fractalboxdev/flare-dispatch-cache";
 import { Effect, Schema } from "effect";
+
+/** The object-store presigner's longest URL lifetime: the earlier of 15 min and `deadline_at` (specs/README.md). */
+export const PRESIGNED_GET_LIFETIME_MS = 15 * 60 * 1000;
 
 /** The largest asset the control plane stages (FD-GATE-130). */
 export const MAX_ASSET_BYTES = 512 * 1024 * 1024;
@@ -147,7 +149,7 @@ export const stageReleaseAsset = (deps: ReleaseAssetsDeps) => (asset: ReleaseAss
       }
     }
     const now = deps.now();
-    const expiresAt = Math.min(now + MAX_URL_LIFETIME_MS, deps.deadlineAt ?? Infinity);
+    const expiresAt = Math.min(now + PRESIGNED_GET_LIFETIME_MS, deps.deadlineAt ?? Infinity);
     const signed = yield* presigner.presign({ key, method: "GET", length: null, expiresAt });
     return { url: signed.url, sha256: expected } satisfies StagedAsset;
   });

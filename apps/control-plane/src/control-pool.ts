@@ -22,7 +22,6 @@ import {
   ReleaseAssets,
   type GithubGet,
 } from "@fractalboxdev/flare-dispatch-catalog";
-import { r2Presigner } from "@fractalboxdev/flare-dispatch-cache";
 import {
   GithubApp,
   InstallationDirectory,
@@ -40,7 +39,7 @@ import {
 import { Context, Effect, Layer, Schema } from "effect";
 import { awsBuildsLayer } from "./aws.ts";
 import { awsRecordsLayer } from "./aws-records.ts";
-import { presignerConfigOf, type ControlPlaneEnv } from "./config.ts";
+import type { ControlPlaneEnv } from "./config.ts";
 import { r2AssetStore, stageReleaseAsset, type AssetBucket } from "./release-assets.ts";
 import { appOptionsOf, type DeployedApp } from "./github.ts";
 
@@ -165,6 +164,12 @@ export const awsRunServices = <S>(
         catch: (cause) => new ControlServicesUnavailable({ detail: String(cause) }),
       });
       const lease = yield* ExecutionLease;
+      // Loaded here, inside an execution of these runs: both modules reach the Durable Object classes, which only the
+      // Worker's runtime can load.
+      const { presignerConfigOf } = yield* Effect.promise(() => import("./config.ts"));
+      const { r2Presigner } = yield* Effect.promise(
+        () => import("@fractalboxdev/flare-dispatch-cache"),
+      );
       const presign = presignerConfigOf(env);
       const app = appOptionsOf(env);
       const assets = Layer.succeed(ReleaseAssets, {

@@ -8,8 +8,8 @@ import {
   BuildLedger,
   StackApprovals,
 } from "@fractalboxdev/flare-dispatch-catalog";
+import { StackApprovalDecisions } from "@fractalboxdev/flare-dispatch-api";
 import { migratedD1 } from "@fractalboxdev/flare-dispatch-intake/testing";
-import { StackApprovalDecisions } from "@fractalboxdev/flare-dispatch-ops";
 import { Cause, Effect, Exit, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { awsBuildsLayer, rolloutsOf } from "../src/aws.ts";

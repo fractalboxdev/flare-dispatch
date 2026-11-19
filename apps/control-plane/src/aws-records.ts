@@ -9,8 +9,8 @@ import {
   StackApprovals,
   type ApprovalDecision,
 } from "@fractalboxdev/flare-dispatch-catalog";
-import { apiError } from "@fractalboxdev/flare-dispatch-api";
-import { StackApprovalDecisions } from "@fractalboxdev/flare-dispatch-ops";
+import { apiError } from "@fractalboxdev/flare-dispatch-api/errors";
+import { StackApprovalDecisions } from "@fractalboxdev/flare-dispatch-api/ports";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Effect, Layer } from "effect";
 
