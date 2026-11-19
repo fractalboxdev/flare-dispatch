@@ -7,6 +7,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:/opt/zig/bin:$PATH
 
+# The console archive builds under the pnpm its package pins through Corepack;
+# the sandbox base ships Node 22 without Corepack on PATH.
+RUN npm install -g corepack@0.35.0 && corepack enable
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential clang lld cmake python3 python3-pip python3-venv \
     pkg-config perl git file libclang-dev ca-certificates util-linux curl && \

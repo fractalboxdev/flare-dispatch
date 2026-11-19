@@ -18,6 +18,20 @@ import { handleScheduled, liveDeliverySweepPorts } from "./scheduled";
 import type { Env } from "../env";
 import { makeFakeR2, makeFakeWorkflow } from "../test-helpers";
 
+// No registered run targets a branch on a schedule, so the branch-targeting
+// cases bind one: `contextful-measures` declares "17 2 * * *" with inputs
+// { repo, ref: refs/heads/main }, though the registry keeps it unscheduled.
+vi.mock("../registry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../registry")>();
+  const { contextfulMeasures } = await import("@fractalboxdev/flare-dispatch-runs");
+  const schedule = contextfulMeasures.schedules![0]!;
+  return {
+    ...actual,
+    schedulesByCron: (cron: string) =>
+      cron === schedule.cron ? [{ run: contextfulMeasures, schedule }] : actual.schedulesByCron(cron),
+  };
+});
+
 const makeEnv = (workflow: ReturnType<typeof makeFakeWorkflow>): Env =>
   ({
     HMAC_SECRET: "unused-by-scheduled",
@@ -73,7 +87,7 @@ describe("handleScheduled", () => {
     const resolveHead = vi.fn(async () => ({ installationId: 4242, sha: head }));
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
 
-    // `contextful-measures` subscribes to "17 2 * * *" with inputs { repo, ref: refs/heads/main }.
+    // The bound branch-targeting run subscribes to "17 2 * * *".
     await handleScheduled(env, "17 2 * * *", FIRED_AT, resolveHead);
 
     expect(resolveHead).toHaveBeenCalledWith("fractalboxdev/contextful", "main");
