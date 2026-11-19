@@ -58,6 +58,23 @@ describe("mergeOverlayLimits", () => {
       .toEqual({ subrequests: 10000000, cpu_ms: 30000 });
   });
 
+  it("replaces the overlay's crons with the template's", () => {
+    const stale = `{ "name": "flare-dispatch", "triggers": { "crons": ["17 2 * * *", "0 5 * * *"] } }`;
+    const merged = JSON.parse(mergeOverlayLimits(`{ "triggers": { "crons": ["0 5 * * *", "*/10 * * * *"] } }`, stale));
+    expect(merged.triggers.crons).toEqual(["0 5 * * *", "*/10 * * * *"]);
+  });
+
+  it("carries the committed wrangler.jsonc's crons into an overlay that predates them", () => {
+    const stale = `{ "name": "flare-dispatch", "triggers": { "crons": ["17 2 * * *", "17 3 * * SUN"] } }`;
+    const committed = (parseJsonc(template) as { triggers: { crons: string[] } }).triggers.crons;
+    expect(JSON.parse(mergeOverlayLimits(template, stale)).triggers.crons).toEqual(committed);
+  });
+
+  it("keeps the overlay's crons when the template declares none", () => {
+    const own = `{ "name": "flare-dispatch", "triggers": { "crons": ["0 5 * * *"] } }`;
+    expect(JSON.parse(mergeOverlayLimits("{}", own)).triggers.crons).toEqual(["0 5 * * *"]);
+  });
+
   it("leaves an overlay unchanged when the template sets no limits", () => {
     expect(parseJsonc(mergeOverlayLimits(`{ "name": "t" }`, overlay))).toEqual(parseJsonc(overlay));
   });

@@ -46,11 +46,11 @@ import {
 } from "@fractalboxdev/flare-dispatch-runs";
 
 /**
- * A run registered without its webhook triggers: no GitHub event starts it,
- * and it stays dispatchable by name. contextful uses FlareDispatch for tag
- * releases only, so its pull-request gate and cache warm fire on no push.
+ * A run registered without its webhook triggers and schedules: no GitHub event
+ * or cron starts it, and it stays dispatchable by name. contextful runs its
+ * gate and releases locally, so none of its runs starts on its own here.
  */
-const dispatchOnly = <I, O>(run: Run<I, O>): Run<I, O> => ({ ...run, triggers: [] });
+const dispatchOnly = <I, O>(run: Run<I, O>): Run<I, O> => ({ ...run, triggers: [], schedules: [] });
 
 /** name → Run. The single seam new runs are registered through. */
 const RUN_REGISTRY: Record<string, Run<unknown, unknown>> = {
@@ -78,7 +78,7 @@ const RUN_REGISTRY: Record<string, Run<unknown, unknown>> = {
   [selfHealPr.name]: selfHealPr as Run<unknown, unknown>,
   [refreshFixtures.name]: refreshFixtures as Run<unknown, unknown>,
   [releaseNotes.name]: releaseNotes as Run<unknown, unknown>,
-  [contextfulRelease.name]: contextfulRelease as Run<unknown, unknown>,
+  [contextfulRelease.name]: dispatchOnly(contextfulRelease) as Run<unknown, unknown>,
   [contextfulReleaseCell.name]: contextfulReleaseCell as Run<unknown, unknown>,
   [contextfulReleaseFormula.name]: contextfulReleaseFormula as Run<unknown, unknown>,
   [oxlint.name]: oxlint as Run<unknown, unknown>,
@@ -89,8 +89,8 @@ const RUN_REGISTRY: Record<string, Run<unknown, unknown>> = {
   [vitestShard.name]: vitestShard as Run<unknown, unknown>,
   [emailOtpLogin.name]: emailOtpLogin as Run<unknown, unknown>,
   [finopsAudit.name]: finopsAudit as Run<unknown, unknown>,
-  [contextfulMeasures.name]: contextfulMeasures as Run<unknown, unknown>,
-  [contextfulProtocol.name]: contextfulProtocol as Run<unknown, unknown>,
+  [contextfulMeasures.name]: dispatchOnly(contextfulMeasures) as Run<unknown, unknown>,
+  [contextfulProtocol.name]: dispatchOnly(contextfulProtocol) as Run<unknown, unknown>,
   [workerDeploy.name]: workerDeploy as Run<unknown, unknown>,
   // Presentation stage for a captured demo: consumes a product-demo
   // execution's demo-bundle/v1 and renders a deck (+ MP4 when the image

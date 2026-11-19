@@ -252,7 +252,7 @@ describe("native release owner", () => {
         github: { files: { [`${repo}:Cargo.toml`]: '[workspace.package]\nversion = "0.5.0"\n' } },
         sandboxProgram: { "release --plan": { exitCode: 0, stdout: plan } },
         childRuns: { pollFn: ids => ids.map(id => ({ executionId: id, status: "success", summaryJson: JSON.stringify(
-          id.startsWith("contextful-release-formula") ? { assets: ["control.rb", "edge.rb", "full.rb", "default.rb", "SHA256SUMS", "install.sh"] }
+          id.startsWith("contextful-release-formula") ? { assets: ["contextful-control.rb", "contextful-edge.rb", "contextful-full.rb", "contextful.rb", "SHA256SUMS", "install.sh"] }
             : summaries.find(summary => {
               const cell = spawned.find(child => child.instanceId === id)!.input as { profile: string; target: string };
               return summary.profile === cell.profile && summary.target === cell.target;
