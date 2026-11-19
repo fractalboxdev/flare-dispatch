@@ -1,6 +1,6 @@
 # Gate recipes
 
-This file specifies the gate and test recipes in the catalog (`check`, `oxlint`, `offload-test`, `security-gate`, `security-rescan`, `worker-deploy`, `deploy-smoke` and `sandbox-image`), the job-matrix primitive that fans one execution out into separately placed jobs, and the rule that maps each job's exit to a verdict. A red test never concludes `success`.
+This file specifies the gate and test recipes in the catalog (`check`, `oxlint`, `offload-test`, `security-gate`, `security-rescan`, `worker-deploy`, `deploy-smoke`, `sandbox-image`, `image-publish` and `stack-deploy`), the job-matrix primitive that fans one execution out into separately placed jobs, and the rule that maps each job's exit to a verdict. A red test never concludes `success`.
 
 ## Scope
 
@@ -38,6 +38,8 @@ The class in this table is the recipe's default; `resolveClass` ([profile.md](..
 | `worker-deploy` | `release` | 1800 s | `cloud-pinned` | `push` to the deploy branch, Actions dispatch | `workerDeploy` |
 | `deploy-smoke` | `release` | 300 s | `control` pool, no container | `worker-deploy` success, `deployment_status` success | `deploySmoke` |
 | `sandbox-image` | `required` on a pull request, `release` on publish | 3600 s | `cloud-pinned` on publish | `pull_request` and `push` to the default branch that change `sandboxImage.paths` | `sandboxImage` |
+| `image-publish` | `release` | 7200 s | `control` pool, no container; the build in the deploying organization's AWS CodeBuild project | `push` to `imagePublish.branch` that changes `imagePublish.paths`, Actions dispatch | `imagePublish` |
+| `stack-deploy` | `release` | 86400 s | `control` pool, no container; the apply in the stack's AWS CodeBuild project | `image-publish` success, Actions dispatch | `stackDeploy` |
 
 A repo manifest entry that these recipes read looks like this:
 
@@ -66,6 +68,40 @@ workerDeploy:
 deploySmoke:
   hosts: [app.example.com]
   paths: [/, /health]
+imagePublish:
+  branch: main
+  region: us-east-1
+  roleArn: arn:aws:iam::111122223333:role/fd-image-publish
+  project: app-images
+  registries: [111122223333.dkr.ecr.us-east-1.amazonaws.com/app]
+  assets:
+    - key: TOOL
+      repo: example-org/tool
+      tag: v1.4.0
+      name: tool-linux-arm64.tar.gz
+      sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+stackDeploy:
+  - stack: staging
+    after: image-publish
+    region: us-east-1
+    roleArn: arn:aws:iam::111122223333:role/fd-stack-staging
+    project: app-deploy-staging
+    rollout:
+      cluster: app-staging
+      services: [api, worker]
+    health:
+      urls: [https://staging.app.example.com/health]
+  - stack: production
+    after: image-publish
+    approval: required
+    region: us-east-1
+    roleArn: arn:aws:iam::111122223333:role/fd-stack-production
+    project: app-deploy-production
+    rollout:
+      cluster: app-production
+      services: [api, worker]
+    health:
+      urls: [https://app.example.com/health]
 ```
 
 ### Job matrix
@@ -308,6 +344,59 @@ sequenceDiagram
 
 *deploy graph · serial group, head re-check, credential added outside the job.*
 
+### AWS builds and stack deploys
+
+`image-publish` and `stack-deploy` form a second deploy graph, for a repository that builds container images, pushes them to a registry in the deploying organization's AWS account and applies an infrastructure stack that rolls them out. Both run in the `control` pool. The build and the apply run in AWS CodeBuild projects that the organization owns, and the control plane starts and watches them through the AWS API:
+
+- **No AWS credential is stored or leaves the control plane.** For each call the control plane mints an OIDC token (FD-PROV-050) and exchanges it with STS `AssumeRoleWithWebIdentity` for the role the manifest entry names. The token's `aud` is `flare-dispatch:<owner>/<repo>:<target>`, where `<target>` is `image-publish[:<label>]` or `stack:<stack>`, so the role's trust policy pins the repository and target, and `sub` is `<run>:<execution_id>`, so it pins the run. A manifest that names another repository's role cannot assume it.
+- **The build runs on the architecture its project names.** A CodeBuild project on an `ARM_CONTAINER` environment runs `linux/arm64` build steps natively, in privileged mode, and pushes to ECR under the project's service role. A Cloudflare Container has neither: it runs no privileged container, so it cannot register QEMU `binfmt_misc` handlers, and it serves `linux-amd64` alone.
+- **Waiting holds no container.** The run polls `BatchGetBuilds` and, for a rollout, ECS `DescribeServices` every 30 s, sleeping with `DurableClock.sleep` between polls ([MAMEKO-RUN-037](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/run-model.md)).
+- **One build per execution.** The control plane records the build it started for each execution and target before it reports the build as started, so a later epoch polls the recorded build and never starts a second one.
+- **Release assets reach the build by digest.** The control plane downloads each release asset the manifest names under the installation token of the asset's repository, writes it to `cas/<sha256>` and passes the build a presigned GET URL and the digest. The build holds no GitHub token.
+- **Approval is a recorded decision.** A stack whose entry sets `approval: required` waits before its apply for an `operators` identity to approve or reject the execution at `POST /v1/ops/stack-approvals` ([interfaces.md](../interfaces.md)). The decision binds the execution id and its commit.
+
+The build reports its image digests in the exported environment variable `FD_IMAGE_DIGESTS`, a JSON object from image name to `<registry>/<repository>@sha256:<hex>`. A buildspec exports it with `env.exported-variables`.
+
+```mermaid
+sequenceDiagram
+  accTitle: A push builds images in CodeBuild, then each stack applies after its approval and rolls out on ECS
+  participant GH as GitHub
+  box rgba(37,99,235,0.15) Control plane
+    participant CP as Control pool run
+    participant R2 as R2 cas
+  end
+  box rgba(217,119,6,0.15) Deploying organization's AWS account
+    participant STS as STS
+    participant CB as CodeBuild
+    participant ECS as ECS
+  end
+  GH->>CP: push, sha S, image-publish
+  CP->>GH: download release asset under installation token
+  CP->>R2: write cas/<sha256>, presign GET
+  CP->>STS: AssumeRoleWithWebIdentity, OIDC aud flare-dispatch:owner/repo:image-publish
+  STS-->>CP: credentials for 1 h
+  CP->>CB: StartBuild project, sourceVersion S, asset URL and digest
+  loop every 30 s, DurableClock.sleep
+    CP->>CB: BatchGetBuilds
+  end
+  CB-->>CP: SUCCEEDED, FD_IMAGE_DIGESTS
+  CP->>CP: dispatch.followOn stack-deploy per stack, images by digest
+  opt approval: required
+    loop every 30 s until a decision or approvalTimeoutSec
+      CP->>CP: read the decision for the execution and S
+    end
+  end
+  CP->>STS: AssumeRoleWithWebIdentity, aud flare-dispatch:owner/repo:stack:production
+  CP->>CB: StartBuild apply project, FD_STACK, FD_IMAGES
+  CB-->>CP: SUCCEEDED
+  loop every 30 s until COMPLETED or rollout.timeoutSec
+    CP->>ECS: DescribeServices
+  end
+  CP->>CP: probe health URLs, conclude the check
+```
+
+*AWS deploy graph · the control plane holds every credential; each wait is a durable sleep.*
+
 ## Requirements
 
 ### Every gate recipe
@@ -422,6 +511,43 @@ A release job's infrastructure retries are the parent's restarts of FD-GATE-060,
 - **FD-GATE-080** · phase 0 · `V-UNIT` `V-PROOF` `V-DIFF` — The control plane must place a publishing `sandbox-image` execution at class `release` under the `cloud-pinned` constraint on an executor that carries the label `container-artifact` ([executors.md](../executors.md) § Capability labels).
 - **FD-GATE-082** · phase 0 · `V-UNIT` — When a `sandbox-image` execution runs the smoke commands of a `linux/arm64` image on an executor that does not advertise `linux-arm64`, the recipe must run them under QEMU user-mode emulation with `--platform linux/arm64`, and if emulation is unavailable on that executor, then the recipe must record `failure` with the reason `image: <name> linux/arm64 emulation unavailable` and publish no image.
 
+### AWS builds
+
+These requirements hold for `image-publish` and `stack-deploy`, each of which runs a build in an AWS CodeBuild project.
+
+- **FD-GATE-116** · phase 2 · `V-UNIT` — The control plane must run every `image-publish` and `stack-deploy` execution in the `control` pool ([MAMEKO-EXEC-057](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/executors.md)), with no container and a container rate of 0 USD per hour.
+- **FD-GATE-117** · phase 2 · `V-UNIT` — Before the recipe calls an AWS API, it must obtain the role's credentials with STS `AssumeRoleWithWebIdentity` for the entry's `roleArn`, presenting an OIDC token from the control plane's issuer whose `aud` is `flare-dispatch:<owner>/<repo>:<target>` and whose `sub` is `<run>:<execution_id>` (FD-PROV-050), where `<target>` is `image-publish`, `image-publish:<label>` or `stack:<stack>`.
+- **FD-GATE-118** · phase 2 · `V-UNIT` — The control plane must hold the role's credentials only in the run's memory, and must not write them to an intent, a check summary, a log, the build's environment or the store.
+- **FD-GATE-119** · phase 2 · `V-UNIT` — If `AssumeRoleWithWebIdentity` fails, then the recipe must start no build and record `failure` with the reason `aws: assume-role <error code>`.
+- **FD-GATE-120** · phase 2 · `V-UNIT` — When the recipe starts a build, it must call CodeBuild `StartBuild` for the entry's `project` with `sourceVersion` equal to the execution's commit SHA and the environment overrides `FD_REPO`, `FD_SHA`, `FD_REF` and `FD_EXECUTION_ID`, and with no credential in any override.
+- **FD-GATE-121** · phase 2 · `V-UNIT` `V-SIM` — The control plane must start at most one build per execution and target, recording the build id before it reports the build as started; when a later epoch of the execution runs, the recipe must poll the recorded build and must not call `StartBuild`.
+- **FD-GATE-122** · phase 2 · `V-UNIT` — While a build runs, the recipe must read its status with `BatchGetBuilds` at 30 s intervals, sleeping with `DurableClock.sleep` between reads.
+- **FD-GATE-123** · phase 2 · `V-UNIT` — When a build ends, the recipe must take the verdict from its `buildStatus`: `SUCCEEDED` continues the recipe; `FAILED` is `failure` with the reason `build: <first failed phase> failed`; `TIMED_OUT` is `failure` with the reason `timeout: build`; `FAULT` is `failure` with the reason `infra: build fault`; and `STOPPED` that the recipe did not request is `failure` with the reason `build: stopped`.
+- **FD-GATE-124** · phase 2 · `V-UNIT` — If a build is still running 60 s before the execution's `deadline_at`, or the execution is cancelled while a build runs, then the recipe must call `StopBuild` for it and record `failure` with the reason `deadline`, or `cancelled` with the cancel cause.
+- **FD-GATE-125** · phase 2 · `V-UNIT` — If a CodeBuild, ECS or STS call fails with a network error or a 5xx status 3 times in a row, then the recipe must record `failure` with the reason `infra: aws <service> <operation>`.
+- **FD-GATE-126** · phase 2 · `V-UNIT` — When a build ends, the recipe must emit one `check.summary` intent naming the build id, its status, each phase's status and duration and the CloudWatch log group and stream, and must not copy any build log line into the summary.
+- **FD-GATE-127** · phase 2 · `V-UNIT` — If a manifest entry's `region` is not an AWS region name, its `roleArn` is not an IAM role ARN, or its `project` is empty, then the recipe must record `failure` with the reason `config: <field>` and call no AWS API.
+
+### `image-publish`
+
+- **FD-GATE-128** · phase 2 · `V-UNIT` — When a `push` to the manifest's `imagePublish.branch` (default the default branch) changes a file that matches `imagePublish.paths` (default `**`), or an Actions dispatch requests it, intake must request `image-publish` with the dedup key `image-publish[:<label>]:<owner>/<repo>:<sha>`.
+- **FD-GATE-129** · phase 2 · `V-UNIT` — Before it starts the build, for each entry of `imagePublish.assets` the control plane must download the asset named `name` of the release tagged `tag` in `repo` under the installation token for `repo`, write it to the object key `cas/<sha256>` and pass the build the overrides `FD_ASSET_<key>_URL`, a GET URL from the object-store presigner, and `FD_ASSET_<key>_SHA256`.
+- **FD-GATE-130** · phase 2 · `V-UNIT` — If an asset's repository has no installation of the GitHub App, its release or asset is absent, it exceeds 512 MiB, or its SHA-256 differs from the entry's `sha256`, then the recipe must start no build and record `failure` with the reason `asset: <key> <uninstalled | not found | too large | digest mismatch>`.
+- **FD-GATE-131** · phase 2 · `V-UNIT` — When an `image-publish` build succeeds, the recipe must read the build's exported variable `FD_IMAGE_DIGESTS` as a JSON object from image name to `<registry>/<repository>@sha256:<64 hex digits>`, and if it is absent, does not decode, is empty, or names a repository outside every prefix in `imagePublish.registries`, then the recipe must record `failure` with the reason `image: digests`.
+- **FD-GATE-132** · phase 2 · `V-UNIT` `V-REPLAY` — When an `image-publish` execution records `success`, the recipe must emit one `dispatch.followOn` intent per `stackDeploy` entry whose `after` is `image-publish`, labelled with the entry's `stack` and carrying the image digests as the input `images`.
+
+### `stack-deploy`
+
+- **FD-GATE-133** · phase 2 · `V-UNIT` — When a `dispatch.followOn` intent of an `image-publish` execution starts `stack-deploy`, intake must take the stack's entry from the repo manifest at the parent's commit and the `images` from the intent, and must refuse the intent where an image is not `<registry>/<repository>@sha256:<64 hex digits>`.
+- **FD-GATE-134** · phase 2 · `V-UNIT` `V-SIM` — The control plane must run `stack-deploy` executions for one repository and stack in the serial group `stack-deploy:<owner>/<repo>@<stack>`, with the dedup key `stack-deploy:<stack>:<owner>/<repo>:<sha>`.
+- **FD-GATE-135** · phase 2 · `V-UNIT` — Before the apply build starts, the recipe must read the head of the manifest's `stackDeploy[].branch` (default the default branch), and if the head is not the execution's commit and `requireHead` is not `false`, then it must record `cancelled` with the cause `superseded: branch head moved` and start no build.
+- **FD-GATE-136** · phase 2 · `V-UNIT` — Where a stack's entry sets `approval: required`, the recipe must emit a `check.summary` intent that names the execution id and the approval route, and must start no apply build until the control plane records a decision for that execution and its commit, reading it at 30 s intervals with `DurableClock.sleep` between reads.
+- **FD-GATE-137** · phase 2 · `V-UNIT` — If the recorded decision is `reject`, then the recipe must record `failure` with the reason `approval: rejected`; if no decision is recorded within the entry's `approvalTimeoutSec` (60 s to 43200 s, default 14400 s), then the recipe must record `cancelled` with the cause `approval: timeout`.
+- **FD-GATE-138** · phase 2 · `V-UNIT` — When the recipe starts the apply build, it must add to the overrides of FD-GATE-120 `FD_STACK`, the stack's name, and `FD_IMAGES`, the JSON of the execution's `images`.
+- **FD-GATE-139** · phase 2 · `V-UNIT` — Where a stack's entry names `rollout`, after the apply build succeeds the recipe must read ECS `DescribeServices` for `rollout.services` in `rollout.cluster` at 30 s intervals until every service's `PRIMARY` deployment has `rolloutState` `COMPLETED` and `runningCount` equal to `desiredCount`, within `rollout.timeoutSec` (60 s to 3600 s, default 1800 s).
+- **FD-GATE-140** · phase 2 · `V-UNIT` — If a rollout service is absent, its `PRIMARY` deployment's `rolloutState` is `FAILED`, or the rollout does not complete within `rollout.timeoutSec`, then the recipe must record `failure` with the reason `rollout: <service> <missing | failed | timeout>`.
+- **FD-GATE-141** · phase 2 · `V-UNIT` — Where a stack's entry names `health.urls`, after the rollout completes the recipe must probe each URL as FD-GATE-071, FD-GATE-072 and FD-GATE-074 probe an endpoint, refuse a URL whose scheme is not `https` with the reason `config: health.urls`, and record `failure` with the reason `health: <url> <status or error>` for each unhealthy URL.
+
 ### Security gate
 
 - **FD-GATE-083** · phase 2 · `V-UNIT` — The run catalog must ship the gate recipes `security-gate` and `security-rescan`, which a repo manifest enrolls with the key `securityGate`.
@@ -460,7 +586,9 @@ A release job's infrastructure retries are the parent's restarts of FD-GATE-060,
 
 ## Open items
 
-- TODO(maintainer): confirm that a Cloudflare Container can register QEMU `binfmt_misc` handlers for FD-GATE-082, and measure the emulated smoke slowdown against a native `linux-arm64` run.
+- TODO(maintainer): FD-GATE-082 cannot pass on a Cloudflare Container, which runs no privileged container and so cannot register QEMU `binfmt_misc` handlers. Decide whether `sandbox-image` builds its `linux/arm64` images through `image-publish` or only on an executor that advertises `linux-arm64`.
+- TODO(maintainer): decide whether the build ledger of FD-GATE-121 stops an orphaned build when an execution ends between `StartBuild` and the ledger write, or whether CodeBuild's `idempotencyToken`, which holds for 5 min, suffices.
+- TODO(operator): register the control plane's issuer as an IAM OIDC identity provider in each AWS account that `image-publish` or `stack-deploy` reaches, with each `flare-dispatch:<owner>/<repo>:<target>` audience as a client id.
 - TODO(maintainer): decide whether a finding that already exists at the base commit, in a lockfile or workflow the range changes, concludes `failure`, or whether the recipe subtracts the base commit's fingerprints. FD-GATE-091 concludes `failure` until this is decided.
 - TODO(maintainer): set the default `scan.advisoryEcosystems` from measured archive sizes; the npm archive is 209 MiB.
 - TODO(maintainer): the egress half of FD-GATE-110 on a Container pool, the git host as the only egress host while the checkout runs and none once a scanner starts, has no harness entry.
