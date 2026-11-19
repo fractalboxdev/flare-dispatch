@@ -149,6 +149,67 @@ export const SandboxImageEntrySchema = Schema.Struct({
 export type SandboxImageEntry = typeof SandboxImageEntrySchema.Type;
 
 /**
+ * The AWS fields of an `imagePublish` or `stackDeploy` entry (FD-GATE-117, FD-GATE-127). Decoding stays loose so the
+ * run, not the payload decoder, answers a bad value with `config: <field>`.
+ */
+export const AwsBuildFields = {
+  /** The AWS region of the STS, CodeBuild and ECS endpoints. */
+  region: Schema.String,
+  /** The IAM role the control plane assumes with its OIDC token. */
+  roleArn: Schema.String,
+  /** The CodeBuild project the build runs in. */
+  project: Schema.String,
+};
+
+/** One private release asset a build reads (FD-GATE-129, FD-GATE-130). */
+export const ReleaseAssetSchema = Schema.Struct({
+  /** The suffix of the asset's build overrides: `FD_ASSET_<key>_URL`, `FD_ASSET_<key>_SHA256`. */
+  key: Schema.String,
+  /** `<owner>/<repo>` of the release. */
+  repo: Schema.String,
+  tag: Schema.String,
+  /** The asset's file name in the release. */
+  name: Schema.String,
+  /** The asset's SHA-256, lower-case hex: the asset is pinned by digest and stored at `cas/<sha256>`. */
+  sha256: Schema.String,
+});
+export type ReleaseAsset = typeof ReleaseAssetSchema.Type;
+
+/** `imagePublish` (FD-GATE-116 to FD-GATE-132). */
+export const ImagePublishEntrySchema = Schema.Struct({
+  ...AwsBuildFields,
+  branch: Schema.optionalKey(Schema.String),
+  paths: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** The repository prefixes an image digest may name, `<registry>/<repository path>`. */
+  registries: Schema.Array(Schema.String),
+  assets: Schema.optionalKey(Schema.Array(ReleaseAssetSchema)),
+  /** The `stack-deploy` entry labels a successful publish starts (FD-GATE-132). */
+  stacks: Schema.optionalKey(Schema.Array(Schema.String)),
+  label: Schema.optionalKey(Schema.String),
+});
+export type ImagePublishEntry = typeof ImagePublishEntrySchema.Type;
+
+/** The ECS services a stack's rollout waits for (FD-GATE-139, FD-GATE-140). */
+export const RolloutSchema = Schema.Struct({
+  cluster: Schema.String,
+  services: Schema.Array(Schema.String),
+  timeoutSec: Schema.optionalKey(Schema.Number),
+});
+export type Rollout = typeof RolloutSchema.Type;
+
+/** `stackDeploy`, one entry per stack; the entry's label is the stack (FD-GATE-133 to FD-GATE-141). */
+export const StackDeployEntrySchema = Schema.Struct({
+  ...AwsBuildFields,
+  branch: Schema.optionalKey(Schema.String),
+  requireHead: Schema.optionalKey(Schema.Boolean),
+  approval: Schema.optionalKey(Schema.Literals(["required", "none"])),
+  approvalTimeoutSec: Schema.optionalKey(Schema.Number),
+  rollout: Schema.optionalKey(RolloutSchema),
+  health: Schema.optionalKey(Schema.Struct({ urls: Schema.Array(Schema.String) })),
+});
+export type StackDeployEntry = typeof StackDeployEntrySchema.Type;
+
+/**
  * `securityGate`, which enrolls a repository in `security-gate` and `security-rescan` (FD-GATE-083). The entry holds no
  * field: the scan bundle the deployment pins fixes the scanners, their flags and their suppression handling, so a
  * repository can name no command, scanner, flag or skip (FD-GATE-084). Any key fails the decode.
@@ -165,6 +226,8 @@ export const GateManifest = Schema.Struct({
   deploySmoke: Schema.optionalKey(DeploySmokeEntrySchema),
   sandboxImage: Schema.optionalKey(SandboxImageEntrySchema),
   securityGate: Schema.optionalKey(SecurityGateEntrySchema),
+  imagePublish: Schema.optionalKey(ImagePublishEntrySchema),
+  stackDeploy: Schema.optionalKey(Schema.Array(StackDeployEntrySchema)),
   warm: Schema.optionalKey(MatrixJobSchema),
 });
 export type GateManifest = typeof GateManifest.Type;

@@ -64,6 +64,18 @@ describe("declaration and router", () => {
           .handle("floorCanaryStart", () =>
             Effect.succeed({ execution_id: "e", pool: "agent", image_digest: "sha256:0" }),
           )
+          .handle("stackApproval", () =>
+            Effect.succeed({
+              execution_id: "e",
+              sha: "0".repeat(40),
+              stack: "production",
+              decision: "approve" as const,
+              decided_by: "operator",
+              reason: "r",
+              request_id: "q",
+              decided_at: 0,
+            }),
+          )
           .handle("floorCanaryVerdict", () =>
             Effect.succeed({
               execution_id: "e",

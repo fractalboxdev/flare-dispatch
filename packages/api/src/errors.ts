@@ -26,7 +26,7 @@ export const CODES = {
   ],
   404: ["not_found", "run_not_found", "execution_not_found"],
   405: ["method_not_allowed"],
-  409: ["conflict", "not_failed", "not_finished"],
+  409: ["conflict", "not_failed", "not_finished", "not_awaiting_approval"],
   413: ["payload_too_large"],
   422: ["installation_not_found"],
   429: ["rate_limited"],

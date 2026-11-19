@@ -5,6 +5,7 @@
 import { FlareDispatchApi } from "@fractalboxdev/flare-dispatch-api/declaration";
 import { apiError } from "@fractalboxdev/flare-dispatch-api/errors";
 import { CurrentIdentity } from "@fractalboxdev/flare-dispatch-api/identity";
+import { RequestId } from "@fractalboxdev/flare-dispatch-api/request-id";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Context, Effect, Match, Option } from "effect";
 import { HttpServerResponse } from "effect/http";
@@ -15,6 +16,7 @@ import { FloorCanary } from "./floor-canary.ts";
 import { acceptState, credentialsPage, ManifestConversion, startInstall } from "./install.ts";
 import { runOpsMigrations } from "./liveness.ts";
 import { SpendView, utcMonth } from "./spend.ts";
+import { StackApprovalDecisions } from "./stack-approvals.ts";
 import { phaseGateRecords } from "./verification/records.ts";
 
 /** The operability record the handlers read, and the clock they read it at. */
@@ -111,6 +113,31 @@ export const OperabilityHandlers = HttpApiBuilder.group(
                 Effect.fail(apiError("unavailable", `the floor canary is unreadable: ${e.reason}`)),
               ),
             );
+        }),
+      )
+      .handle("stackApproval", ({ payload }) =>
+        Effect.gen(function* () {
+          // The reason is checked before anything is read, so a request without one records nothing (FD-IFC-107).
+          const reason = payload.reason?.trim() ?? "";
+          if (reason === "")
+            return yield* apiError("reason_required", "a stack approval needs a reason");
+          const decisions = yield* Effect.serviceOption(StackApprovalDecisions);
+          if (Option.isNone(decisions))
+            return yield* apiError("not_configured", "this deploy records no stack approvals");
+          const identity = yield* CurrentIdentity;
+          // The operator gate admits only an Access identity in `operators` (FD-IFC-016).
+          if (identity._tag !== "Access")
+            return yield* apiError(
+              "forbidden",
+              "a stack approval needs an operator's Access identity",
+            );
+          return yield* decisions.value.decide({
+            executionId: payload.execution_id,
+            decision: payload.decision,
+            identity: identity.id,
+            reason,
+            requestId: yield* RequestId,
+          });
         }),
       )
       .handle("spend", () =>

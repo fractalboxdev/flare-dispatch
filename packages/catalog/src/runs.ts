@@ -23,7 +23,13 @@ import {
 import { runGateJob } from "./job.ts";
 import { runOxlint } from "./oxlint.ts";
 import { localContentArtifacts, type GateArtifacts } from "./ports.ts";
-import { canaryRun, deploySmokeRun, offloadTestRun } from "./control-runs.ts";
+import {
+  canaryRun,
+  deploySmokeRun,
+  imagePublishRun,
+  offloadTestRun,
+  stackDeployRun,
+} from "./control-runs.ts";
 import { defineGateRun } from "./gate-run.ts";
 import { runSandboxImage } from "./sandbox-image.ts";
 import { runSecurityGate, runSecurityRescan, type ScanServices } from "./security-gate.ts";
@@ -47,7 +53,7 @@ export const checkRun = define(checkSpec, CheckInput, runCheck);
 export const oxlintRun = define(oxlintSpec, OxlintInput, runOxlint);
 export const gateJobRun = define(gateJobSpec, GateJobInput, runGateJob);
 export const workerDeployRun = define(workerDeploySpec, WorkerDeployInput, runWorkerDeploy);
-export { deploySmokeRun, offloadTestRun };
+export { deploySmokeRun, imagePublishRun, offloadTestRun, stackDeployRun };
 export type { LeaseLayerContext };
 export const sandboxImageRun = define(sandboxImageSpec, SandboxImageInput, runSandboxImage);
 export const securityGateRun = define(securityGateSpec, SecurityGateInput, runSecurityGate);
@@ -62,6 +68,8 @@ export const registry = [
   workerDeployRun,
   deploySmokeRun,
   sandboxImageRun,
+  imagePublishRun,
+  stackDeployRun,
   securityGateRun,
   securityRescanRun,
   ...agenticRuns,

@@ -14,6 +14,10 @@ export class ExecutionLease extends Context.Service<
     readonly run: string;
     /** The run's input as its schema decoded it. */
     readonly input: unknown;
+    /** The execution's `deadline_at`, epoch milliseconds, where the payload carries one. */
+    readonly deadlineAt?: number;
+    /** The lease's scope id, the repository `<owner>/<repo>` the execution's record holds. */
+    readonly scopeId?: string;
   }
 >()("@fractalboxdev/flare-dispatch-catalog/ExecutionLease") {}
 
@@ -43,6 +47,8 @@ interface LeasePayload {
   readonly execution_id: string;
   readonly epoch: number;
   readonly input: unknown;
+  readonly deadline_at?: number;
+  readonly scope_id?: string;
 }
 
 /**
@@ -73,6 +79,8 @@ export const perExecution = <R extends RunBody, A>(
                 epoch: payload.epoch,
                 run: run.spec.name,
                 input: payload.input,
+                ...(payload.deadline_at === undefined ? {} : { deadlineAt: payload.deadline_at }),
+                ...(payload.scope_id === undefined ? {} : { scopeId: payload.scope_id }),
               }),
             ),
           ),

@@ -5,6 +5,9 @@ import { Match, Option, Schema } from "effect";
 import type { DispatchEvent, WebhookDelivery } from "./dispatch-event.ts";
 import {
   CheckInput,
+  StackDeployRequest,
+  type ImagePublishInput,
+  type StackDeployInput,
   OffloadTestInput,
   OxlintInput,
   SecurityRescanInput,
@@ -17,7 +20,9 @@ import {
   globMatches,
   type GateContext,
   type GateManifest,
+  type ImagePublishEntry,
   type MatrixEntry,
+  type StackDeployEntry,
   type SandboxImageEntry,
   type WorkerDeployEntry,
 } from "./manifest.ts";
@@ -214,6 +219,86 @@ export const sandboxImageDecoder = (entry: SandboxImageEntry) =>
         : Option.none();
     return Option.none();
   });
+
+/**
+ * `image-publish` on a push to `imagePublish.branch` (default the default branch) that changes a path matching
+ * `imagePublish.paths` (default every path), or a dispatch (FD-GATE-128). Every input field comes from the event and
+ * the manifest entry; a dispatch's inputs supply none.
+ */
+export const imagePublishDecoder = (entry: ImagePublishEntry) =>
+  either(
+    webhook((d): Option.Option<ImagePublishInput> => {
+      if (d.event !== "push") return Option.none();
+      const branch = entry.branch ?? d.repository.defaultBranch;
+      if (d.ref !== `refs/heads/${branch}`) return Option.none();
+      const globs = entry.paths ?? ["**"];
+      const touched = (d.changedPaths ?? []).some((p) => globs.some((g) => globMatches(g, p)));
+      return touched
+        ? Option.some({ scope: d.repository.fullName, sha: d.after, ref: d.ref, entry })
+        : Option.none();
+    }),
+    (event: DispatchEvent): Option.Option<ImagePublishInput> =>
+      Match.value(event).pipe(
+        Match.tag("dispatch", "mcp", (e) =>
+          e.run === "image-publish"
+            ? Option.some({ scope: e.repo, sha: e.sha, ref: e.ref, entry })
+            : Option.none(),
+        ),
+        Match.orElse(() => Option.none()),
+      ),
+  );
+
+const branchOfRef = (ref: string): string | undefined =>
+  ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : undefined;
+
+/**
+ * The `stack-deploy` input of one stack: the manifest entry labelled with the stack, the commit, and the images the
+ * request supplies. The branch is `branch` of the entry, else the branch the ref names (FD-GATE-133, FD-GATE-135).
+ */
+export const stackDeployInputOf = (
+  entry: StackDeployEntry,
+  stack: string,
+  context: { readonly scope: string; readonly sha: string; readonly ref: string },
+  request: unknown,
+): Option.Option<StackDeployInput> => {
+  const branch = entry.branch ?? branchOfRef(context.ref);
+  if (branch === undefined) return Option.none();
+  return Option.map(Schema.decodeUnknownOption(StackDeployRequest)(request), ({ images }) => ({
+    ...context,
+    stack,
+    branch,
+    entry,
+    images,
+  }));
+};
+
+/**
+ * `stack-deploy` on a dispatch for the entry's stack, the entry's label. The manifest entry fixes the role, the
+ * project and the approval; the dispatch supplies the images alone, so no caller can drop a required approval
+ * (FD-GATE-133, FD-GATE-136).
+ */
+export const stackDeployDecoder =
+  (entry: StackDeployEntry, stack: string | null) =>
+  (event: DispatchEvent): Option.Option<StackDeployInput> =>
+    stack === null
+      ? Option.none()
+      : Match.value(event).pipe(
+          Match.tag("dispatch", "mcp", (e) =>
+            e.run === "stack-deploy"
+              ? stackDeployInputOf(
+                  entry,
+                  stack,
+                  { scope: e.repo, sha: e.sha, ref: e.ref },
+                  e.inputs,
+                )
+              : Option.none(),
+          ),
+          Match.orElse(() => Option.none()),
+        );
+
+/** The serial group of one repository and stack (FD-GATE-134). */
+export const stackDeploySerialGroup = (scope: string, stack: string): string =>
+  `stack-deploy:${scope}@${stack}`;
 
 /** The commit-scoped dedup key of FD-INT-009, shared by a push and a dispatch of one commit (FD-GATE-062). */
 export const workerDeployDedupKey = (scope: string, sha: string, label?: string): string =>

@@ -52,6 +52,12 @@ export const FD_REASON_KINDS = {
   writeback: "policy",
   intent: "policy",
   release: "policy",
+  build: "finding",
+  rollout: "finding",
+  health: "finding",
+  asset: "finding",
+  aws: "infra",
+  approval: "policy",
 } as const satisfies Record<string, ReasonCategory>;
 
 export type ReasonKind = keyof typeof MAMEKO_REASON_KINDS | keyof typeof FD_REASON_KINDS;

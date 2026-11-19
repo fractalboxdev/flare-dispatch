@@ -62,6 +62,12 @@ FlareDispatch's run catalogue declares the failure reason kinds below in additio
 | `writeback` | `policy` | `writeback: <first reason kind>` | [runs/agentic.md](runs/agentic.md) |
 | `intent` | `policy` | `intent: undeclared kind` | [runs/agentic.md](runs/agentic.md) |
 | `release` | `policy` | `release: tag not on default branch`, `release: tag moved` | [runs/gate.md](runs/gate.md) |
+| `build` | `finding` | `build: <phase> failed`, `build: stopped` | [runs/gate.md](runs/gate.md) |
+| `rollout` | `finding` | `rollout: <service> missing`, `rollout: <service> failed`, `rollout: <service> timeout` | [runs/gate.md](runs/gate.md) |
+| `health` | `finding` | `health: <url> <status or error>` | [runs/gate.md](runs/gate.md) |
+| `asset` | `finding` | `asset: <key> uninstalled`, `asset: <key> not found`, `asset: <key> too large`, `asset: <key> digest mismatch` | [runs/gate.md](runs/gate.md) |
+| `aws` | `infra` | `aws: assume-role <error code>`, `aws: <service> <operation> <error code>` | [runs/gate.md](runs/gate.md) |
+| `approval` | `policy` | `approval: rejected`, `approval: timeout` | [runs/gate.md](runs/gate.md) |
 | `provenance` | `policy` | `provenance: <check>` | [provenance.md](provenance.md) |
 
 ### Cancel causes and not-applicable details
