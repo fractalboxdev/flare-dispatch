@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { ControlPlaneEnv } from "../src/config.ts";
 import {
   launchKeysOf,
+  mintedGrants,
   POOL_DECLARATIONS,
   poolSettings,
   poolsServing,
@@ -224,18 +225,30 @@ describe("Container pools", () => {
     expect(triage.agent.map((g) => g.name)).toEqual(["model-gateway"]);
   });
 
-  it("[FD-IFC-102] [FD-IFC-103] control-plane-read covers GET under the dispatcher's executions path alone, in ci-triage-pr's agent phase alone", () => {
+  it("[FD-IFC-102] [FD-IFC-103] control-plane-read covers GET under the dispatcher's executions and logs paths alone, in ci-triage-pr's agent phase alone", () => {
     const settings = poolSettings(env({ PUBLIC_ORIGIN: "https://ci.example.com/" }), profile);
     const agent = launchGrants(settings, "ci-triage-pr").agent;
-    expect(agent.map((g) => g.name)).toEqual(["model-gateway", "control-plane-read"]);
-    expect(agent.find((g) => g.name === "control-plane-read")).toMatchObject({
-      host: "ci.example.com",
-      methods: ["GET"],
-      pathPrefix: "/v1/executions",
-      maxBodyBytes: 0,
-    });
+    expect(agent.map((g) => g.name)).toEqual([
+      "model-gateway",
+      "control-plane-read",
+      "control-plane-read",
+    ]);
+    const reads = agent.filter((g) => g.name === "control-plane-read");
+    for (const [i, pathPrefix] of ["/v1/executions", "/v1/logs/"].entries())
+      expect(reads[i]).toMatchObject({
+        host: "ci.example.com",
+        methods: ["GET"],
+        pathPrefix,
+        maxBodyBytes: 0,
+      });
     // The lease's token is the credential; the grant carries no value of its own.
-    expect(agent.find((g) => g.name === "control-plane-read")!.credential).toBeUndefined();
+    expect(reads.every((g) => g.credential === undefined)).toBe(true);
+    // One name, so the controller mints one credential for both paths.
+    expect(
+      mintedGrants(
+        env({ PUBLIC_ORIGIN: "https://ci.example.com/", CONTROL_PLANE_READ_SECRET: "s" }),
+      ),
+    ).toEqual(["control-plane-read"]);
     expect(launchGrants(settings, "ci-triage-pr").setup.map((g) => g.name)).toEqual(["git-remote"]);
     const request = (method: string, path: string, host = "ci.example.com") =>
       decide(
@@ -245,7 +258,8 @@ describe("Container pools", () => {
       );
     for (const path of [
       "/v1/executions?repository=acme%2Fapp&status=done&finished_since=0&limit=200",
-      "/v1/executions/01JEXEC0000000000000000000/logs?format=text",
+      "/v1/logs/01JEXEC0000000000000000000?format=text",
+      `/v1/logs/01JEXEC0000000000000000000/${encodeURIComponent("1/abc/stdout-0-1.ndjson")}`,
     ])
       expect(request("GET", path), path).toEqual({
         _tag: "Admit",
@@ -255,6 +269,7 @@ describe("Container pools", () => {
     expect(request("POST", "/v1/executions/01JEXEC0000000000000000000/cancel")._tag).toBe("Deny");
     expect(request("GET", "/v1/ops/health")._tag).toBe("Deny");
     expect(request("GET", "/v1/artifacts/a1")._tag).toBe("Deny");
+    expect(request("POST", "/v1/logs/01JEXEC0000000000000000000")._tag).toBe("Deny");
     expect(request("GET", "/v1/executions", "api.github.com")._tag).toBe("Deny");
     // No other run holds the grant in either phase.
     for (const run of Object.keys(RUN_CATALOG).filter((r) => r !== "ci-triage-pr")) {

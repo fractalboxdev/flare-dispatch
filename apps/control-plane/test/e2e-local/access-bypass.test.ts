@@ -1,10 +1,14 @@
-// The paths the committed Access configuration bypasses, reached over HTTP with no Access JWT: Access in front of the
-// deployed Worker lets these requests through, so the Worker runs each surface's own identity check (FD-OPS-088). Each
-// bypassed path has a probe here that a request without the surface's credential is refused and, where the Worker
-// serves the surface, that one with it is admitted.
+// The machine paths, reached over HTTP with no Access JWT: no Access application covers them, so the Worker runs each
+// surface's own identity check (FD-OPS-088). Each machine path has a probe here that a request without the surface's
+// credential is refused and, where the Worker serves the surface, that one with it is admitted.
 import { mintLinkToken } from "@fractalboxdev/flare-dispatch-api";
 import { signCompileCacheToken } from "@fractalboxdev/flare-dispatch-cache";
-import { ACCESS_BYPASS, bypassed } from "@fractalboxdev/flare-dispatch-ops";
+import {
+  accessCovers,
+  HUMAN_PATHS,
+  isMachinePath,
+  MACHINE_PATHS,
+} from "@fractalboxdev/flare-dispatch-ops";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { signControlPlaneReadToken } from "../../src/control-plane-read.ts";
 import { signDeployClaimToken } from "../../src/deploy-claim.ts";
@@ -104,7 +108,7 @@ const compileCacheToken = (secret: string) =>
     expiresAt: Date.now() + 600_000,
   });
 
-/** One probe per bypassed surface, keyed by the surface `ACCESS_BYPASS` names. */
+/** One probe per machine surface, keyed by the surface `MACHINE_PATHS` names. */
 const probes: Readonly<Record<string, () => Promise<void>>> = {
   webhook: async () => {
     const forged = stack.github.delivery("ping", "ping.json", "another-secret");
@@ -183,12 +187,12 @@ const probes: Readonly<Record<string, () => Promise<void>>> = {
     expect(await errorOf(none)).toBe("unauthenticated");
     await leaseReadProbe(path);
   },
-  "log aggregate": async () => {
-    const path = `/v1/executions/${EXECUTION}/logs`;
+  log: async () => {
+    const path = `/v1/logs/${EXECUTION}`;
     await linkProbe("logs", EXECUTION, path)();
     await leaseReadProbe(path);
+    await linkProbe("logs", EXECUTION, `/v1/logs/${EXECUTION}/run.log`)();
   },
-  log: linkProbe("logs", EXECUTION, `/v1/executions/${EXECUTION}/logs/run.log`),
   artifact: linkProbe("artifact", ARTIFACT, `/v1/artifacts/${ARTIFACT}`),
   "compile-cache": async () => {
     const path = `/v1/compile-cache/${REPOSITORY}/ns/key`;
@@ -280,37 +284,52 @@ const probes: Readonly<Record<string, () => Promise<void>>> = {
 const concrete = (path: string) =>
   path.replace(/:[A-Za-z_]+/g, "01E2EBYPASS000000000000000").replace(/\*$/, "x");
 
-describe("the paths Access bypasses", () => {
-  it("[FD-OPS-088] bypasses every route whose surface names an identity other than the Access JWT, and no Access-only route", () => {
+/** Whether an Access application on the human paths covers a request path. */
+const human = (path: string) => HUMAN_PATHS.some((h) => accessCovers(h.path, path));
+
+describe("the machine paths Access leaves uncovered", () => {
+  it("[FD-OPS-088] lists as a machine path every route whose surface names an identity other than the Access JWT, and covers every Access-only route with a human path", () => {
     const outside = router.routes.filter(
       (r) => r.surface._tag !== "Access" && r.surface._tag !== "AccessOrActions",
     );
     expect(outside.length).toBeGreaterThan(5);
     for (const r of outside)
-      expect({ path: r.path, bypassed: bypassed(concrete(r.path)) }).toEqual({
+      expect({
         path: r.path,
-        bypassed: true,
+        machine: isMachinePath(concrete(r.path)),
+        human: human(concrete(r.path)),
+      }).toEqual({
+        path: r.path,
+        machine: true,
+        human: false,
       });
     for (const r of router.routes.filter((x) => x.surface._tag === "Access"))
-      expect({ path: r.path, bypassed: bypassed(concrete(r.path)) }).toEqual({
+      expect({
         path: r.path,
-        bypassed: false,
+        machine: isMachinePath(concrete(r.path)),
+        human: human(concrete(r.path)),
+      }).toEqual({
+        path: r.path,
+        machine: false,
+        human: true,
       });
-    // The executions list takes a lease's control-plane read token beside the Access JWT.
-    expect(bypassed("/v1/executions")).toBe(true);
-    expect(bypassed(`/v1/executions/${EXECUTION}/failure-summary`)).toBe(false);
+    // The executions list takes a lease's control-plane read token beside the Access JWT; one execution is human.
+    expect(isMachinePath("/v1/executions")).toBe(true);
+    expect(human("/v1/executions")).toBe(false);
+    expect(isMachinePath(`/v1/executions/${EXECUTION}/failure-summary`)).toBe(false);
+    expect(human(`/v1/executions/${EXECUTION}/failure-summary`)).toBe(true);
     // The connect upgrade, the compile cache, the deploy claim and the model route are answered before the router.
-    expect(bypassed("/v1/executors/connect")).toBe(true);
-    expect(bypassed(`/v1/compile-cache/${REPOSITORY}/ns/key`)).toBe(true);
-    expect(bypassed(`/v1/deploy-claims/${EXECUTION}`)).toBe(true);
-    expect(bypassed("/v1/model/completions")).toBe(true);
+    expect(isMachinePath("/v1/executors/connect")).toBe(true);
+    expect(isMachinePath(`/v1/compile-cache/${REPOSITORY}/ns/key`)).toBe(true);
+    expect(isMachinePath(`/v1/deploy-claims/${EXECUTION}`)).toBe(true);
+    expect(isMachinePath("/v1/model/completions")).toBe(true);
   });
 
-  it("[FD-OPS-088] the Worker runs each bypassed surface's own identity check on a request with no Access JWT", async () => {
-    expect(Object.keys(probes).sort()).toEqual(ACCESS_BYPASS.map((b) => b.surface).sort());
-    for (const b of ACCESS_BYPASS)
-      await probes[b.surface]!().catch((e: unknown) => {
-        throw new Error(`${b.surface} ${b.path}: ${String(e)}`);
+  it("[FD-OPS-088] the Worker runs each machine surface's own identity check on a request with no Access JWT", async () => {
+    expect(Object.keys(probes).sort()).toEqual(MACHINE_PATHS.map((m) => m.surface).sort());
+    for (const m of MACHINE_PATHS)
+      await probes[m.surface]!().catch((e: unknown) => {
+        throw new Error(`${m.surface} ${m.path}: ${String(e)}`);
       });
   });
 });

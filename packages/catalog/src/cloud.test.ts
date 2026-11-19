@@ -60,8 +60,8 @@ describe("the model-gateway grant", () => {
     expect(auth(`https://${HOST}/v1/model/completions`, { authorization: "Bearer forged" })).toBe(
       `Bearer ${LEASE_TOKEN}`,
     );
-    expect(auth(`https://${HOST}/v1/executions/x-1/logs`)).toBeNull();
-    expect(auth(`https://${HOST}/v1/model/../executions/x-1/logs`)).toBeNull();
+    expect(auth(`https://${HOST}/v1/logs/x-1`)).toBeNull();
+    expect(auth(`https://${HOST}/v1/model/../logs/x-1`)).toBeNull();
     expect(
       auth(`https://${HOST}/v1/dispatch/check`, { authorization: "Bearer forged" }),
     ).toBeNull();

@@ -39,6 +39,7 @@ import {
 import {
   APP_PERMISSIONS,
   DeployTarget,
+  HUMAN_PATHS,
   MERGE_GATE_CHECKS,
   objectReadWritePolicy,
   placeholderOverlay,
@@ -291,8 +292,8 @@ const deployedBy = async (argv: readonly string[]) => {
   const received = new Map<string, string>();
   const target = () =>
     Layer.succeed(DeployTarget, {
-    readLocalFile: () => Effect.succeed(null),
-    writeScanBundle: () => Effect.void,
+      readLocalFile: () => Effect.succeed(null),
+      writeScanBundle: () => Effect.void,
       // Each Worker holds the secrets the control plane's composition reads, as the operator sets them before the
       // first deploy (FD-ARCH-039).
       deployedSettings: () =>
@@ -335,9 +336,16 @@ const deployedBy = async (argv: readonly string[]) => {
       floorCanary: () => Effect.succeed({ status: "passed" as const, digest: "sha256:0" }),
       writeRecord: () => Effect.void,
       raiseAlarm: () => Effect.void,
-      // The hostname application exists with the overlay's AUD tag, as on an account set up before its first deploy.
+      // The Access application on the human paths exists with the overlay's AUD tag, as on an account set up before
+      // its first deploy.
       ...accessStore([
-        { id: "hostname", domain: values.hostnames["dispatcher"]!, aud: values.access.aud },
+        {
+          id: "human",
+          aud: values.access.aud,
+          destinations: HUMAN_PATHS.map((h) => ({
+            uri: `${values.hostnames["dispatcher"]!}${h.path}`,
+          })),
+        },
       ]),
     });
   const service = makeOperability({

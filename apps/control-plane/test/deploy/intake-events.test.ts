@@ -59,8 +59,6 @@ const deployedVars = async (overlay: OverlayValues): Promise<Record<string, unkn
     writeRecord: () => Effect.void,
     raiseAlarm: () => Effect.void,
     accessApplications: Effect.succeed([]),
-    putAccessApplication: () => Effect.void,
-    deleteAccessApplication: () => Effect.void,
   });
   const fd = makeOperability({
     fail: (message) => new Error(message),

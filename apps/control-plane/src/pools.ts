@@ -94,8 +94,11 @@ const GIT_METHODS = ["GET", "POST"];
 /** The headers a job's GitHub REST client sends beside an HTTPS client's own. */
 const GITHUB_API_HEADERS = [...CLIENT_HEADERS, "x-github-api-version"];
 
-/** The path prefix of the executions list and the log aggregate, the control-plane reads a lease's token serves. */
-export const CONTROL_PLANE_READ_PATH = "/v1/executions";
+/**
+ * The path prefixes of the control-plane reads a lease's token serves: the executions list, and the logs under
+ * `/v1/logs/`.
+ */
+export const CONTROL_PLANE_READ_PATHS = ["/v1/executions", "/v1/logs/"] as const;
 
 /**
  * The grant catalogue each Container's outbound handler decides over (MAMEKO-ISO-021): `git-remote`, the repository's git
@@ -103,8 +106,9 @@ export const CONTROL_PLANE_READ_PATH = "/v1/executions";
  * Worker holds (FD-GATE-066); `deploy-claim`, `POST` to the dispatcher's deploy-claim route alone, where
  * `worker-deploy` presents its lease's deploy-claim token (FD-GATE-067); `model-gateway`, `POST` to the dispatcher's
  * model route alone, which an agentic recipe reaches in its `agent` phase (FD-AGT-010); `control-plane-read`, `GET`
- * under the dispatcher's `/v1/executions` path alone, where `ci-triage-pr` reads its repository's executions and
- * their logs under its lease's control-plane read token (FD-IFC-102, FD-IFC-103); and `github-api-read`, `GET` of
+ * under the dispatcher's `/v1/executions` and `/v1/logs/` paths alone, where `ci-triage-pr` reads its repository's
+ * executions and their logs under its lease's control-plane read token (FD-IFC-102, FD-IFC-103), one grant per path
+ * under the one name, so the controller mints one credential for both; and `github-api-read`, `GET` of
  * GitHub's repository routes with no credential, which answer a public repository's reads alone. `cf-api` carries no
  * credential on a deploy without that token, so a request under it leaves unauthenticated and the API refuses it.
  * `deploy-claim` attaches no credential. `model-gateway` and `control-plane-read` name no credential here: each is a
@@ -164,14 +168,14 @@ export const poolGrants = (
             maxBodyBytes: MODEL_REQUEST_MAX_BYTES,
             headers: CLIENT_HEADERS,
           },
-          {
+          ...CONTROL_PLANE_READ_PATHS.map((pathPrefix) => ({
             name: CONTROL_PLANE_READ_CREDENTIAL,
             host: dispatcher,
             methods: ["GET"],
-            pathPrefix: CONTROL_PLANE_READ_PATH,
+            pathPrefix,
             maxBodyBytes: 0,
             headers: CLIENT_HEADERS,
-          },
+          })),
         ]),
   ];
 };

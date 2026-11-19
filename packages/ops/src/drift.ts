@@ -22,10 +22,15 @@ import { CONTROL_POOL } from "@fractalboxdev/mameko-kernel";
 import type { ProfileDocument } from "@fractalboxdev/mameko-ports";
 import { Effect, Schema } from "effect";
 import {
-  accessChanges,
-  accessShape,
-  type CommittedAccess,
+  accessPathsOn,
+  bypasses,
+  decidingApplications,
+  HUMAN_PATHS,
+  MACHINE_PATHS,
+  pathMatches,
+  samplePath,
   type DeployedAccessApplication,
+  type DispatcherAccess,
 } from "./access-application.ts";
 import type { OverlayValues } from "./overlay.ts";
 import { placeholdersOf, type WorkerConfig } from "./render.ts";
@@ -574,56 +579,62 @@ export const rulesetCheck = (required: readonly string[]): readonly Finding[] =>
     );
 
 /**
- * The hostname application's AUD tag against the overlay's `access.aud` (FD-OPS-064, FD-OPS-088). The dispatcher checks
- * every Access JWT against `access.aud`, so on a mismatch it rejects each request Access lets through. No finding when
- * the account holds no application on the hostname.
+ * The account's Access applications on the dispatcher's hostname against its paths (FD-OPS-088). Each machine path
+ * must be reachable without Access: no application covers it, or the application that decides it bypasses Access; an
+ * application that does not bypass on a path below a machine pattern fails that pattern too. Each human path must be
+ * decided by applications none of which bypasses, and each one's AUD tag must be the overlay's `access.aud`,
+ * the AUD the dispatcher checks every Access JWT against (FD-OPS-064). Applications on other hostnames are not read.
  */
-export const accessAudCheck = (
-  committed: CommittedAccess,
+export const accessCheck = (
+  expected: DispatcherAccess,
   deployed: readonly DeployedAccessApplication[],
 ): readonly Finding[] => {
-  const app = deployed.find((d) => d.domain === committed.hostname);
-  if (app === undefined || app.aud === committed.aud) return [];
-  return [
-    fail(
-      "access",
-      `access.${committed.hostname}.aud`,
-      `the hostname's Access application has AUD ${show(app.aud)}, the overlay's access.aud is ${JSON.stringify(committed.aud)}: set access.aud to the application's AUD and deploy again`,
-    ),
-  ];
-};
-
-/**
- * Each difference between the Access applications on the dispatcher's hostname and the committed ones (FD-OPS-088): a
- * committed application absent, one whose name, domain, session or policies differ, one the commit does not hold, and
- * a hostname application whose AUD tag is not the overlay's `access.aud`.
- */
-export const accessDrift = (
-  committed: CommittedAccess,
-  deployed: readonly DeployedAccessApplication[],
-): readonly Finding[] => {
-  const changes = accessChanges(committed, deployed);
-  const live = new Map(deployed.map((d) => [d.id, d]));
-  return [
-    ...changes.create.map((a) =>
-      fail("access", `access.${a.domain}`, "a committed Access application is absent"),
-    ),
-    ...changes.update.map((u) =>
+  const host = expected.hostname;
+  const apps = deployed.filter((a) => accessPathsOn(host, a).length > 0);
+  const named = (list: readonly DeployedAccessApplication[]) =>
+    list.map((a) => JSON.stringify(a.name ?? a.id)).join(", ");
+  const out: Finding[] = [];
+  for (const m of MACHINE_PATHS) {
+    const blocking = new Set([
+      ...decidingApplications(host, apps, samplePath(m.path)).filter((a) => !bypasses(a)),
+      ...apps.filter(
+        (a) =>
+          !bypasses(a) &&
+          accessPathsOn(host, a).some((p) => p !== "" && pathMatches(m.path, samplePath(p))),
+      ),
+    ]);
+    if (blocking.size > 0)
+      out.push(
+        fail(
+          "access",
+          `access.${host}${m.path}`,
+          `Access application ${named([...blocking])} covers the ${m.surface} path, which must be reachable without Access: its callers present ${m.identity}, never an Access login`,
+        ),
+      );
+  }
+  const audMismatch = new Map<string, DeployedAccessApplication>();
+  for (const h of HUMAN_PATHS) {
+    const deciding = decidingApplications(host, apps, samplePath(h.path));
+    const gating = deciding.filter((a) => !bypasses(a));
+    if (gating.length === 0 || gating.length < deciding.length)
+      out.push(
+        fail(
+          "access",
+          `access.${host}${h.path}`,
+          `no Access application covers the ${h.surface} path without a bypass policy: cover it with an application whose AUD is access.aud`,
+        ),
+      );
+    for (const a of gating) if (a.aud !== expected.aud) audMismatch.set(a.id, a);
+  }
+  for (const a of audMismatch.values())
+    out.push(
       fail(
         "access",
-        `access.${u.application.domain}`,
-        `deployed ${JSON.stringify(accessShape(live.get(u.id)!))}, committed ${JSON.stringify(accessShape(u.application))}`,
+        `access.${host}.aud`,
+        `Access application ${named([a])} has AUD ${show(a.aud)}, the overlay's access.aud is ${JSON.stringify(expected.aud)}: the dispatcher rejects every Access JWT it issues; set access.aud to the application's AUD`,
       ),
-    ),
-    ...changes.remove.map((r) =>
-      fail(
-        "access",
-        `access.${r.domain}`,
-        "an Access application on the dispatcher's hostname the committed configuration does not hold",
-      ),
-    ),
-    ...accessAudCheck(committed, deployed),
-  ];
+    );
+  return out;
 };
 
 /** One budget of the deploying organization's AWS account, as AWS Budgets `DescribeBudgets` reports it. */
@@ -983,6 +994,17 @@ export const presignTokenUnset: Finding = fail(
   "presign.tokenId",
   "the overlay names no presign token: set presign.tokenId to the id of the R2 API token whose Access Key ID R2_PRESIGN_ACCESS_KEY_ID holds",
 );
+
+/**
+ * The warning of a deploy whose token may not read API tokens: the presign token's scope stays unchecked, and the
+ * token's owner keeps it to Object Read & Write on the cache and artifact buckets (FD-CACHE-091).
+ */
+export const presignScopeUnchecked = (tokenId: string, reason: string): Finding => ({
+  check: "presign",
+  path: "presign.token",
+  detail: `presign scope unchecked: the deploy token cannot read API tokens (${reason}); the owner of presign token ${tokenId} keeps it to Object Read & Write on the cache and artifact buckets`,
+  severity: "warning",
+});
 
 /**
  * The resource key an API token policy names one R2 bucket of the default jurisdiction by:

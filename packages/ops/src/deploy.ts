@@ -1,21 +1,14 @@
 // `fd deploy` and `fd doctor`: overlay decode, render, drift check, scan bundle write, D1 migrations, Worker deploys in service-binding
-// order and the committed Access applications, post-deploy probes and the floor canary, then the record of the deploy
+// order, post-deploy probes and the floor canary, then the record of the deploy
 // (specs/operability.md § Deploy pipeline). The stages run in that order and stop at the first that fails
 // (FD-OPS-009); the Cloudflare and GitHub reads and writes go through the `DeployTarget` port, so `fd doctor` runs the
 // same checks with no write (FD-OPS-024).
 import { contentObjectKey } from "@fractalboxdev/flare-dispatch-cache/namespaces";
 import { readOnlyScanRunsOf, RUN_CATALOG } from "@fractalboxdev/flare-dispatch-catalog";
 import { Clock, Context, Effect, Schema } from "effect";
+import type { DeployedAccessApplication, DispatcherAccess } from "./access-application.ts";
 import {
-  accessChanges,
-  type AccessApplication,
-  type AccessChanges,
-  type CommittedAccess,
-  type DeployedAccessApplication,
-} from "./access-application.ts";
-import {
-  accessAudCheck,
-  accessDrift,
+  accessCheck,
   appRegistrationCheck,
   awsBudgetCheck,
   awsBudgetUnset,
@@ -25,6 +18,7 @@ import {
   modelRegistryCheck,
   policyRootKeyCheck,
   policyRulesCheck,
+  presignScopeUnchecked,
   presignTokenCheck,
   presignTokenUnset,
   rulesetCheck,
@@ -98,7 +92,21 @@ export interface Deployed {
 export class TargetFailed extends Schema.TaggedError<TargetFailed>()("TargetFailed", {
   operation: Schema.String,
   message: Schema.String,
+  /** The HTTP status of the response the call failed on, where it had one. */
+  status: Schema.optional(Schema.Number),
 }) {}
+
+/**
+ * The deploy token may not read the account API token `tokenId`: the Cloudflare API answered `403` or an
+ * authentication error (FD-CACHE-091).
+ */
+export class ApiTokenUnreadable extends Schema.TaggedError<ApiTokenUnreadable>()(
+  "ApiTokenUnreadable",
+  {
+    tokenId: Schema.String,
+    message: Schema.String,
+  },
+) {}
 
 /** The result of the floor canary: passed, failed with the stage it reached, or not applicable to this deploy. */
 export type CanaryResult =
@@ -122,9 +130,12 @@ export class DeployTarget extends Context.Service<
     readonly requiredChecks: Effect.Effect<readonly string[], TargetFailed>;
     /**
      * The account API token `tokenId` names, with its policies, or `null` when the account owns no such token: the
-     * object-store presigner's R2 API token (FD-CACHE-091).
+     * object-store presigner's R2 API token (FD-CACHE-091). `ApiTokenUnreadable` where the deploy token may not read
+     * API tokens.
      */
-    readonly apiToken: (tokenId: string) => Effect.Effect<ApiToken | null, TargetFailed>;
+    readonly apiToken: (
+      tokenId: string,
+    ) => Effect.Effect<ApiToken | null, TargetFailed | ApiTokenUnreadable>;
     /** The deploying organization's AWS account's budgets and Budgets actions (FD-EXEC-083). */
     readonly awsBudgets: Effect.Effect<AwsBudgets, TargetFailed>;
     /**
@@ -167,14 +178,8 @@ export class DeployTarget extends Context.Service<
       detail: string,
       severity: "page" | "notify",
     ) => Effect.Effect<void>;
-    /** Every Access application of the account (FD-OPS-088). */
+    /** Every Access application of the account, which the drift check reads and never writes (FD-OPS-088). */
     readonly accessApplications: Effect.Effect<readonly DeployedAccessApplication[], TargetFailed>;
-    /** Creates an Access application, or replaces the one `id` names. */
-    readonly putAccessApplication: (
-      application: AccessApplication,
-      id: string | null,
-    ) => Effect.Effect<void, TargetFailed>;
-    readonly deleteAccessApplication: (id: string) => Effect.Effect<void, TargetFailed>;
   }
 >()("@fractalboxdev/flare-dispatch-ops/DeployTarget") {}
 
@@ -302,8 +307,11 @@ export type ExtraCheck = (
  */
 export type ProfileStep = (overlay: OverlayValues) => Effect.Effect<readonly Finding[]>;
 
-/** The Access applications a deploy carries, from its decoded overlay; none for a deploy without the dispatcher. */
-export type AccessFor = (overlay: OverlayValues) => CommittedAccess | null;
+/**
+ * The hostname and AUD tag the drift check reads the Access applications against, from the decoded overlay; none for a
+ * deploy without the dispatcher.
+ */
+export type AccessFor = (overlay: OverlayValues) => DispatcherAccess | null;
 
 /** The bucket names a rendered configuration binds `CACHE` and `ARTIFACTS` to, in that order, each one it binds. */
 const presignBuckets = (config: WorkerConfig): readonly string[] => {
@@ -320,15 +328,22 @@ const presignBuckets = (config: WorkerConfig): readonly string[] => {
  * The presign check over the Worker that carries the object-store presigner (FD-CACHE-091): the overlay names the
  * token, and the token, read through the Cloudflare API, grants Object Read & Write on exactly the buckets the Worker
  * binds as `CACHE` and `ARTIFACTS`. The secrets are write-only, so the token is the one `presign.tokenId` names; the
- * composition check of `extra` fails a Worker that lacks either presign token secret.
+ * composition check of `extra` fails a Worker that lacks either presign token secret. Where the deploy token may not
+ * read API tokens, the scope stays unchecked and the check reports a warning.
  */
 const presignFindings = (overlay: OverlayValues, rendered: RenderedWorker) =>
   Effect.gen(function* () {
     const target = yield* DeployTarget;
     const tokenId = overlay.presign?.tokenId;
     if (tokenId === undefined) return [presignTokenUnset];
-    const token = yield* target.apiToken(tokenId);
-    return presignTokenCheck(tokenId, token, overlay.accountId, presignBuckets(rendered.config));
+    return yield* target.apiToken(tokenId).pipe(
+      Effect.map((token) =>
+        presignTokenCheck(tokenId, token, overlay.accountId, presignBuckets(rendered.config)),
+      ),
+      Effect.catchTag("ApiTokenUnreadable", (e) =>
+        Effect.succeed([presignScopeUnchecked(e.tokenId, e.message)]),
+      ),
+    );
   });
 
 /** The scan bundle envelope the drift check verified: the pinned digest and the bytes it read. */
@@ -349,7 +364,7 @@ const driftCheck = (
   manifest: AppPermissions,
   extra: ExtraCheck = () => [],
   more: ProfileStep = () => Effect.succeed([]),
-  access: CommittedAccess | null = null,
+  access: DispatcherAccess | null = null,
   presigner: string | null = null,
   readOnlyScanRuns: ReadonlySet<string> = readOnlyScanRunsOf(RUN_CATALOG),
 ) =>
@@ -413,7 +428,7 @@ const driftCheck = (
         }
       }
     }
-    if (access !== null) findings.push(...accessDrift(access, yield* target.accessApplications));
+    if (access !== null) findings.push(...accessCheck(access, yield* target.accessApplications));
     return {
       findings: yield* withProfileStep(findings, more(overlay)),
       bundle,
@@ -429,11 +444,9 @@ const driftCheck = (
  * rendered configuration, no policy root key on any Worker (FD-PROV-045), the deployed Workers against the record of the
  * last deploy, the GitHub App's registration, the default branch's ruleset, the AWS account's Budgets actions where the
  * overlay carries the `aws` kind, the runner workflow's permissions and timeout where it carries the `gha` kind, and, given
- * `access`, the Access applications on the dispatcher's hostname, then the
- * profile step's findings over the decoded overlay from `more` (`withProfileStep`, the composition the pull-request
- * drift check shares). `fd deploy` passes no `access`: it checks only the hostname
- * application's AUD tag, then applies the committed applications and reports each one it changed, where `fd doctor`
- * fails on each difference.
+ * `access`, the Access applications on the dispatcher's hostname against its machine and human paths (FD-OPS-088), then
+ * the profile step's findings over the decoded overlay from `more` (`withProfileStep`, the composition the pull-request
+ * drift check shares).
  */
 export const driftFindings = (
   overlay: OverlayValues,
@@ -442,7 +455,7 @@ export const driftFindings = (
   manifest: AppPermissions,
   extra?: ExtraCheck,
   more?: ProfileStep,
-  access?: CommittedAccess | null,
+  access?: DispatcherAccess | null,
   presigner?: string | null,
   readOnlyScanRuns?: ReadonlySet<string>,
 ) =>
@@ -491,30 +504,13 @@ export const fdDoctor = (
   });
 
 /**
- * Makes the account's Access applications on the dispatcher's hostname the committed ones (FD-OPS-088): creates each
- * absent one, replaces each that differs and removes each the commit does not hold. It runs after the Worker deploys,
- * so a newly bypassed path is served by a Worker that runs its own identity check, and before the probes, which reach
- * `/health` through Access.
- */
-export const applyAccess = (committed: CommittedAccess) =>
-  Effect.gen(function* () {
-    const target = yield* DeployTarget;
-    const changes = accessChanges(committed, yield* target.accessApplications);
-    for (const a of changes.create) yield* target.putAccessApplication(a, null);
-    for (const u of changes.update) yield* target.putAccessApplication(u.application, u.id);
-    for (const r of changes.remove) yield* target.deleteAccessApplication(r.id);
-    return changes;
-  });
-
-/**
  * `fd deploy`: the stages of FD-OPS-009 in order, stopping at the first that fails. A failed probe or floor canary
  * exits non-zero, raises `deploy-probe-failed` and prints each Worker's rollback line; nothing rolls back by itself.
  *
- * With Access to apply, the drift stage reads the account's Access applications, so a token that cannot read them
- * stops the deploy before any write, and fails on a hostname application whose AUD tag is not the overlay's
- * `access.aud`. Cloudflare gives a created application a new AUD tag, so a deploy that creates the hostname
- * application fails the deploy stage with that tag: the dispatcher checks Access JWTs against `access.aud`, and would
- * reject every one. `presigner` names the Worker whose presign token the drift stage reads (FD-CACHE-091).
+ * Given `access`, the drift stage reads the account's Access applications and checks them as `fd doctor` does, so a
+ * token that cannot read them, or an application that covers a machine path, leaves a human path uncovered or carries
+ * an AUD tag other than `access.aud`, stops the deploy before any write; the deploy writes no Access application
+ * (FD-OPS-088). `presigner` names the Worker whose presign token the drift stage reads (FD-CACHE-091).
  */
 export const fdDeploy = (
   overlayText: string,
@@ -529,7 +525,6 @@ export const fdDeploy = (
   Effect.gen(function* () {
     const target = yield* DeployTarget;
     const { overlay, rendered } = yield* renderAll(overlayText, workers);
-    const committed = access?.(overlay) ?? null;
     const check = yield* driftCheck(
       overlay,
       workers,
@@ -537,18 +532,11 @@ export const fdDeploy = (
       manifest,
       extra,
       more,
-      null,
+      access?.(overlay) ?? null,
       presigner ?? null,
       readOnlyScanRuns,
     );
-    const drift = [...check.findings];
-    if (committed !== null)
-      drift.push(
-        ...accessAudCheck(
-          committed,
-          yield* target.accessApplications.pipe(Effect.mapError(stageFailed("drift"))),
-        ),
-      );
+    const drift = check.findings;
     if (failed(drift))
       return yield* new DeployFailed({ stage: "drift", findings: findingsOf(drift), rollback: [] });
     // The verified envelope, at the key every scan reads it from, before any Worker serves the pin (FD-OPS-099).
@@ -583,28 +571,6 @@ export const fdDeploy = (
           ),
         ),
       );
-    }
-    const deployStageFailed = (e: TargetFailed) =>
-      new DeployFailed({
-        stage: "deploy",
-        findings: [{ path: e.operation, detail: e.message }],
-        rollback: deployed.map(rollbackOf),
-      });
-    const accessApplied: AccessChanges | null =
-      committed === null
-        ? null
-        : yield* applyAccess(committed).pipe(Effect.mapError(deployStageFailed));
-    if (committed !== null && accessApplied?.create.some((a) => a.domain === committed.hostname)) {
-      const aud = accessAudCheck(
-        committed,
-        yield* target.accessApplications.pipe(Effect.mapError(deployStageFailed)),
-      );
-      if (failed(aud))
-        return yield* new DeployFailed({
-          stage: "deploy",
-          findings: findingsOf(aud),
-          rollback: deployed.map(rollbackOf),
-        });
     }
     const probes: { path: string; detail: string }[] = [];
     for (const d of deployed) {
@@ -641,7 +607,6 @@ export const fdDeploy = (
       deployed,
       scanBundle,
       migrations: d1,
-      access: accessApplied,
       canary,
       warnings: drift.filter((f) => f.severity === "warning"),
     };

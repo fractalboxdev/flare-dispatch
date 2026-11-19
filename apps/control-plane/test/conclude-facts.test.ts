@@ -20,7 +20,7 @@ describe("the control plane's conclude facts", () => {
     await seedExecution(db, "exec-1", "success");
     const facts = await factsOf(envOf(db, { PUBLIC_ORIGIN: ORIGIN, LINK_KEY }), "exec-1");
     const url = new URL(facts!.detailsUrl!);
-    expect(`${url.origin}${url.pathname}`).toBe(`${ORIGIN}/v1/executions/exec-1/logs`);
+    expect(`${url.origin}${url.pathname}`).toBe(`${ORIGIN}/v1/logs/exec-1`);
     const token = url.searchParams.get("t")!;
     const check = (objectId: string) =>
       checkLinkToken(LINK_KEY, token, {

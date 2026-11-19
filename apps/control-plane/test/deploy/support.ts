@@ -90,8 +90,6 @@ export const account = (
     writeRecord: () => Effect.void,
     raiseAlarm: (name, detail) => Effect.sync(() => void alarms.push(`${name}: ${detail}`)),
     accessApplications: Effect.succeed([]),
-    putAccessApplication: () => Effect.void,
-    deleteAccessApplication: () => Effect.void,
   });
   const fd = makeOperability({
     fail: (message) => new Error(message),

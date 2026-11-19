@@ -320,4 +320,32 @@ describe("live deploy target", () => {
     );
     expect(w.calls.filter((c) => c.includes("/v1/ops/floor-canary"))).toEqual([]);
   });
+
+  it("[FD-CACHE-091] reads an API token as unreadable on a 403 or the Cloudflare API's authentication error, and fails on any other error", async () => {
+    const answering = (status: number, code: number, message: string) => {
+      const w = world();
+      const fetcher = (async (input: string, init?: RequestInit) =>
+        new URL(input).pathname.endsWith("/tokens/presign")
+          ? Response.json({ success: false, result: null, errors: [{ code, message }] }, { status })
+          : w.fetcher(input, init)) as unknown as typeof fetch;
+      return { ...w, fetcher };
+    };
+    const outcome = (w: ReturnType<typeof world>) =>
+      use(layerFor(w).layer, (t) =>
+        t.apiToken("presign").pipe(
+          Effect.map(() => "read"),
+          Effect.catchTag("ApiTokenUnreadable", (e) => Effect.succeed(`unreadable ${e.message}`)),
+          Effect.catchTag("TargetFailed", (e) => Effect.succeed(`failed ${e.message}`)),
+        ),
+      );
+    expect(await outcome(answering(403, 9109, "Unauthorized to access requested resource"))).toBe(
+      "unreadable 403 Unauthorized to access requested resource",
+    );
+    expect(await outcome(answering(400, 10000, "Authentication error"))).toBe(
+      "unreadable 400 Authentication error",
+    );
+    expect(await outcome(answering(500, 10001, "Internal error"))).toBe(
+      "failed 500 Internal error",
+    );
+  });
 });

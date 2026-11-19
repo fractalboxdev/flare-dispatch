@@ -586,13 +586,13 @@ const LogQuery = { format: Schema.optionalKey(Schema.Literals(["text", "html"]))
  */
 export class LogsGroup extends HttpApiGroup.make("logs")
   .add(
-    HttpApiEndpoint.get("aggregate", "/v1/executions/:id/logs", {
+    HttpApiEndpoint.get("aggregate", "/v1/logs/:id", {
       ...IdParam,
       query: LogQuery,
       success: LogText,
       ...errors,
     }),
-    HttpApiEndpoint.get("file", "/v1/executions/:id/logs/:file", {
+    HttpApiEndpoint.get("file", "/v1/logs/:id/:file", {
       params: { id: Schema.String, file: Schema.String },
       query: LogQuery,
       success: LogText,

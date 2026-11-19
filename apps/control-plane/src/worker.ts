@@ -58,8 +58,11 @@ const migrate = (env: ControlPlaneEnv) =>
     throw e;
   }));
 
-/** The dashboard's pages: the overview and one execution's page. The router serves the `/v1/` routes (FD-IFC-001). */
-const DASHBOARD = /^\/(executions\/[^/]+)?$/;
+/**
+ * The dashboard's pages under `/dashboard`: the overview and one execution's page. The router serves the `/v1/` routes
+ * (FD-IFC-001).
+ */
+const DASHBOARD = /^\/dashboard(\/executions\/[^/]+)?$/;
 
 export default {
   async fetch(
@@ -74,6 +77,8 @@ export default {
       const health = healthOf(env, origin);
       return Response.json(health.body, { status: health.status });
     }
+    // The bare origin serves no page: it redirects to the dashboard, whose own gate decides.
+    if (pathname === "/") return Response.redirect(`${origin}/dashboard`, 302);
     await migrate(env);
     // The route verifies the upgrade's connect signature, the one device credential (FD-IFC-085).
     if (pathname === "/v1/executors/connect")

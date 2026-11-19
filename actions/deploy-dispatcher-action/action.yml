@@ -34,7 +34,8 @@ inputs:
   cloudflare-api-token:
     description: >-
       Account-scoped Cloudflare API token: Workers Scripts:Edit, Workers R2 Storage:Edit, D1:Edit, Containers:Edit,
-      Account Settings:Read. `fd deploy` passes it to `wrangler` and reads the deployed settings with it.
+      Account Settings:Read, Access: Apps and Policies Read. `fd deploy` passes it to `wrangler` and reads the deployed
+      settings and the Access applications on the dispatcher hostname with it.
     required: true
 
   github-app-private-key:

@@ -245,22 +245,17 @@ describe("a lease's control-plane read token", () => {
 
   it("[FD-IFC-103] the log aggregate under the token answers an execution of another repository execution_not_found", async () => {
     const bearer = await token();
-    const own = await get(`/v1/executions/${OWN_FAILURE}/logs?format=text`, bearer);
+    const own = await get(`/v1/logs/${OWN_FAILURE}?format=text`, bearer);
     expect(own.status).toBe(200);
     expect(await own.text()).toBe("FAIL a.test.ts");
-    const other = await get(`/v1/executions/${OTHER_FAILURE}/logs?format=text`, bearer);
+    const other = await get(`/v1/logs/${OTHER_FAILURE}?format=text`, bearer);
     expect(other.status).toBe(404);
     const body = await other.text();
     expect(JSON.parse(body)).toMatchObject({ error: "execution_not_found" });
     expect(body).not.toContain("secret log");
     // A step log file is a link or Access read only.
     expect(
-      (
-        await get(
-          `/v1/executions/${OWN_FAILURE}/logs/1/${"0".repeat(24)}/stdout-0-1.ndjson`,
-          bearer,
-        )
-      ).status,
+      (await get(`/v1/logs/${OWN_FAILURE}/1/${"0".repeat(24)}/stdout-0-1.ndjson`, bearer)).status,
     ).toBe(401);
   });
 
@@ -298,7 +293,7 @@ describe("a lease's control-plane read token", () => {
         status,
         error,
       });
-      const logs = await get(`/v1/executions/${OWN_FAILURE}/logs`, bearer);
+      const logs = await get(`/v1/logs/${OWN_FAILURE}`, bearer);
       expect({ name, status: logs.status }).toEqual({ name, status });
     }
     // The execution ends, and its token stops reading at once.
@@ -427,7 +422,7 @@ describe("a lease's control-plane read token", () => {
         r.surface !== "AccessIfPresent" &&
         r.surface !== "OwnCredential" &&
         r.path !== "/v1/executions" &&
-        r.path !== `/v1/executions/${OWN_FAILURE}/logs`,
+        r.path !== `/v1/logs/${OWN_FAILURE}`,
     );
     expect(reads.length).toBeGreaterThan(10);
     for (const r of reads) {

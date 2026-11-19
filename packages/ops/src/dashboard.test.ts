@@ -411,7 +411,7 @@ describe("link tokens", () => {
   it("[FD-OPS-067] a dashboard link carries the API's link token for that one execution, expiring within 3600 s", async () => {
     const config = await configOf({ LINK_EPOCH: "3" });
     const link = (await Effect.runPromise(dashboardLogLink(config, "e 1", nowS)))!;
-    expect(link.split("?")[0]).toBe("https://fd.example.com/v1/executions/e%201/logs");
+    expect(link.split("?")[0]).toBe("https://fd.example.com/v1/logs/e%201");
     const token = tokenOf(link);
     expect(Number(token.split(".")[0])).toBe(nowS + DASHBOARD_LINK_LIFETIME_S);
     expect(await check(token)).toEqual({ _tag: "Granted" });

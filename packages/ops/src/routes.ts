@@ -1,7 +1,7 @@
-// The dashboard's pages as one handler the Worker mounts before its router: the overview at `/` and one execution's
-// page at `/executions/:id`, behind the Access gate. The router serves the `/v1/` routes, the operability ones through
-// `OperabilityHandlers`. The operator routes of `operator-routes.ts` answer here when the composition supplies
-// `OperatorOperations`; a composition without it leaves them to the router.
+// The dashboard's pages as one handler the Worker mounts before its router: the overview at `/dashboard` and one
+// execution's page at `/dashboard/executions/:id`, behind the Access gate. The router serves the `/v1/` routes, the
+// operability ones through `OperabilityHandlers`. The operator routes of `operator-routes.ts` answer here when the
+// composition supplies `OperatorOperations`; a composition without it leaves them to the router.
 import { CACHE_LOOKUP_SCHEMA } from "@fractalboxdev/flare-dispatch-cache/metrics";
 import type { D1Like } from "@fractalboxdev/mameko-host-cloudflare/d1";
 import { Cause, Effect, Layer } from "effect";
@@ -75,7 +75,10 @@ const html = (body: string, status = 200) =>
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
   });
 
-const EXECUTION_PAGE = /^\/executions\/([^/]+)$/;
+/** The dashboard's overview page. */
+const DASHBOARD_PATH = "/dashboard";
+
+const EXECUTION_PAGE = /^\/dashboard\/executions\/([^/]+)$/;
 
 /** A path segment decoded, or null when its percent-encoding is malformed. */
 const decodeSegment = (segment: string): string | null => {
@@ -92,7 +95,8 @@ const route = (request: Request, env: OpsRouteEnv, deps: OpsRouteDeps, requestId
     const { pathname } = url;
     const now = (deps.now ?? Date.now)();
     const operatorMatch = deps.operations === undefined ? null : matchOperatorRoute(pathname);
-    if (operatorMatch === null && pathname !== "/" && !EXECUTION_PAGE.test(pathname)) return null;
+    if (operatorMatch === null && pathname !== DASHBOARD_PATH && !EXECUTION_PAGE.test(pathname))
+      return null;
     const config = yield* opsConfigFrom(env);
     const access = accessConfig(config, deps);
     if (operatorMatch !== null && deps.operations !== undefined) {

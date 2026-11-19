@@ -402,11 +402,7 @@ describe("the log route under the repository's confidentiality mode", () => {
     });
     const response = await Effect.runPromise(
       CacheReads.use((reads) =>
-        reads.logs(
-          new Request(`http://x/v1/executions/e-logs/logs?format=${format}`),
-          "e-logs",
-          undefined,
-        ),
+        reads.logs(new Request(`http://x/v1/logs/e-logs?format=${format}`), "e-logs", undefined),
       ).pipe(Effect.provide(cacheReads(p.env))),
     );
     return response.text();

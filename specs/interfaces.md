@@ -34,7 +34,7 @@ Every surface passes exactly one identity check before any route logic runs.
 | `POST /v1/webhooks/github` | Dispatcher | GitHub | HMAC-SHA256 over the raw body ([intake.md](intake.md)) | 0 |
 | `/v1/executors/connect` | Dispatcher, then the `ExecutorChannel` Durable Object | Device executors and `gha` runners | A `connect` signature by the device key on the upgrade, verified against the executor row's `device_public_key` ([MAMEKO-PROTO-002](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/executor-protocol.md)); for a `gha` runner, the launcher port's `verify` of its OIDC token ([executors.md](executors.md)) | 1 |
 | `POST /v1/executors/register` | Dispatcher | An operator enrolling a device | Access JWT of an identity in `operators` | 1 |
-| `/v1/executions/:id/logs`, `/v1/executions/:id/logs/:file`, `/v1/artifacts/:artifact_id/*` | Dispatcher | Anyone holding a link; for `GET /v1/executions/:id/logs`, a `ci-triage-pr` job through its Container's egress proxy | Link token, or Access JWT; for `GET /v1/executions/:id/logs`, also the lease's control-plane read token for an execution of its own repository (FD-IFC-103) | 0 |
+| `/v1/logs/:id`, `/v1/logs/:id/:file`, `/v1/artifacts/:artifact_id/*` | Dispatcher | Anyone holding a link; for `GET /v1/logs/:id`, a `ci-triage-pr` job through its Container's egress proxy | Link token, or Access JWT; for `GET /v1/logs/:id`, also the lease's control-plane read token for an execution of its own repository (FD-IFC-103) | 0 |
 | `/v1/compile-cache/*` | Dispatcher | `sccache` in a job | Compile-cache token ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-057) | 0 |
 | `POST /v1/deploy-claims/:id` | Dispatcher | A `worker-deploy` run in a Container | Deploy-claim token bound to the execution and its current epoch ([runs/gate.md](runs/gate.md) FD-GATE-067) | 0 |
 | `POST /v1/model/completions` | Dispatcher | An executor's egress proxy, a local scheduler's host proxy | The execution's per-lease token with its epoch, or a capacity-lease proof of possession ([MAMEKO-MDL-040](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/model-gateway.md), [MAMEKO-MDL-041](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/model-gateway.md), [MAMEKO-MDL-043](https://github.com/fractalboxdev/mameko/blob/92634b64cee2ffbd0e0e4b5ecb698783ba132d67/specs/model-gateway.md)) | 0 |
@@ -154,8 +154,8 @@ Every error response is a JSON object `{ "error": <code>, "message": <text>, "re
 | `GET /v1/executions/:id` | One execution; `?wait=<s>` holds the response until a verdict or the wait ends | 0 |
 | `GET /v1/executions/:id/failure-summary` | The bounded `incident/v1` pack of a failed execution | 0 |
 | `POST /v1/executions/:id/cancel` | Request cancellation | 0 |
-| `GET /v1/executions/:id/logs` | Every redacted step log of an execution, in step order ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-083) | 0 |
-| `GET /v1/executions/:id/logs/:file` | The redacted step log ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-083) | 0 |
+| `GET /v1/logs/:id` | Every redacted step log of an execution, in step order ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-083) | 0 |
+| `GET /v1/logs/:id/:file` | The redacted step log ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-083) | 0 |
 | `GET /v1/executions/:id/artifacts` | An execution's artifacts, one page with a cursor ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-078) | 0 |
 | `GET /v1/artifacts/:artifact_id/*` | One stored artifact, or with a path below it one file of its browse expansion ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-075) | 0 |
 | `GET`, `HEAD`, `PUT`, `PROPFIND`, `MKCOL` `/v1/compile-cache/:owner/:name/*` | The compile cache ([cache-artifacts.md](cache-artifacts.md) FD-CACHE-056) | 0 |
@@ -243,7 +243,7 @@ stateDiagram-v2
 | `fd dispatch <run>` | `POST /v1/dispatch/:run` | 0 |
 | `fd status <id>`, `fd verdict <id> [--wait]` | `GET /v1/executions/:id` | 0 |
 | `fd failure <id>` | `GET /v1/executions/:id/failure-summary` | 0 |
-| `fd logs <id>` | `GET /v1/executions/:id/logs/:file` | 0 |
+| `fd logs <id>` | `GET /v1/logs/:id`, or `GET /v1/logs/:id/:file` with `--file` | 0 |
 | `fd cancel <id>` | `POST /v1/executions/:id/cancel`, or the local scheduler for a local id | 0 |
 | `fd ls` | `GET /v1/executions` | 0 |
 | `fd ops halt`, `quarantine`, `release`, `force-admit`, `top-up` | `/v1/ops/*` | 0 |
@@ -325,7 +325,7 @@ flowchart LR
 - **FD-IFC-016** · phase 0 · `V-UNIT` — If the identity on a `/v1/ops/*` request is not in the operator overlay's `operators`, and is not a `containment` identity on a route FD-IFC-095 names, then the dispatcher must answer 403 `forbidden`.
 - **FD-IFC-017** · phase 0 · `V-UNIT` — The dispatcher must serve a log or an artifact only to an Access identity, to a request with an unexpired, unrevoked link token bound to that execution or artifact, or, for an execution's log aggregate, to a control-plane read token as FD-IFC-103 specifies.
 - **FD-IFC-102** · phase 2 · `V-UNIT` — The control plane must mint a control-plane read token only into the `credentials` of a `ci-triage-pr` lease, under the name `control-plane-read`, bound to the execution and the lease's epoch and expiring at its `deadline_at`, under a key derived by HKDF from the Worker secret `CONTROL_PLANE_READ_SECRET`; and the dispatcher must accept the token as the bearer of `GET /v1/executions` alone among the routes the executions group serves, answer it only the executions of that execution's repository, answer 403 `forbidden` to a query naming another repository, answer 401 `unauthenticated` once `deadline_at` has passed, and answer 401 `lease_stale` once the execution's epoch is not the token's or the execution has ended.
-- **FD-IFC-103** · phase 2 · `V-UNIT` — When `GET /v1/executions/:id/logs` carries a control-plane read token as the bearer, the dispatcher must check it as FD-IFC-102 specifies and must answer 404 `execution_not_found` for an execution of any repository but the token's; no other log, artifact or write route may accept the token.
+- **FD-IFC-103** · phase 2 · `V-UNIT` — When `GET /v1/logs/:id` carries a control-plane read token as the bearer, the dispatcher must check it as FD-IFC-102 specifies and must answer 404 `execution_not_found` for an execution of any repository but the token's; no other log, artifact or write route may accept the token.
 
 ### Link tokens
 

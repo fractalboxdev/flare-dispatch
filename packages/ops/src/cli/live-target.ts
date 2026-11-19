@@ -2,8 +2,8 @@
 // applications and the record of the last deploy in the artifacts bucket; `wrangler` for D1 migrations and Worker
 // deploys; the GitHub API with the App JWT for the App's registration and the default branch's ruleset; the Workers'
 // own hostnames for the post-deploy probes; the control plane's floor canary routes on the dispatcher hostname under
-// the operator's Access service token; the Cloudflare Access applications of the account; the account API token
-// the object-store presigner signs with, by its policies (FD-CACHE-091); AWS STS, AWS Budgets, IAM
+// the operator's Access service token; the Cloudflare Access applications of the account, read only; the account API
+// token the object-store presigner signs with, by its policies (FD-CACHE-091); AWS STS, AWS Budgets, IAM
 // and AWS Organizations, signed with SigV4, for the AWS account's Budgets actions and the policies they apply; the
 // overlay's alert sink for `deploy-probe-failed`; the local file system for the scan bundle envelope the overlay pins.
 import { signRequest, type AwsCredentials } from "@fractalboxdev/flare-dispatch-agentic";
@@ -18,6 +18,7 @@ import { Effect, Layer, Schema } from "effect";
 import type { DeployedAccessApplication } from "../access-application.ts";
 import { alarmMessage, RUNBOOK } from "../alarms.ts";
 import {
+  ApiTokenUnreadable,
   DeployTarget,
   scriptName,
   TargetFailed,
@@ -683,13 +684,23 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
       return Buffer.from(file.content, "base64").toString("utf8");
     });
 
-  /** An account API token by id, its permission groups by name; its value is never part of the answer. */
+  /**
+   * An account API token by id, its permission groups by name; its value is never part of the answer. A `403` or the
+   * Cloudflare API's authentication error is `ApiTokenUnreadable`: the deploy token may not read API tokens.
+   */
   const apiToken = (tokenId: string) =>
     Effect.gen(function* () {
-      const token = (yield* c.cloudflare.json(
-        "GET",
-        `${account}/tokens/${encodeURIComponent(tokenId)}`,
-      )) as {
+      const token = (yield* c.cloudflare
+        .json("GET", `${account}/tokens/${encodeURIComponent(tokenId)}`)
+        .pipe(
+          Effect.catchTag(
+            "TargetFailed",
+            (e): Effect.Effect<never, TargetFailed | ApiTokenUnreadable> =>
+              e.status === 403 || /authentication error/i.test(e.message)
+                ? Effect.fail(new ApiTokenUnreadable({ tokenId, message: e.message }))
+                : Effect.fail(e),
+          ),
+        )) as {
         id?: unknown;
         status?: unknown;
         policies?: unknown;
@@ -744,14 +755,6 @@ export const liveDeployTarget = (c: LiveTargetConfig): Layer.Layer<DeployTarget>
     runnerWorkflow,
     awsBudgets,
     accessApplications,
-    putAccessApplication: (application, id) =>
-      Effect.asVoid(
-        id === null
-          ? c.cloudflare.json("POST", `${account}/access/apps`, application)
-          : c.cloudflare.json("PUT", `${account}/access/apps/${id}`, application),
-      ),
-    deleteAccessApplication: (id) =>
-      Effect.asVoid(c.cloudflare.json("DELETE", `${account}/access/apps/${id}`)),
     lastRecord: (r) =>
       Effect.map(readRecord(r), (rec): DeployedSettings | null => {
         if (rec === null) return null;

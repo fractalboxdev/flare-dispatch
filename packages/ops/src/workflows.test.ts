@@ -2,7 +2,14 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { ACCESS_BYPASS, accessApplications, bypassed } from "./access-application.ts";
+import {
+  accessCovers,
+  HUMAN_PATHS,
+  isMachinePath,
+  MACHINE_PATHS,
+  pathMatches,
+  samplePath,
+} from "./access-application.ts";
 import { MERGE_GATE_CHECKS } from "./drift.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
@@ -310,15 +317,14 @@ describe("dispatch action and upgrade gate", () => {
 });
 
 describe("Access configuration", () => {
-  it("[FD-OPS-088] bypasses Access on every surface whose identity is not the Access JWT alone", () => {
-    expect(ACCESS_BYPASS.map((b) => b.surface)).toEqual([
+  it("[FD-OPS-088] lists as machine paths every surface whose identity is not the Access JWT alone", () => {
+    expect(MACHINE_PATHS.map((m) => m.surface)).toEqual([
+      "health",
+      "well-known",
       "webhook",
       "dispatch",
       "executor connect",
-      "health",
-      "well-known",
       "executions list",
-      "log aggregate",
       "log",
       "artifact",
       "compile-cache",
@@ -334,8 +340,8 @@ describe("Access configuration", () => {
       "/health",
       "/.well-known/openid-configuration",
       "/v1/executions",
-      "/v1/executions/e1/logs",
-      "/v1/executions/e1/logs/run.log",
+      "/v1/logs/e1",
+      "/v1/logs/e1/run.log",
       "/v1/artifacts/a1",
       "/v1/compile-cache/obj/abc",
       "/v1/deploy-claims/e1",
@@ -343,31 +349,60 @@ describe("Access configuration", () => {
       "/v1/provenance/executions/e1",
       "/v1/provenance/subjects/sha256:abc",
     ])
-      expect(bypassed(path)).toBe(true);
+      expect({ path, machine: isMachinePath(path) }).toEqual({ path, machine: true });
     for (const path of [
       "/",
+      "/dashboard",
+      "/dashboard/executions/e1",
       "/v1/executions/e1",
       "/v1/executions/e1/failure-summary",
+      "/v1/executions/e1/cancel",
+      "/v1/executions/e1/artifacts",
+      "/v1/executors/register",
       "/v1/ops/health",
-      "/v1/spend",
       "/v1/github/install/new",
-      "/mcp",
+      "/v1/provenance-policy",
+      "/v1/provenance-policy/key-history",
       "/v1/provenance/log/checkpoint",
-      "/v1/provenance/log/proof/inclusion",
+      "/mcp",
     ])
-      expect(bypassed(path)).toBe(false);
+      expect({ path, machine: isMachinePath(path) }).toEqual({ path, machine: false });
   });
 
-  it("[FD-OPS-088] the hostname sits behind Access for the overlay's identities, each bypass path with a bypass policy", () => {
-    const apps = accessApplications("dispatch.example.com", ["ops@acme.com"]);
-    expect(apps[0]).toMatchObject({
-      domain: "dispatch.example.com",
-      policies: [
-        { decision: "allow", include: [{ email: { email: "ops@acme.com" } }] },
-        { decision: "non_identity", include: [{ any_valid_service_token: {} }] },
-      ],
-    });
-    expect(apps.slice(1).every((a) => a.policies[0]!.decision === "bypass")).toBe(true);
-    expect(apps.slice(1).map((a) => a.domain)).toContain("dispatch.example.com/v1/webhooks/github");
+  it("[FD-OPS-088] no human path falls under a machine pattern, and no Access application on a human path covers a machine path", () => {
+    for (const h of HUMAN_PATHS)
+      for (const m of MACHINE_PATHS) {
+        expect({
+          human: h.path,
+          machine: m.path,
+          under: pathMatches(m.path, samplePath(h.path)),
+        }).toEqual({
+          human: h.path,
+          machine: m.path,
+          under: false,
+        });
+        expect({
+          human: h.path,
+          machine: m.path,
+          covers: accessCovers(h.path, samplePath(m.path)),
+        }).toEqual({
+          human: h.path,
+          machine: m.path,
+          covers: false,
+        });
+      }
+    // The executions list is the exact path; one execution is the wildcard below it.
+    expect(accessCovers("/v1/executions/*", "/v1/executions")).toBe(false);
+    expect(accessCovers("/v1/executions/*", "/v1/executions/e1/cancel")).toBe(true);
+  });
+
+  it("[FD-OPS-088] an Access application path covers what Cloudflare Access covers: itself and every path below it, the bare hostname everything", () => {
+    expect(accessCovers("", "/v1/webhooks/github")).toBe(true);
+    expect(accessCovers("/*", "/health")).toBe(true);
+    expect(accessCovers("/v1/executions", "/v1/executions/e1/cancel")).toBe(true);
+    expect(accessCovers("/v1/ops/*", "/v1/ops")).toBe(false);
+    expect(accessCovers("/v1/ops/*", "/v1/ops/halt")).toBe(true);
+    expect(accessCovers("/dashboard", "/dashboards")).toBe(false);
+    expect(accessCovers("/v1/provenance-policy", "/v1/provenance/log/x")).toBe(false);
   });
 });

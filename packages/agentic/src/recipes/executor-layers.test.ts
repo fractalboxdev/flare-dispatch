@@ -196,7 +196,10 @@ const cloudConfig = (
     controlPlaneUrl: CONTROL_PLANE,
     fetch: (async (input: string, init: RequestInit = {}) => {
       const url = new URL(input);
-      if (url.pathname.startsWith("/v1/executions")) {
+      if (
+        url.pathname.startsWith("/v1/executions") ||
+        url.pathname.startsWith("/v1/logs/")
+      ) {
         api.push({ url, headers: new Headers(init.headers) });
         return controlPlane(url);
       }
@@ -454,7 +457,7 @@ describe("the cloud executor's agentic layers", () => {
               }
             : { executions: [view("x-older", "failure", "infra: checkout", now - 20 * 3_600_000)] },
         );
-      const id = /^\/v1\/executions\/([^/]+)\/logs$/.exec(url.pathname)?.[1];
+      const id = /^\/v1\/logs\/([^/]+)$/.exec(url.pathname)?.[1];
       return id !== undefined && url.searchParams.get("format") === "text" && id in logs
         ? new Response(logs[id], { headers: { "content-type": "text/plain; charset=utf-8" } })
         : notFound();
@@ -479,7 +482,7 @@ describe("the cloud executor's agentic layers", () => {
         now - CI_TRIAGE_WINDOW_MS,
       );
     }
-    expect(api.map((r) => r.url.pathname)).not.toContain("/v1/executions/x-green/logs");
+    expect(api.map((r) => r.url.pathname)).not.toContain("/v1/logs/x-green");
     for (const r of api) expect(r.headers.get("authorization")).toBeNull();
     expect(sent.map((s) => [s.body.call_site, s.body.tier])).toEqual([
       ["classify", "transform"],

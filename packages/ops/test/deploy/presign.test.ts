@@ -1,7 +1,8 @@
 // The deploy suite of `V-DEPLOY` for the object-store presigner's R2 API token (specs/cache-artifacts.md FD-CACHE-091):
 // `fd deploy` and `fd doctor` on the fakes of `support.ts` fail the drift stage, before any write, where the control
-// plane lacks either presign token secret or the token the overlay names is not Object Read & Write on exactly the
-// cache and artifact buckets.
+// plane lacks either presign token secret, the overlay names no presign token, or the token the overlay names is not
+// Object Read & Write on exactly the cache and artifact buckets; where the deploy token cannot read API tokens, they
+// report the scope unchecked as a warning and pass.
 import { describe, expect, it } from "vitest";
 import { Effect } from "effect";
 import { OBJECT_READ_WRITE, placeholderOverlay } from "../../src/index.ts";
@@ -175,10 +176,29 @@ describe("fd deploy over the presign token", () => {
     );
   });
 
-  it("[FD-CACHE-091] stops in the drift stage, before any write, where the deploy token cannot read the presign token", async () => {
+  it("[FD-CACHE-091] deploys with a warning that the presign scope is unchecked where the deploy token cannot read API tokens, and fd doctor passes with it", async () => {
+    const w = world();
+    w.state.tokensReadFails = true;
+    const report = await deploy(w);
+    expect(report.ok).toBe(true);
+    expect(w.calls).toContain(TOKEN_READ);
+    const warning = `warning presign.token: presign scope unchecked: the deploy token cannot read API tokens (403 Unauthorized to access requested resource); the owner of presign token ${PRESIGN_TOKEN_ID} keeps it to Object Read & Write on the cache and artifact buckets`;
+    expect(driftStage(report)!.detail).toContain(warning);
+    const doctor = await Effect.runPromise(fd(w).doctor(OVERLAY));
+    expect(doctor.ok).toBe(true);
+    expect(driftStage(doctor)!.detail).toContain(warning);
+  });
+
+  it("[FD-CACHE-091] stops in the drift stage where the token it reads is mis-scoped, and where the overlay names no presign token even though the deploy token cannot read API tokens", async () => {
+    await refusedNaming(
+      withToken(apiToken([tokenPolicy(["Workers R2 Storage Bucket Item Read"], BOTH)])),
+      [`does not grant Workers R2 Storage Bucket Item Write on bucket ${CACHE}`],
+    );
+    const { presign: _presign, ...unnamed } = placeholderOverlay;
     await refusedNaming(
       (w) => void (w.state.tokensReadFails = true),
-      [`GET ${API.slice("/client/v4".length)}/tokens/${PRESIGN_TOKEN_ID}: 403`],
+      ["presign.tokenId: the overlay names no presign token"],
+      JSON.stringify(unnamed),
     );
   });
 });

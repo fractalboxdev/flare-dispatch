@@ -65,6 +65,7 @@ export const cloudflareClient = (
             operation: `${method} ${path}`,
             message:
               `${res.status} ${(envelope?.errors ?? []).map((e) => e.message).join("; ")}`.trim(),
+            status: res.status,
           });
         return envelope?.result ?? null;
       }),

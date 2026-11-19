@@ -344,7 +344,8 @@ const usd = (micro: number | null) => (micro === null ? "—" : `$${(micro / 1e6
 const seconds = (ms: number | null) => (ms === null ? "—" : `${Math.round(ms / 1000)} s`);
 
 /** The path of an execution's page. */
-export const executionPath = (id: string): string => `/executions/${encodeURIComponent(id)}`;
+export const executionPath = (id: string): string =>
+  `/dashboard/executions/${encodeURIComponent(id)}`;
 
 /**
  * The reasons a row's answer gives: every staged-write gate reason of a refused `pr.propose` row. An expired row's
@@ -425,7 +426,7 @@ export const renderExecutions = (
     )
     .join("\n");
   return `<h2>Executions</h2>
-<form class="filters" method="get" action="/">
+<form class="filters" method="get" action="/dashboard">
   ${field("run", filters.run, "run")}${field("repository", filters.repository, "repository")}${field("class", filters.class, "class")}${field("status", filters.status, "status")}${field("executor_kind", filters.executorKind, "executor kind")}
   <button type="submit">Filter</button>
 </form>
@@ -433,7 +434,7 @@ export const renderExecutions = (
 <tbody>
 ${rows}
 </tbody></table>
-${page.next === null ? "" : `<p><a href="/?${esc(params.toString())}">Older →</a></p>`}`;
+${page.next === null ? "" : `<p><a href="/dashboard?${esc(params.toString())}">Older →</a></p>`}`;
 };
 
 /**
